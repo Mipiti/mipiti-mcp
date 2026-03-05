@@ -35,3 +35,13 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # v1.13.0
+
+      - name: Trigger submodule update in parent repo
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PARENT_REPO_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/Mipiti/mipiti/dispatches \
+            -f event_type=submodule-update \
+            -f 'client_payload[submodule]=mcp-server' \
+            -f 'client_payload[ref]=${{ github.sha }}'
