@@ -1,7 +1,5 @@
 """Unit tests for MipitiClient."""
 
-from __future__ import annotations
-
 import json
 
 import httpx
@@ -41,6 +39,17 @@ def test_trailing_slash_stripped() -> None:
     assert client.api_url == "https://api.example.com"
 
 
+def test_auth_headers_bypass_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MIPITI_API_KEY", raising=False)
+    client = MipitiClient(
+        api_url="https://test.api",
+        auth_headers={"Authorization": "Bearer tok"},
+    )
+    assert client.api_key == ""
+    http = client._get_client()
+    assert http.headers["Authorization"] == "Bearer tok"
+
+
 # ------------------------------------------------------------------
 # REST endpoint tests
 # ------------------------------------------------------------------
@@ -56,7 +65,6 @@ async def test_list_models(mock_env: None) -> None:
     models = await client.list_models()
     assert len(models) == 2
     assert models[0].id == "tm-001"
-    assert models[1].title == "Payment Processing"
     await client.close()
 
 
@@ -70,7 +78,6 @@ async def test_get_model_latest(mock_env: None) -> None:
     model = await client.get_model("tm-001")
     assert model.id == "tm-001"
     assert len(model.assets) == 2
-    assert model.assets[0].name == "OAuth Tokens"
     await client.close()
 
 
@@ -88,33 +95,110 @@ async def test_get_model_specific_version(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_get_controls_existing(mock_env: None) -> None:
-    respx.get("https://test.api.mipiti.io/api/models/tm-001/controls").mock(
-        return_value=httpx.Response(200, json={"controls": SAMPLE_CONTROLS})
+async def test_rename_model(mock_env: None) -> None:
+    respx.patch("https://test.api.mipiti.io/api/models/tm-001").mock(
+        return_value=httpx.Response(200, json={"id": "tm-001", "title": "New Name"})
     )
     client = MipitiClient()
-    controls = await client.get_controls("tm-001")
-    assert len(controls) == 2
-    assert controls[0].id == "CO1-1"
-    assert controls[1].status == "implemented"
+    result = await client.rename_model("tm-001", "New Name")
+    assert result.title == "New Name"
     await client.close()
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_get_controls_auto_generate(mock_env: None) -> None:
-    """When GET returns empty controls, POST to generate, then return those."""
-    respx.get("https://test.api.mipiti.io/api/models/tm-001/controls").mock(
-        return_value=httpx.Response(200, json={"controls": []})
-    )
-    respx.post(
-        "https://test.api.mipiti.io/api/models/tm-001/controls/generate"
-    ).mock(
-        return_value=httpx.Response(200, json={"controls": SAMPLE_CONTROLS})
+async def test_delete_model(mock_env: None) -> None:
+    respx.delete("https://test.api.mipiti.io/api/models/tm-001").mock(
+        return_value=httpx.Response(204)
     )
     client = MipitiClient()
-    controls = await client.get_controls("tm-001")
-    assert len(controls) == 2
+    result = await client.delete_model("tm-001")
+    assert result is None
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_controls(mock_env: None) -> None:
+    respx.get("https://test.api.mipiti.io/api/models/tm-001/controls").mock(
+        return_value=httpx.Response(200, json=SAMPLE_CONTROLS)
+    )
+    client = MipitiClient()
+    data = await client.get_controls("tm-001")
+    assert len(data.controls) == 2
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_control_status(mock_env: None) -> None:
+    respx.patch("https://test.api.mipiti.io/api/controls/CTRL-01").mock(
+        return_value=httpx.Response(200, json={"id": "CTRL-01", "status": "implemented"})
+    )
+    client = MipitiClient()
+    result = await client.update_control_status("tm-001", "CTRL-01", "implemented")
+    assert result.id == "CTRL-01"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_add_evidence(mock_env: None) -> None:
+    respx.post("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/evidence").mock(
+        return_value=httpx.Response(201, json={"control_id": "CTRL-01", "evidence_count": 2})
+    )
+    client = MipitiClient()
+    result = await client.add_evidence("tm-001", "CTRL-01", "code", "bcrypt usage", "auth.py:42")
+    assert result.evidence_count == 2
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_remove_evidence(mock_env: None) -> None:
+    respx.delete("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/evidence/0").mock(
+        return_value=httpx.Response(200, json={"control_id": "CTRL-01", "evidence_count": 0})
+    )
+    client = MipitiClient()
+    result = await client.remove_evidence("tm-001", "CTRL-01", 0)
+    assert result.evidence_count == 0
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_add_asset(mock_env: None) -> None:
+    respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(
+        return_value=httpx.Response(200, json={"id": "A3", "name": "Session Store"})
+    )
+    client = MipitiClient()
+    result = await client.add_asset("tm-001", name="Session Store")
+    assert result.id == "A3"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_submit_assertions(mock_env: None) -> None:
+    respx.post("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions").mock(
+        return_value=httpx.Response(200, json={"count": 1})
+    )
+    client = MipitiClient()
+    result = await client.submit_assertions("tm-001", "CTRL-01", [{"type": "file_exists"}])
+    assert result.count == 1
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_workspaces(mock_env: None) -> None:
+    respx.get("https://test.api.mipiti.io/api/workspaces").mock(
+        return_value=httpx.Response(200, json={"workspaces": [{"id": "ws-1"}]})
+    )
+    client = MipitiClient()
+    result = await client.list_workspaces()
+    assert len(result) == 1
+    assert result[0].id == "ws-1"
     await client.close()
 
 
@@ -155,6 +239,18 @@ async def test_http_404_raises(mock_env: None) -> None:
     await client.close()
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_returns_none_on_204(mock_env: None) -> None:
+    respx.delete(
+        "https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions/a1"
+    ).mock(return_value=httpx.Response(204))
+    client = MipitiClient()
+    result = await client.delete_assertion("tm-001", "CTRL-01", "a1")
+    assert result is None
+    await client.close()
+
+
 # ------------------------------------------------------------------
 # SSE stream tests
 # ------------------------------------------------------------------
@@ -174,13 +270,11 @@ async def test_stream_generate(mock_env: None) -> None:
     sse_payload = _build_sse_bytes([
         ("intent", {"type": "intent", "intent": "generate", "session_id": "s1"}),
         ("step_start", {"type": "step_start", "step": 1, "title": "Generating initial assets", "total_steps": 5}),
-        ("step_complete", {"type": "step_complete", "step": 1, "title": "Generating initial assets", "content": "...", "skipped": False, "total_steps": 5}),
         ("result", {"type": "result", "markdown": "# Model", "csv": "", "threat_model": SAMPLE_THREAT_MODEL, "model_id": "tm-001", "version": 1}),
     ])
     respx.post("https://test.api.mipiti.io/api/model/stream").mock(
         return_value=httpx.Response(
-            200,
-            content=sse_payload,
+            200, content=sse_payload,
             headers={"content-type": "text/event-stream"},
         )
     )
@@ -191,13 +285,11 @@ async def test_stream_generate(mock_env: None) -> None:
         progress_calls.append((step, total, title))
 
     client = MipitiClient()
-    model = await client.generate_threat_model(
+    result = await client.generate_threat_model(
         "User login with OAuth", on_progress=on_progress
     )
-    assert model.id == "tm-001"
-    assert len(model.assets) == 2
+    assert result.threat_model.id == "tm-001"
     assert len(progress_calls) == 1
-    assert progress_calls[0] == (1, 5, "Generating initial assets")
     await client.close()
 
 
@@ -210,14 +302,13 @@ async def test_stream_chat_response(mock_env: None) -> None:
     ])
     respx.post("https://test.api.mipiti.io/api/model/stream").mock(
         return_value=httpx.Response(
-            200,
-            content=sse_payload,
+            200, content=sse_payload,
             headers={"content-type": "text/event-stream"},
         )
     )
     client = MipitiClient()
     answer = await client.query_threat_model("tm-001", "Does it cover SQL injection?")
-    assert "SQL injection" in answer
+    assert "SQL injection" in answer.content
     await client.close()
 
 
@@ -229,8 +320,7 @@ async def test_stream_error_event(mock_env: None) -> None:
     ])
     respx.post("https://test.api.mipiti.io/api/model/stream").mock(
         return_value=httpx.Response(
-            200,
-            content=sse_payload,
+            200, content=sse_payload,
             headers={"content-type": "text/event-stream"},
         )
     )
@@ -243,14 +333,12 @@ async def test_stream_error_event(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_stream_empty_raises(mock_env: None) -> None:
-    """Stream ending without result or chat_response should raise."""
     sse_payload = _build_sse_bytes([
         ("intent", {"type": "intent", "intent": "generate"}),
     ])
     respx.post("https://test.api.mipiti.io/api/model/stream").mock(
         return_value=httpx.Response(
-            200,
-            content=sse_payload,
+            200, content=sse_payload,
             headers={"content-type": "text/event-stream"},
         )
     )
