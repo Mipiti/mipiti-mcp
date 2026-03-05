@@ -1,6 +1,4 @@
-"""Shared test fixtures."""
-
-from __future__ import annotations
+"""Shared test fixtures and sample data."""
 
 import pytest
 
@@ -49,7 +47,7 @@ SAMPLE_THREAT_MODEL = {
         {
             "id": "CO1",
             "asset_id": "A1",
-            "security_property": "C",
+            "security_properties": ["C"],
             "attacker_id": "T1",
             "statement": "Ensure the confidentiality of OAuth Tokens against Credential stuffing (External)",
         },
@@ -76,19 +74,21 @@ SAMPLE_MODELS_LIST = [
     },
 ]
 
-SAMPLE_CONTROLS = [
-    {
-        "id": "CO1-1",
-        "control_objective_id": "CO1",
-        "description": "Implement token rotation with short-lived access tokens",
-        "status": "not_implemented",
-        "implementation_notes": "",
-    },
-    {
-        "id": "CO1-2",
-        "control_objective_id": "CO1",
-        "description": "Rate-limit authentication attempts per IP",
-        "status": "implemented",
-        "implementation_notes": "Using express-rate-limit middleware",
-    },
-]
+SAMPLE_CONTROLS = {
+    "controls": [
+        {
+            "id": "CO1-1",
+            "control_objective_ids": ["CO1"],
+            "description": "Implement token rotation with short-lived access tokens",
+            "status": "not_implemented",
+            "implementation_notes": "",
+        },
+        {
+            "id": "CO1-2",
+            "control_objective_ids": ["CO1"],
+            "description": "Rate-limit authentication attempts per IP",
+            "status": "implemented",
+            "implementation_notes": "Using express-rate-limit middleware",
+        },
+    ]
+}
