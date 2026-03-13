@@ -123,12 +123,15 @@ def _start_job(tool_name: str, coro_factory, kwargs: dict) -> str:
 
 
 def _dump(obj: Any) -> dict:
-    """Convert Pydantic model or list to dict for MCP tool response."""
+    """Convert Pydantic model or list to dict for MCP tool response.
+
+    FastMCP structured_content requires a dict, so lists are wrapped.
+    """
     from pydantic import BaseModel
     if isinstance(obj, BaseModel):
         return obj.model_dump()
     if isinstance(obj, list):
-        return [_dump(item) for item in obj]
+        return {"items": [_dump(item) for item in obj]}
     return obj
 
 
