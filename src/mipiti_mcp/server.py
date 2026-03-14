@@ -543,6 +543,37 @@ async def update_control_status(
 
 
 @mcp.tool()
+async def refine_control(
+    model_id: str,
+    control_id: str,
+    description: str,
+    justification: str,
+) -> dict:
+    """Refine a control's description with AI-gated CO sufficiency check.
+
+    Proposes a new description for a control. The AI evaluates whether
+    the mitigation group still collectively satisfies all mapped control
+    objectives. Rejects the change if any CO would no longer be covered.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control to refine (e.g., "CTRL-03").
+        description: Proposed new control description.
+        justification: Why this refinement is appropriate (min 10 chars).
+    """
+    if not description.strip():
+        raise ToolError("description cannot be empty.")
+    if len(justification.strip()) < 10:
+        raise ToolError("justification must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().refine_control(
+            model_id, control_id, description.strip(), justification.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def add_evidence(
     model_id: str,
     control_id: str,
