@@ -263,6 +263,19 @@ class MipitiClient:
         )
         return ThreatModel.model_validate(data)
 
+    async def refine_control(
+        self,
+        model_id: str,
+        control_id: str,
+        description: str,
+        justification: str,
+    ) -> dict:
+        data = await self._patch(
+            f"/api/models/{model_id}/controls/{control_id}/refine",
+            {"description": description, "justification": justification},
+        )
+        return data
+
     async def add_evidence(
         self,
         model_id: str,
