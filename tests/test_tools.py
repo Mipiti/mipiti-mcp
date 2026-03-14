@@ -64,6 +64,7 @@ from mipiti_mcp.server import (
     submit_assertions,
     submit_findings,
     suggest_compliance_remediation,
+    refine_control,
     update_control_status,
     update_finding,
 )
@@ -124,6 +125,7 @@ _submit_findings = submit_findings.fn
 _list_findings = list_findings.fn
 _update_finding = update_finding.fn
 _get_scan_prompt = get_scan_prompt.fn
+_refine_control = refine_control.fn
 _get_operation_status = get_operation_status.fn
 
 
@@ -184,6 +186,7 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "get_system": {"id": "sys-1", "name": "Platform"},
         "create_system": {"id": "sys-2", "name": "New"},
         "add_model_to_system": {"added": True},
+        "refine_control": {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}},
     }
 
     for name, default_val in defaults.items():
@@ -427,6 +430,48 @@ class TestUpdateControlStatus:
             await _update_control_status(
                 "tm-001", "CTRL-01", "implemented", evidence="not-json",
             )
+
+
+class TestRefineControl:
+    @pytest.mark.asyncio
+    async def test_accepted(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await _refine_control(
+                "tm-001", "CTRL-01",
+                "Updated description matching implementation.",
+                "Implementation uses FastAPI Depends, not middleware.",
+            )
+        assert result["accepted"] is True
+        mock.refine_control.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_rejected(self) -> None:
+        mock = _mock_client(
+            refine_control=AsyncMock(return_value={
+                "accepted": False,
+                "reason": "CO1 would no longer be satisfied.",
+                "per_co": {"CO1": {"satisfied": False, "reasoning": "Weakened."}},
+            }),
+        )
+        with _patch_client(mock):
+            result = await _refine_control(
+                "tm-001", "CTRL-01",
+                "Weaker description.",
+                "Trying to weaken the control.",
+            )
+        assert result["accepted"] is False
+        assert "CO1" in result["per_co"]
+
+    @pytest.mark.asyncio
+    async def test_empty_description(self) -> None:
+        with pytest.raises(ToolError, match="description cannot be empty"):
+            await _refine_control("tm-001", "CTRL-01", "  ", "Some justification here.")
+
+    @pytest.mark.asyncio
+    async def test_short_justification(self) -> None:
+        with pytest.raises(ToolError, match="justification must be at least 10"):
+            await _refine_control("tm-001", "CTRL-01", "New desc.", "Short")
 
 
 class TestAddEvidence:

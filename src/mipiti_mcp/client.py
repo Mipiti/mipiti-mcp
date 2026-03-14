@@ -270,11 +270,15 @@ class MipitiClient:
         description: str,
         justification: str,
     ) -> dict:
-        data = await self._patch(
+        resp = await self._get_client().patch(
             f"/api/models/{model_id}/controls/{control_id}/refine",
-            {"description": description, "justification": justification},
+            json={"description": description, "justification": justification},
         )
-        return data
+        if resp.status_code == 422:
+            # AI evaluator rejected — return body with accepted=false
+            return resp.json()
+        resp.raise_for_status()
+        return resp.json()
 
     async def add_evidence(
         self,
