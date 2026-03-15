@@ -1259,7 +1259,7 @@ async def submit_assertions(
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control (e.g., "CTRL-01").
-        assertions_json: JSON array of assertion objects with type, params, description.
+        assertions_json: JSON array of assertion objects with type, params, description, and optional repo (e.g., "org/repo-name" for multi-repo setups).
     """
     try:
         assertions = json.loads(assertions_json)
