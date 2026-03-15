@@ -553,7 +553,8 @@ async def refine_control(
 
     Proposes a new description for a control. The AI evaluates whether
     the mitigation group still collectively satisfies all mapped control
-    objectives. Rejects the change if any CO would no longer be covered.
+    objectives. If rejected, returns {accepted: false, reason, per_co}
+    with per-CO reasoning — use this to adjust the description and retry.
 
     Args:
         model_id: ID of the threat model.
