@@ -24,7 +24,6 @@ from .types import (
     GapAnalysisResult,
     GenerateResult,
     ImportConfirmResult,
-    MarkEvidenceCompleteResult,
     ModelSummary,
     OkResult,
     RemediationApplyResult,
@@ -575,14 +574,6 @@ class MipitiClient:
     async def get_verification_report(self, model_id: str) -> VerificationReport:
         data = await self._get(f"/api/models/{model_id}/verification/report")
         return VerificationReport.model_validate(data)
-
-    async def mark_evidence_complete(
-        self, model_id: str, control_id: str,
-    ) -> MarkEvidenceCompleteResult:
-        data = await self._post(
-            f"/api/models/{model_id}/controls/{control_id}/evidence-complete",
-        )
-        return MarkEvidenceCompleteResult.model_validate(data)
 
     # ------------------------------------------------------------------
     # Findings
