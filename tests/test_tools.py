@@ -51,7 +51,6 @@ from mipiti_mcp.server import (
     list_threat_models,
     list_workspaces,
     map_control_to_requirement,
-    mark_evidence_complete,
     query_threat_model,
     refine_threat_model,
     regenerate_controls,
@@ -120,7 +119,6 @@ _submit_assertions = submit_assertions.fn
 _list_assertions = list_assertions.fn
 _delete_assertion = delete_assertion.fn
 _get_verification_report = get_verification_report.fn
-_mark_evidence_complete = mark_evidence_complete.fn
 _submit_findings = submit_findings.fn
 _list_findings = list_findings.fn
 _update_finding = update_finding.fn
@@ -177,7 +175,6 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "list_assertions": {"assertions": []},
         "delete_assertion": None,
         "get_verification_report": {"tier1_pass": 3},
-        "mark_evidence_complete": {"status": "complete"},
         "submit_findings": {"count": 1},
         "list_findings": {"findings": []},
         "update_finding": {"id": "f1", "status": "acknowledged"},
@@ -864,15 +861,6 @@ class TestGetVerificationReport:
         with _patch_client(mock):
             result = await _get_verification_report("tm-001")
         assert result["tier1_pass"] == 3
-
-
-class TestMarkEvidenceComplete:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await _mark_evidence_complete("tm-001", "CTRL-01")
-        assert result["status"] == "complete"
 
 
 # ------------------------------------------------------------------

@@ -1321,23 +1321,6 @@ async def get_verification_report(model_id: str) -> dict:
         raise _api_error(exc) from exc
 
 
-@mcp.tool()
-async def mark_evidence_complete(model_id: str, control_id: str) -> dict:
-    """Mark evidence as complete for a control.
-
-    Call after submitting all assertions. Enables Tier 2 semantic verification
-    and collective sufficiency evaluation. Requires PRO tier.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control (e.g., "CTRL-01").
-    """
-    try:
-        return _dump(await _get_client().mark_evidence_complete(model_id, control_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
 # === Findings ===
 
 

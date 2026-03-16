@@ -303,13 +303,6 @@ class VerificationReport(_Base):
     controls: dict[str, dict[str, int]] = {}
 
 
-class MarkEvidenceCompleteResult(_Base):
-    model_id: str = ""
-    control_id: str = ""
-    marked_at: str = ""
-    sufficiency_status: str = "pending"
-
-
 # ------------------------------------------------------------------
 # Findings
 # ------------------------------------------------------------------
