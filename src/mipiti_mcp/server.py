@@ -138,15 +138,17 @@ and respect `poll_after_seconds` in the response.
 """
 
 
-def build_instructions(tier: str = "pro") -> str:
+def build_instructions(tier: str = "pro", role: str = "user") -> str:
     """Build tier-appropriate MCP instructions.
 
     Args:
-        tier: User's plan tier. "pro", "organization", "enterprise",
-              "admin", or "superadmin" get full instructions.
+        tier: User's plan tier. "pro", "organization", or "enterprise"
+              get full instructions including compliance.
               "developer" (free) gets everything except compliance.
+        role: User's role. "admin" and "superadmin" get full instructions
+              regardless of tier.
     """
-    if tier in ("pro", "organization", "enterprise", "admin", "superadmin"):
+    if tier in ("pro", "organization", "enterprise") or role in ("admin", "superadmin"):
         return _INSTRUCTIONS_BASE + _INSTRUCTIONS_COMPLIANCE + _INSTRUCTIONS_ASYNC
     return _INSTRUCTIONS_BASE + _INSTRUCTIONS_ASYNC
 
