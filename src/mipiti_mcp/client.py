@@ -571,8 +571,28 @@ class MipitiClient:
             f"/api/models/{model_id}/controls/{control_id}/assertions/{assertion_id}",
         )
 
-    async def get_verification_report(self, model_id: str) -> VerificationReport:
-        data = await self._get(f"/api/models/{model_id}/verification/report")
+    async def get_verification_report(
+        self,
+        model_id: str,
+        status: str = "",
+        summary_only: bool = False,
+        offset: int = 0,
+        limit: int = 0,
+    ) -> VerificationReport:
+        params: dict[str, str] = {}
+        if status:
+            params["status"] = status
+        if summary_only:
+            params["summary_only"] = "true"
+        if offset:
+            params["offset"] = str(offset)
+        if limit:
+            params["limit"] = str(limit)
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"/api/models/{model_id}/verification/report"
+        if qs:
+            url += f"?{qs}"
+        data = await self._get(url)
         return VerificationReport.model_validate(data)
 
     # ------------------------------------------------------------------
