@@ -16,15 +16,71 @@ from typing import Any, Optional
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
+from .assertion_types import format_for_docstring
 from .client import MipitiClient
 
 mcp = FastMCP(
     "Mipiti",
-    instructions=(
-        "Security posture platform — AI-powered threat modeling with the "
-        "Security Properties × Capability Attackers methodology. "
-        "Tools call the Mipiti API."
-    ),
+    instructions="""\
+Mipiti generates threat models from feature descriptions and tracks security \
+controls with machine-verifiable evidence.
+
+## When to use
+
+Before implementing changes, call `generate_threat_model` with a description \
+of the change. Use the resulting controls to inform your implementation. \
+After implementing, call `submit_assertions` for each control to provide \
+machine-verifiable evidence.
+
+## Core workflows
+
+### Threat modeling
+- `generate_threat_model` — creates a model with trust boundaries, assets, \
+attackers, and control objectives. Returns a `job_id` — poll with \
+`get_operation_status`.
+- `refine_threat_model` — updates an existing model (returns `job_id`).
+- `add_asset` / `edit_asset` / `remove_asset` — targeted asset changes.
+- `add_attacker` / `edit_attacker` / `remove_attacker` — targeted attacker changes.
+- `query_threat_model` — ask questions about an existing model.
+
+### Controls and assertions
+1. `get_controls` — lists controls derived from control objectives. \
+Auto-generated on first access.
+2. `update_control_status` — mark a control as implemented or not_implemented.
+3. `submit_assertions` — provide evidence for a control. See that tool's \
+docstring for all 21 assertion types and their required params.
+4. `get_verification_report` — per-control verification status and \
+sufficiency gaps. Read `sufficiency_details` to see which aspects lack evidence.
+5. Search the codebase for code that implements the missing aspects, then \
+craft and submit assertions that prove them.
+6. Before submitting, verify locally: \
+`mipiti-verify verify <type> -p key=value --project-root .`
+
+### Gap discovery
+- `get_scan_prompt` — prompts to guide codebase scanning against \
+NOT_IMPLEMENTED controls.
+- `check_control_gaps` — AI-powered gap analysis across all controls.
+- `submit_findings` — report gaps where controls are missing from code.
+- `list_findings` / `update_finding` — track finding lifecycle.
+
+### Compliance
+1. `list_compliance_frameworks` — available frameworks.
+2. `select_compliance_frameworks` — activate frameworks for a model.
+3. `auto_map_controls` — map controls to framework requirements.
+4. `get_compliance_report` — coverage report.
+5. `suggest_compliance_remediation` / `apply_compliance_remediation` — \
+AI-suggested controls to close compliance gaps.
+
+### Systems
+- `create_system` — group related models.
+- `add_model_to_system` — associate a model with a system.
+- `select_system_compliance_frameworks` / `get_system_compliance_report` — \
+aggregated compliance across models.
+
+### Async operations
+Tools that make LLM calls return a `job_id`. Poll with \
+`get_operation_status(job_id)` and respect `poll_after_seconds` in the response.
+""",
 )
 
 # ------------------------------------------------------------------
@@ -1246,21 +1302,31 @@ async def get_system_compliance_report(
 # === Assertions & Verification ===
 
 
-@mcp.tool()
+_SUBMIT_ASSERTIONS_DOC = f"""\
+Submit evidence assertions for a security control. Requires PRO tier.
+
+Each assertion is a typed, machine-verifiable claim about a codebase property.
+
+Args:
+    model_id: ID of the threat model.
+    control_id: ID of the control (e.g., "CTRL-01").
+    assertions_json: JSON array of assertion objects. Each object has:
+        - type (required): one of the assertion types below
+        - params (required): type-specific parameters
+        - description (required): human-readable explanation of what this proves
+        - repo (optional): "org/repo-name" for multi-repo setups
+
+Assertion types:
+{format_for_docstring()}
+"""
+
+
+@mcp.tool(description=_SUBMIT_ASSERTIONS_DOC)
 async def submit_assertions(
     model_id: str,
     control_id: str,
     assertions_json: str,
 ) -> dict:
-    """Submit evidence assertions for a security control. Requires PRO tier.
-
-    Each assertion is a typed, machine-verifiable claim about a codebase property.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control (e.g., "CTRL-01").
-        assertions_json: JSON array of assertion objects with type, params, description, and optional repo (e.g., "org/repo-name" for multi-repo setups).
-    """
     try:
         assertions = json.loads(assertions_json)
     except json.JSONDecodeError:
