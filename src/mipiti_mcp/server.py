@@ -19,69 +19,143 @@ from fastmcp.exceptions import ToolError
 from .assertion_types import format_for_docstring
 from .client import MipitiClient
 
-mcp = FastMCP(
-    "Mipiti",
-    instructions="""\
+# ------------------------------------------------------------------
+# Instructions (tier-aware)
+# ------------------------------------------------------------------
+
+_INSTRUCTIONS_BASE = """\
 Mipiti generates threat models from feature descriptions and tracks security \
 controls with machine-verifiable evidence.
 
 ## When to use
 
 Before implementing changes, call `generate_threat_model` with a description \
-of the change. Use the resulting controls to inform your implementation. \
-After implementing, call `submit_assertions` for each control to provide \
-machine-verifiable evidence.
+of the change. It automatically discovers similar existing models — either \
+returning matches to refine or proceeding with generation. Use the resulting \
+controls to guide your implementation.
 
-## Core workflows
+## Threat modeling
 
-### Threat modeling
-- `generate_threat_model` — creates a model with trust boundaries, assets, \
-attackers, and control objectives. Returns a `job_id` — poll with \
+- `generate_threat_model` — creates a new model with trust boundaries, \
+assets, attackers, and control objectives. Automatically detects similar \
+existing models and routes accordingly. Returns a `job_id` — poll with \
 `get_operation_status`.
-- `refine_threat_model` — updates an existing model (returns `job_id`).
-- `add_asset` / `edit_asset` / `remove_asset` — targeted asset changes.
-- `add_attacker` / `edit_attacker` / `remove_attacker` — targeted attacker changes.
+- `refine_threat_model` — updates an existing model when you already have \
+a model ID and want to change it (returns `job_id`).
+- `add_asset` / `edit_asset` / `remove_asset` — targeted single-entity \
+changes without full refinement.
+- `add_attacker` / `edit_attacker` / `remove_attacker` — same for attackers.
 - `query_threat_model` — ask questions about an existing model.
+- `list_threat_models` — browse existing models.
+- `export_threat_model` — download as PDF, HTML, or CSV.
 
-### Controls and assertions
-1. `get_controls` — lists controls derived from control objectives. \
-Auto-generated on first access.
-2. `update_control_status` — mark a control as implemented or not_implemented.
-3. `submit_assertions` — provide evidence for a control. See that tool's \
-docstring for all 21 assertion types and their required params.
-4. `get_verification_report` — per-control verification status and \
-sufficiency gaps. Read `sufficiency_details` to see which aspects lack evidence.
-5. Search the codebase for code that implements the missing aspects, then \
-craft and submit assertions that prove them.
-6. Before submitting, verify locally: \
-`mipiti-verify verify <type> -p key=value --project-root .`
+## Controls and assertions
 
-### Gap discovery
-- `get_scan_prompt` — prompts to guide codebase scanning against \
-NOT_IMPLEMENTED controls.
+A threat model produces control objectives. Controls are derived from these \
+and represent specific security requirements to implement. Assertions are \
+typed, machine-verifiable claims about codebase properties that prove a \
+control is satisfied.
+
+**Key tools:**
+- `get_controls` — lists controls with current status.
+- `submit_assertions` — provide evidence. See that tool's docstring for \
+assertion types and required params. Always verify locally first: \
+`mipiti-verify verify <type> -p key=value --project-root .` \
+Read the target file and confirm a reviewer would agree with the claim.
+- `update_control_status` — mark implemented or not_implemented. Requires \
+at least one assertion BEFORE marking implemented. Always submit \
+assertions first, then update status.
+- `get_verification_report` — shows which controls are verified, which \
+have sufficiency gaps, and which lack evidence entirely. Read \
+`sufficiency_details` for the specific aspects that still need proof.
+- `refine_control` — modify a control's description if it doesn't match \
+the actual security requirement.
+- `regenerate_controls` — regenerate all controls from scratch if the \
+model was significantly refined.
+
+**Workflow — handle in this order:**
+
+1. **Controls already satisfied by existing code** (no code changes): \
+use `get_controls` to list controls. For each, search the codebase for \
+code that already implements it. If found, craft assertions that prove \
+the implementation, verify locally, submit assertions, then call \
+`update_control_status` to mark as implemented.
+
+2. **Sufficiency gaps on verified controls** (no code changes): call \
+`get_verification_report` and read `sufficiency_details` for controls \
+that are partially verified. These are implemented but some aspects \
+lack evidence. Search the codebase for code that proves the missing \
+aspects and submit additional assertions.
+
+3. **Controls requiring implementation** (code changes needed): implement \
+the control in code, then submit assertions and update status.
+
+Sufficiency is re-evaluated automatically in CI after assertions are \
+submitted — no manual trigger needed.
+
+## Gap discovery
+
+For controls with status not_implemented, determine whether the code \
+already implements them (submit assertions) or genuinely lacks them \
+(submit findings):
+- `get_scan_prompt` — returns targeted prompts for scanning the codebase \
+against specific not_implemented controls.
 - `check_control_gaps` — AI-powered gap analysis across all controls.
-- `submit_findings` — report gaps where controls are missing from code.
+- `submit_findings` — report confirmed gaps where controls are missing.
 - `list_findings` / `update_finding` — track finding lifecycle.
+"""
 
-### Compliance
-1. `list_compliance_frameworks` — available frameworks.
+_INSTRUCTIONS_COMPLIANCE = """\
+
+## Compliance
+
+Use after controls are implemented and have assertions:
+1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
 2. `select_compliance_frameworks` — activate frameworks for a model.
 3. `auto_map_controls` — map controls to framework requirements.
 4. `get_compliance_report` — coverage report.
 5. `suggest_compliance_remediation` / `apply_compliance_remediation` — \
 AI-suggested controls to close compliance gaps.
 
-### Systems
-- `create_system` — group related models.
-- `add_model_to_system` — associate a model with a system.
-- `select_system_compliance_frameworks` / `get_system_compliance_report` — \
-aggregated compliance across models.
+## Systems
 
-### Async operations
-Tools that make LLM calls return a `job_id`. Poll with \
-`get_operation_status(job_id)` and respect `poll_after_seconds` in the response.
-""",
+Group related models for aggregated compliance reporting:
+- `create_system` / `add_model_to_system` — organize models.
+- `select_system_compliance_frameworks` / `get_system_compliance_report` — \
+cross-model compliance.
+"""
+
+_INSTRUCTIONS_ASYNC = """\
+
+## Async operations
+
+`generate_threat_model`, `refine_threat_model`, and \
+`suggest_compliance_remediation` return a `job_id` by default. \
+`get_controls`, `check_control_gaps`, `auto_map_controls`, \
+`import_controls`, and `regenerate_controls` accept `async_mode=True` \
+for long-running operations. Poll with `get_operation_status(job_id)` \
+and respect `poll_after_seconds` in the response.
+"""
+
+
+def build_instructions(tier: str = "pro") -> str:
+    """Build tier-appropriate MCP instructions.
+
+    Args:
+        tier: User's plan tier. "pro", "organization", "enterprise",
+              "admin", or "superadmin" get full instructions.
+              "developer" (free) gets everything except compliance.
+    """
+    if tier in ("pro", "organization", "enterprise", "admin", "superadmin"):
+        return _INSTRUCTIONS_BASE + _INSTRUCTIONS_COMPLIANCE + _INSTRUCTIONS_ASYNC
+    return _INSTRUCTIONS_BASE + _INSTRUCTIONS_ASYNC
+
+
+mcp = FastMCP(
+    "Mipiti",
+    instructions=build_instructions("pro"),
 )
+
 
 # ------------------------------------------------------------------
 # Per-request client (contextvars for hosted mode)
@@ -1303,7 +1377,7 @@ async def get_system_compliance_report(
 
 
 _SUBMIT_ASSERTIONS_DOC = f"""\
-Submit evidence assertions for a security control. Requires PRO tier.
+Submit evidence assertions for a security control.
 
 Each assertion is a typed, machine-verifiable claim about a codebase property.
 
@@ -1357,7 +1431,7 @@ async def delete_assertion(
     control_id: str,
     assertion_id: str,
 ) -> dict:
-    """Delete an evidence assertion. Requires PRO tier.
+    """Delete an evidence assertion.
 
     Args:
         model_id: ID of the threat model.
@@ -1382,7 +1456,7 @@ async def get_verification_report(
     """Get verification report with summary stats and sufficiency gaps.
 
     Returns tier1/tier2 pass/fail/pending counts, per-control verification
-    status, and sufficiency details. Requires PRO tier.
+    status, and sufficiency details.
 
     By default returns summary only (no per-assertion details). Set
     summary_only=False to include full assertion details and drift items.
@@ -1412,7 +1486,7 @@ async def submit_findings(
     model_id: str,
     findings_json: str,
 ) -> dict:
-    """Submit negative findings discovered by scanning codebase. Requires PRO tier.
+    """Submit negative findings discovered by scanning codebase.
 
     Args:
         model_id: ID of the threat model.
@@ -1436,7 +1510,7 @@ async def list_findings(
     control_id: str = "",
     status: str = "",
 ) -> dict:
-    """List negative findings for a threat model. Requires PRO tier.
+    """List negative findings for a threat model.
 
     Args:
         model_id: ID of the threat model.
@@ -1459,7 +1533,7 @@ async def update_finding(
     reason: str = "",
     remediation_assertion_ids: str = "",
 ) -> dict:
-    """Update lifecycle status of a finding. Requires PRO tier.
+    """Update lifecycle status of a finding.
 
     Args:
         model_id: ID of the threat model.
@@ -1485,7 +1559,7 @@ async def get_scan_prompt(
     model_id: str,
     control_id: str = "",
 ) -> dict:
-    """Get scan prompt to guide codebase gap discovery. Requires PRO tier.
+    """Get scan prompt to guide codebase gap discovery.
 
     Returns prompts instructing agent what to look for when scanning
     codebase against controls. Only includes NOT_IMPLEMENTED controls.
