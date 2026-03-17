@@ -1372,17 +1372,34 @@ async def delete_assertion(
 
 
 @mcp.tool()
-async def get_verification_report(model_id: str) -> dict:
-    """Get verification report with summary stats and drift detection.
+async def get_verification_report(
+    model_id: str,
+    status: str = "",
+    summary_only: bool = True,
+    offset: int = 0,
+    limit: int = 0,
+) -> dict:
+    """Get verification report with summary stats and sufficiency gaps.
 
     Returns tier1/tier2 pass/fail/pending counts, per-control verification
-    status, and drift items. Requires PRO tier.
+    status, and sufficiency details. Requires PRO tier.
+
+    By default returns summary only (no per-assertion details). Set
+    summary_only=False to include full assertion details and drift items.
 
     Args:
         model_id: ID of the threat model.
+        status: Filter by verification status: "verified",
+            "partially_verified", "pending", "unverified".
+        summary_only: Omit per-assertion details and drift items (default True).
+        offset: Skip first N control entries.
+        limit: Max control entries to return (0=all).
     """
     try:
-        return _dump(await _get_client().get_verification_report(model_id))
+        return _dump(await _get_client().get_verification_report(
+            model_id, status=status, summary_only=summary_only,
+            offset=offset, limit=limit,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
