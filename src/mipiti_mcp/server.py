@@ -736,7 +736,10 @@ async def add_evidence(
     label: str = "",
     url: str = "",
 ) -> dict:
-    """Add an evidence item to a control without changing status or notes.
+    """Attach auxiliary metadata to a control (docs, links, artifacts).
+
+    Evidence is contextual metadata — it does NOT count toward
+    implementation status. Only assertions prove controls.
 
     Args:
         model_id: ID of the threat model.
