@@ -85,10 +85,14 @@ the implementation, verify locally, submit assertions, then call \
 `get_verification_report` and read `sufficiency_details` for controls \
 that are partially verified. These are implemented but some aspects \
 lack evidence. Search the codebase for code that proves the missing \
-aspects and submit additional assertions.
+aspects and submit additional assertions. If you cannot find evidence \
+for specific aspects, call `check_control_gaps` — the control's \
+prescribed mechanism may need refinement.
 
-3. **Controls requiring implementation** (code changes needed): implement \
-the control in code, then submit assertions and update status.
+3. **Controls requiring implementation** (code changes needed): before \
+implementing, call `check_control_gaps` to verify the control's \
+mechanism is appropriate. Then implement, submit assertions, and \
+update status.
 
 Sufficiency is re-evaluated automatically in CI after assertions are \
 submitted — no manual trigger needed.
