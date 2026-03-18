@@ -91,8 +91,13 @@ prescribed mechanism may need refinement.
 
 3. **Controls requiring implementation** (code changes needed): before \
 implementing, call `check_control_gaps` to verify the control's \
-mechanism is appropriate. Then implement, submit assertions, and \
-update status.
+mechanism is appropriate. Then search the codebase for existing \
+mechanisms that may already address the control. If found, call \
+`refine_control` with `codebase_findings` — the platform evaluates \
+whether the existing mechanism satisfies the objective and proposes \
+a revised control if so. If accepted, submit assertions for the \
+refined control. If rejected or no existing mechanism found, implement \
+as prescribed, submit assertions, and update status.
 
 Sufficiency is re-evaluated automatically in CI after assertions are \
 submitted — no manual trigger needed.
@@ -682,29 +687,42 @@ async def update_control_status(
 async def refine_control(
     model_id: str,
     control_id: str,
-    description: str,
     justification: str,
+    description: str = "",
+    codebase_findings: str = "",
 ) -> dict:
     """Refine a control's description with AI-gated CO sufficiency check.
 
-    Proposes a new description for a control. The AI evaluates whether
-    the mitigation group still collectively satisfies all mapped control
-    objectives. If rejected, returns {accepted: false, reason, per_co}
-    with per-CO reasoning — use this to adjust the description and retry.
+    Two modes:
+    - Provide `description`: proposes a new description directly.
+    - Provide `codebase_findings`: the platform proposes a description
+      based on existing code that may already satisfy the control.
+    - Both can be provided: the platform evaluates the proposed
+      description with the codebase findings as context.
+
+    The AI evaluates whether the mitigation group still collectively
+    satisfies all mapped control objectives. If rejected, returns
+    {accepted: false, reason, per_co} with per-CO reasoning.
 
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control to refine (e.g., "CTRL-03").
-        description: Proposed new control description.
         justification: Why this refinement is appropriate (min 10 chars).
+        description: Proposed new control description (optional if
+            codebase_findings provided).
+        codebase_findings: Description of existing code that may already
+            satisfy this control's objective (optional). When provided
+            without description, the platform proposes a description.
     """
-    if not description.strip():
-        raise ToolError("description cannot be empty.")
+    if not description.strip() and not codebase_findings.strip():
+        raise ToolError("Either description or codebase_findings is required.")
     if len(justification.strip()) < 10:
         raise ToolError("justification must be at least 10 characters.")
     try:
         return _dump(await _get_client().refine_control(
-            model_id, control_id, description.strip(), justification.strip(),
+            model_id, control_id,
+            description.strip(), justification.strip(),
+            codebase_findings=codebase_findings.strip(),
         ))
     except Exception as exc:
         raise _api_error(exc) from exc

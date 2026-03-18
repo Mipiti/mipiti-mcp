@@ -268,10 +268,16 @@ class MipitiClient:
         control_id: str,
         description: str,
         justification: str,
+        codebase_findings: str = "",
     ) -> dict:
+        body: dict[str, str] = {"justification": justification}
+        if description:
+            body["description"] = description
+        if codebase_findings:
+            body["codebase_findings"] = codebase_findings
         resp = await self._get_client().patch(
             f"/api/models/{model_id}/controls/{control_id}/refine",
-            json={"description": description, "justification": justification},
+            json=body,
         )
         if resp.status_code == 422:
             # AI evaluator rejected — return body with accepted=false
