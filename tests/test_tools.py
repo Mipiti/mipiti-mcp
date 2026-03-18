@@ -461,8 +461,8 @@ class TestRefineControl:
         assert "CO1" in result["per_co"]
 
     @pytest.mark.asyncio
-    async def test_empty_description(self) -> None:
-        with pytest.raises(ToolError, match="description cannot be empty"):
+    async def test_empty_description_and_findings(self) -> None:
+        with pytest.raises(ToolError, match="Either description or codebase_findings is required"):
             await _refine_control("tm-001", "CTRL-01", "  ", "Some justification here.")
 
     @pytest.mark.asyncio
