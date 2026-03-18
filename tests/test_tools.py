@@ -411,22 +411,6 @@ class TestUpdateControlStatus:
         with pytest.raises(ToolError, match="status must be"):
             await _update_control_status("tm-001", "CTRL-01", "invalid")
 
-    @pytest.mark.asyncio
-    async def test_with_evidence_json(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            await _update_control_status(
-                "tm-001", "CTRL-01", "implemented",
-                evidence='[{"type": "code", "label": "test"}]',
-            )
-        mock.update_control_status.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_bad_evidence_json(self) -> None:
-        with pytest.raises(ToolError, match="evidence must be valid JSON"):
-            await _update_control_status(
-                "tm-001", "CTRL-01", "implemented", evidence="not-json",
-            )
 
 
 class TestRefineControl:

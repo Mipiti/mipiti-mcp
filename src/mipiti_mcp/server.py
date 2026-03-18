@@ -25,7 +25,7 @@ from .client import MipitiClient
 
 _INSTRUCTIONS_BASE = """\
 Mipiti generates threat models from feature descriptions and tracks security \
-controls with machine-verifiable evidence.
+controls with machine-verifiable assertions.
 
 ## When to use
 
@@ -58,7 +58,7 @@ control is satisfied.
 
 **Key tools:**
 - `get_controls` — lists controls with current status.
-- `submit_assertions` — provide evidence. See that tool's docstring for \
+- `submit_assertions` — provide proof for a control. See that tool's docstring for \
 assertion types and required params. Always verify locally first: \
 `mipiti-verify verify <type> -p key=value --project-root .` \
 Read the target file and confirm a reviewer would agree with the claim.
@@ -66,7 +66,7 @@ Read the target file and confirm a reviewer would agree with the claim.
 at least one assertion BEFORE marking implemented. Always submit \
 assertions first, then update status.
 - `get_verification_report` — shows which controls are verified, which \
-have sufficiency gaps, and which lack evidence entirely. Read \
+have sufficiency gaps, and which lack assertions entirely. Read \
 `sufficiency_details` for the specific aspects that still need proof.
 - `refine_control` — modify a control's description if it doesn't match \
 the actual security requirement.
@@ -84,8 +84,8 @@ the implementation, verify locally, submit assertions, then call \
 2. **Sufficiency gaps on verified controls** (no code changes): call \
 `get_verification_report` and read `sufficiency_details` for controls \
 that are partially verified. These are implemented but some aspects \
-lack evidence. Search the codebase for code that proves the missing \
-aspects and submit additional assertions. If you cannot find evidence \
+lack proof. Search the codebase for code that proves the missing \
+aspects and submit additional assertions. If you cannot find proof \
 for specific aspects, call `check_control_gaps` — the control's \
 prescribed mechanism may need refinement.
 
@@ -656,7 +656,6 @@ async def update_control_status(
     control_id: str,
     status: str,
     implementation_notes: str = "",
-    evidence: str = "",
 ) -> dict:
     """Update the implementation status of a security control.
 
@@ -665,19 +664,12 @@ async def update_control_status(
         control_id: ID of the control to update (e.g. "CTRL-01").
         status: New status — "implemented" or "not_implemented".
         implementation_notes: Optional free-text notes.
-        evidence: Optional JSON-encoded list of evidence items.
     """
     if status not in ("implemented", "not_implemented"):
         raise ToolError("status must be 'implemented' or 'not_implemented'.")
-    evidence_list = None
-    if evidence:
-        try:
-            evidence_list = json.loads(evidence)
-        except json.JSONDecodeError:
-            raise ToolError("evidence must be valid JSON array.")
     try:
         return _dump(await _get_client().update_control_status(
-            model_id, control_id, status, implementation_notes, evidence_list,
+            model_id, control_id, status, implementation_notes,
         ))
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -919,8 +911,8 @@ async def assess_model(
 async def get_review_queue() -> dict:
     """Returns controls not reviewed in 90+ days.
 
-    Lists implemented/verified controls whose evidence has not been checked
-    recently. For each stale control, verify evidence against codebase.
+    Lists implemented/verified controls whose assertions have not been checked
+    recently. For each stale control, verify assertions against codebase.
     """
     try:
         return _dump(await _get_client().get_review_queue())
@@ -1404,7 +1396,7 @@ async def get_system_compliance_report(
 
 
 _SUBMIT_ASSERTIONS_DOC = f"""\
-Submit evidence assertions for a security control.
+Submit assertions for a security control.
 
 Each assertion is a typed, machine-verifiable claim about a codebase property.
 
@@ -1440,7 +1432,7 @@ async def submit_assertions(
 
 @mcp.tool()
 async def list_assertions(model_id: str, control_id: str) -> dict:
-    """List active evidence assertions for a security control.
+    """List active assertions for a security control.
 
     Args:
         model_id: ID of the threat model.
@@ -1458,7 +1450,7 @@ async def delete_assertion(
     control_id: str,
     assertion_id: str,
 ) -> dict:
-    """Delete an evidence assertion.
+    """Delete an assertion.
 
     Args:
         model_id: ID of the threat model.
