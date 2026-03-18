@@ -247,14 +247,11 @@ class MipitiClient:
         control_id: str,
         status: str,
         implementation_notes: str = "",
-        evidence: list[dict] | None = None,
     ) -> ThreatModel:
         body: dict[str, Any] = {
             "status": status,
             "implementation_notes": implementation_notes,
         }
-        if evidence is not None:
-            body["evidence"] = evidence
         data = await self._patch(
             f"/api/controls/{control_id}",
             body,
