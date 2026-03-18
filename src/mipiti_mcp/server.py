@@ -687,8 +687,8 @@ async def update_control_status(
 async def refine_control(
     model_id: str,
     control_id: str,
-    justification: str,
     description: str = "",
+    justification: str = "",
     codebase_findings: str = "",
 ) -> dict:
     """Refine a control's description with AI-gated CO sufficiency check.
@@ -707,9 +707,9 @@ async def refine_control(
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control to refine (e.g., "CTRL-03").
-        justification: Why this refinement is appropriate (min 10 chars).
         description: Proposed new control description (optional if
             codebase_findings provided).
+        justification: Why this refinement is appropriate (min 10 chars).
         codebase_findings: Description of existing code that may already
             satisfy this control's objective (optional). When provided
             without description, the platform proposes a description.
