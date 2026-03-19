@@ -659,6 +659,9 @@ async def update_control_status(
 ) -> dict:
     """Update the implementation status of a security control.
 
+    Requires at least one assertion before marking as implemented.
+    Check the control's assertion_count from get_controls before calling.
+
     Args:
         model_id: ID of the threat model the control belongs to.
         control_id: ID of the control to update (e.g. "CTRL-01").
