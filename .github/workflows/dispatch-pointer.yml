@@ -1,0 +1,29 @@
+name: Dispatch Pointer Update
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch-submodule-update:
+    runs-on: ubuntu-latest
+    environment: dispatch
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
+          owner: Mipiti
+          repositories: mipiti
+
+      - name: Trigger submodule update in parent repo
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh api repos/Mipiti/mipiti/dispatches \
+            -f event_type=submodule-update \
+            -f 'client_payload[submodule]=mcp-server' \
+            -f 'client_payload[ref]=${{ github.sha }}'
