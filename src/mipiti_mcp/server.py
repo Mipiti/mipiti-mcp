@@ -836,6 +836,9 @@ async def delete_control(
 ) -> dict:
     """Soft-delete a security control with justification.
 
+    Blocks with HTTP 409 if this is the only control covering any control
+    objective. Add a replacement control or refine the threat model first.
+
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control to delete.

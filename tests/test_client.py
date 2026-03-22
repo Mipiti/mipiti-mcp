@@ -346,3 +346,69 @@ async def test_stream_empty_raises(mock_env: None) -> None:
     with pytest.raises(RuntimeError, match="Stream ended without"):
         await client.generate_threat_model("test")
     await client.close()
+
+
+# ------------------------------------------------------------------
+# delete_control tests
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_control_sends_reason_as_query_param(mock_env: None) -> None:
+    route = respx.delete("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01").mock(
+        return_value=httpx.Response(200, json={"deleted": True, "control_id": "CTRL-01"})
+    )
+    client = MipitiClient()
+    result = await client.delete_control("tm-001", "CTRL-01", reason="Duplicate")
+    assert result.deleted is True
+    assert result.control_id == "CTRL-01"
+    req = route.calls[0].request
+    assert req.url.params["reason"] == "Duplicate"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_control_empty_reason(mock_env: None) -> None:
+    route = respx.delete("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01").mock(
+        return_value=httpx.Response(200, json={"deleted": True, "control_id": "CTRL-01"})
+    )
+    client = MipitiClient()
+    result = await client.delete_control("tm-001", "CTRL-01")
+    assert result.deleted is True
+    # No query params when reason is empty
+    req = route.calls[0].request
+    assert req.url.params.multi_items() == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_control_409_raises(mock_env: None) -> None:
+    respx.delete("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01").mock(
+        return_value=httpx.Response(409, json={
+            "detail": "Cannot delete CTRL-01 — it is the only control covering: CO1."
+        })
+    )
+    client = MipitiClient()
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await client.delete_control("tm-001", "CTRL-01", reason="test")
+    assert exc_info.value.response.status_code == 409
+    assert "CO1" in exc_info.value.response.json()["detail"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delete_control_404_raises(mock_env: None) -> None:
+    respx.delete("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-99").mock(
+        return_value=httpx.Response(404, json={
+            "detail": "Control not found or already deleted."
+        })
+    )
+    client = MipitiClient()
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await client.delete_control("tm-001", "CTRL-99", reason="test")
+    assert exc_info.value.response.status_code == 404
+    await client.close()
