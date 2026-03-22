@@ -80,7 +80,7 @@ uvx mipiti-mcp
 
 ### `generate_threat_model`
 
-Generate a complete threat model from a feature description. Runs a 5-step AI pipeline (30-60 seconds) producing trust boundaries, assets, attackers, control objectives, and assumptions.
+Generate a complete threat model from a feature description. Runs a 5-step AI pipeline (30-60 seconds) producing trust boundaries, assets, attackers, control objectives, and assumptions. Async mode reports step-by-step progress (e.g., "Step 2/5: Refining assets").
 
 **Example prompt**: "Generate a threat model for our new OAuth login feature that supports Google and GitHub providers"
 
@@ -111,6 +111,20 @@ Get implementation controls for a threat model's control objectives. Auto-genera
 ### `export_threat_model`
 
 Export a threat model as CSV (returned as text), PDF, or DOCX (download URL).
+
+### Additional tools
+
+| Category | Tools |
+|----------|-------|
+| **Entity CRUD** | `add_asset`, `edit_asset`, `remove_asset`, `add_attacker`, `edit_attacker`, `remove_attacker` |
+| **Controls** | `get_control_objectives`, `update_control_status`, `refine_control`, `regenerate_controls`, `import_controls`, `delete_control` |
+| **Assertions** | `submit_assertions`, `list_assertions`, `delete_assertion` |
+| **Verification** | `get_verification_report`, `get_scan_prompt`, `check_control_gaps` |
+| **Findings** | `submit_findings`, `list_findings`, `update_finding` |
+| **Evidence** | `add_evidence`, `remove_evidence`, `assess_model`, `get_review_queue` |
+| **Compliance** | `list_compliance_frameworks`, `select_compliance_frameworks`, `get_compliance_report`, `auto_map_controls`, `map_control_to_requirement`, `suggest_compliance_remediation`, `apply_compliance_remediation` |
+| **Systems** | `list_systems`, `get_system`, `create_system`, `add_model_to_system`, `select_system_compliance_frameworks`, `get_system_compliance_report` |
+| **Management** | `rename_threat_model`, `delete_threat_model`, `list_workspaces`, `get_operation_status` |
 
 ## Development
 
