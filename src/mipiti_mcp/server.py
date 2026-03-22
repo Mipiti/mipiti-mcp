@@ -240,6 +240,10 @@ def _start_job(tool_name: str, coro_factory, kwargs: dict) -> str:
     job = _Job(id=job_id, tool_name=tool_name)
     _jobs[job_id] = job
 
+    # Inject job_id so async coroutines can update progress
+    if "_job_id" in kwargs:
+        kwargs["_job_id"] = job_id
+
     # Capture the per-request client for the background thread
     caller_client = _request_client.get(None)
 
@@ -341,15 +345,24 @@ async def generate_threat_model(
 
     async def _run(**kw):
         client = _get_client()
+        job = _jobs.get(kw.get("_job_id", ""))
+        async def _on_progress(step, total, title):
+            if job:
+                job.progress = step
+                job.total = total
+                job.message = f"Step {step}/{total}: {STEP_NAMES.get(step, title)}"
         try:
-            result = await client.generate_threat_model(kw["feature_description"])
+            result = await client.generate_threat_model(
+                kw["feature_description"], on_progress=_on_progress,
+            )
             return _summarise(result)
         except Exception as exc:
             raise _api_error(exc) from exc
 
     if async_mode:
         job_id = _start_job("generate_threat_model", _run,
-                            {"feature_description": feature_description})
+                            {"feature_description": feature_description,
+                             "_job_id": None})  # populated by _start_job
         return {"job_id": job_id}
 
     client = _get_client()
