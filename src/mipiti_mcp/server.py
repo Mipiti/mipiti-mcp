@@ -598,29 +598,22 @@ async def get_controls(
     """
     async def _impl(**kw):
         try:
-            data = await _get_client().get_controls(kw["model_id"], include_deleted=kw.get("include_deleted", False))
-            controls = list(data.controls)
-
-            # Client-side filtering
-            if kw.get("control_id"):
-                controls = [c for c in controls if c.id == kw["control_id"]]
-            if kw.get("status"):
-                controls = [c for c in controls if c.status == kw["status"]]
-            if kw.get("co_id"):
-                controls = [c for c in controls if kw["co_id"] in c.control_objective_ids]
-
-            total = len(controls)
-            if kw.get("offset"):
-                controls = controls[kw["offset"]:]
-            if kw.get("limit"):
-                controls = controls[:kw["limit"]]
-
-            return {
-                "model_id": kw["model_id"],
-                "total": total,
-                "returned": len(controls),
-                "controls": [c.model_dump() for c in controls],
-            }
+            data = await _get_client().get_controls(
+                kw["model_id"],
+                include_deleted=kw.get("include_deleted", False),
+                control_id=kw.get("control_id") or "",
+                status=kw.get("status") or "",
+                co_id=kw.get("co_id") or "",
+                offset=kw.get("offset", 0),
+                limit=kw.get("limit", 0),
+            )
+            result = _dump(data)
+            # Ensure total/returned are set (older backends may not return them)
+            if not result.get("total"):
+                result["total"] = len(result.get("controls", []))
+            if not result.get("returned"):
+                result["returned"] = len(result.get("controls", []))
+            return result
         except Exception as exc:
             raise _api_error(exc) from exc
 
@@ -905,6 +898,7 @@ async def get_control_objectives(
 @mcp.tool()
 async def assess_model(
     model_id: str,
+    summary_only: bool = False,
     status: Optional[str] = None,
     offset: int = 0,
     limit: int = 0,
@@ -912,16 +906,23 @@ async def assess_model(
     """Run assurance assessment on a threat model.
 
     Evaluates each control objective based on control implementation status.
-    Returns summary (mitigated/at_risk/unassessed). No LLM calls — deterministic.
+    Returns summary (mitigated/at_risk/unassessed) and progressive metrics
+    (defined/implemented/verified). No LLM calls — deterministic.
+
+    Use summary_only=True to get just the counts without per-CO assessments.
 
     Args:
         model_id: ID of the threat model to assess.
+        summary_only: If True, returns only summary counts (no per-CO details).
         status: Filter: "mitigated", "at_risk", "unassessed".
         offset: Skip first N.
-        limit: Max to return.
+        limit: Max to return (0=all).
     """
     try:
-        return _dump(await _get_client().assess_model(model_id))
+        return _dump(await _get_client().assess_model(
+            model_id, summary_only=summary_only,
+            status=status or "", offset=offset, limit=limit,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 

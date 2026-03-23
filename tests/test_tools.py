@@ -362,21 +362,25 @@ class TestGetControls:
 
     @pytest.mark.asyncio
     async def test_filter_by_status(self) -> None:
+        """Status filter is passed to the backend (server-side filtering)."""
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _get_controls("tm-001", ctx, status="implemented", async_mode=False)
-        assert result["total"] == 1
-        assert result["controls"][0]["status"] == "implemented"
+            await _get_controls("tm-001", ctx, status="implemented", async_mode=False)
+        mock.get_controls.assert_awaited_once()
+        call_kwargs = mock.get_controls.call_args[1]
+        assert call_kwargs["status"] == "implemented"
 
     @pytest.mark.asyncio
     async def test_pagination(self) -> None:
+        """Offset/limit are passed to the backend (server-side pagination)."""
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _get_controls("tm-001", ctx, offset=0, limit=1, async_mode=False)
-        assert result["returned"] == 1
-        assert result["total"] == 2
+            await _get_controls("tm-001", ctx, offset=0, limit=1, async_mode=False)
+        mock.get_controls.assert_awaited_once()
+        call_kwargs = mock.get_controls.call_args[1]
+        assert call_kwargs["limit"] == 1
 
     @pytest.mark.asyncio
     async def test_async_mode(self) -> None:

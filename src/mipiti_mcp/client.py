@@ -230,10 +230,22 @@ class MipitiClient:
 
     async def get_controls(
         self, model_id: str, include_deleted: bool = False,
+        control_id: str = "", status: str = "", co_id: str = "",
+        offset: int = 0, limit: int = 0,
     ) -> ControlsResponse:
         params: dict[str, Any] = {}
         if include_deleted:
             params["include_deleted"] = "true"
+        if control_id:
+            params["control_id"] = control_id
+        if status:
+            params["status"] = status
+        if co_id:
+            params["co_id"] = co_id
+        if offset:
+            params["offset"] = offset
+        if limit:
+            params["limit"] = limit
         data = await self._get(f"/api/models/{model_id}/controls", params=params)
         return ControlsResponse.model_validate(data)
 
@@ -397,8 +409,20 @@ class MipitiClient:
     # Assurance
     # ------------------------------------------------------------------
 
-    async def assess_model(self, model_id: str) -> _Base:
-        data = await self._post(f"/api/models/{model_id}/assess")
+    async def assess_model(
+        self, model_id: str, summary_only: bool = False,
+        status: str = "", offset: int = 0, limit: int = 0,
+    ) -> _Base:
+        params: dict[str, Any] = {}
+        if summary_only:
+            params["summary_only"] = "true"
+        if status:
+            params["status"] = status
+        if offset:
+            params["offset"] = offset
+        if limit:
+            params["limit"] = limit
+        data = await self._post(f"/api/models/{model_id}/assess", params=params)
         return _Base.model_validate(data)
 
     async def get_review_queue(self) -> ReviewQueueResponse:

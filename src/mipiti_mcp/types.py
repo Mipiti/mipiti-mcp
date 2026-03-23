@@ -148,6 +148,8 @@ class ControlsResponse(_Base):
     controls: list[Control] = []
     model_id: str = ""
     model_version: int = 0
+    total: int = 0
+    returned: int = 0
 
 
 class EvidenceActionResult(_Base):
