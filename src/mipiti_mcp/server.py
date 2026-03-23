@@ -364,7 +364,8 @@ async def generate_threat_model(
     workspace_id: Optional[str] = None,
     async_mode: bool = True,
     force: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Generate a complete threat model from a feature description.
 
@@ -435,7 +436,8 @@ async def refine_threat_model(
     instruction: str,
     ctx: Context,
     async_mode: bool = True,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Refine an existing threat model based on an instruction.
 
@@ -491,7 +493,8 @@ async def query_threat_model(
     question: str,
     ctx: Context,
     async_mode: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Ask a question about an existing threat model.
 
@@ -518,7 +521,7 @@ async def query_threat_model(
 
 
 @mcp.tool()
-async def list_threat_models(workspace_id: Optional[str] = None, server_version: str = "") -> dict:
+async def list_threat_models(workspace_id: Optional[str] = None, *, server_version: str) -> dict:
     """List all saved threat models.
 
     Returns a summary of each model including ID, title, creation date,
@@ -540,7 +543,7 @@ async def list_threat_models(workspace_id: Optional[str] = None, server_version:
 
 
 @mcp.tool()
-async def rename_threat_model(model_id: str, name: str, server_version: str = "") -> dict:
+async def rename_threat_model(model_id: str, name: str, *, server_version: str) -> dict:
     """Rename a threat model. Metadata change only, does not create new version.
 
     Args:
@@ -555,7 +558,7 @@ async def rename_threat_model(model_id: str, name: str, server_version: str = ""
 
 
 @mcp.tool()
-async def delete_threat_model(model_id: str, server_version: str = "") -> dict:
+async def delete_threat_model(model_id: str, *, server_version: str) -> dict:
     """Delete a threat model and all associated data. This cannot be undone.
 
     Args:
@@ -573,7 +576,8 @@ async def get_threat_model(
     model_id: str,
     version: Optional[int] = None,
     include_cos: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get a specific threat model by ID.
 
@@ -593,7 +597,7 @@ async def get_threat_model(
 
 
 @mcp.tool()
-async def export_threat_model(model_id: str, format: str = "csv", server_version: str = "") -> str:
+async def export_threat_model(model_id: str, format: str = "csv", *, server_version: str) -> str:
     """Export a threat model as CSV, PDF, or HTML.
 
     CSV content is returned directly as text. For PDF and HTML,
@@ -633,7 +637,8 @@ async def get_controls(
     limit: int = 0,
     include_deleted: bool = False,
     async_mode: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get implementation controls for a threat model.
 
@@ -689,7 +694,8 @@ async def regenerate_controls(
     model_id: str,
     ctx: Context,
     async_mode: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Delete existing controls and regenerate from scratch.
 
@@ -717,7 +723,8 @@ async def update_control_status(
     control_id: str,
     status: str,
     implementation_notes: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Update the implementation status of a security control.
 
@@ -747,7 +754,8 @@ async def refine_control(
     description: str = "",
     justification: str = "",
     codebase_findings: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Refine a control's description with AI-gated CO sufficiency check.
 
@@ -793,7 +801,8 @@ async def add_evidence(
     type: str = "code",
     label: str = "",
     url: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Attach auxiliary metadata to a control (docs, links, artifacts).
 
@@ -820,7 +829,8 @@ async def remove_evidence(
     model_id: str,
     control_id: str,
     evidence_index: int = 0,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Remove an evidence item from a control by index.
 
@@ -844,7 +854,8 @@ async def import_controls(
     source_label: str = "",
     auto_map: bool = True,
     async_mode: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Import existing security controls into a threat model.
 
@@ -886,7 +897,8 @@ async def delete_control(
     model_id: str,
     control_id: str,
     reason: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Soft-delete a security control with justification.
 
@@ -909,7 +921,8 @@ async def check_control_gaps(
     model_id: str,
     ctx: Context,
     async_mode: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Check for missing controls.
 
@@ -939,7 +952,8 @@ async def get_control_objectives(
     model_id: str,
     offset: int = 0,
     limit: int = 0,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get control objective matrix for a threat model.
 
@@ -965,7 +979,8 @@ async def assess_model(
     status: Optional[str] = None,
     offset: int = 0,
     limit: int = 0,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Run assurance assessment on a threat model.
 
@@ -992,7 +1007,7 @@ async def assess_model(
 
 
 @mcp.tool()
-async def get_review_queue(server_version: str = "") -> dict:
+async def get_review_queue(*, server_version: str) -> dict:
     """Returns controls not reviewed in 90+ days.
 
     Lists implemented/verified controls whose assertions have not been checked
@@ -1015,7 +1030,8 @@ async def add_asset(
     security_properties: Optional[list[str]] = None,
     impact: str = "M",
     notes: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
@@ -1049,7 +1065,8 @@ async def edit_asset(
     security_properties: Optional[list[str]] = None,
     impact: Optional[str] = None,
     notes: Optional[str] = None,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Edit an existing asset. Creates a new version. Only provided fields changed.
 
@@ -1080,7 +1097,7 @@ async def edit_asset(
 
 
 @mcp.tool()
-async def remove_asset(model_id: str, asset_id: str, server_version: str = "") -> dict:
+async def remove_asset(model_id: str, asset_id: str, *, server_version: str) -> dict:
     """Remove an asset from a threat model. Creates a new version.
 
     Args:
@@ -1100,7 +1117,8 @@ async def add_attacker(
     position: str = "",
     archetype: str = "",
     likelihood: str = "M",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
 
@@ -1130,7 +1148,8 @@ async def edit_attacker(
     position: Optional[str] = None,
     archetype: Optional[str] = None,
     likelihood: Optional[str] = None,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Edit an existing attacker. Creates a new version. Only provided fields changed.
 
@@ -1158,7 +1177,7 @@ async def edit_attacker(
 
 
 @mcp.tool()
-async def remove_attacker(model_id: str, attacker_id: str, server_version: str = "") -> dict:
+async def remove_attacker(model_id: str, attacker_id: str, *, server_version: str) -> dict:
     """Remove an attacker from a threat model. Creates a new version.
 
     Args:
@@ -1175,7 +1194,7 @@ async def remove_attacker(model_id: str, attacker_id: str, server_version: str =
 
 
 @mcp.tool()
-async def list_compliance_frameworks(server_version: str = "") -> dict:
+async def list_compliance_frameworks(*, server_version: str) -> dict:
     """List available compliance frameworks.
 
     Returns built-in frameworks (e.g., OWASP ASVS) and custom frameworks.
@@ -1190,7 +1209,8 @@ async def list_compliance_frameworks(server_version: str = "") -> dict:
 async def select_compliance_frameworks(
     model_id: str,
     framework_ids: list[str],
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Select compliance frameworks for a threat model. Requires PRO tier.
 
@@ -1212,7 +1232,8 @@ async def get_compliance_report(
     status: Optional[str] = None,
     offset: int = 0,
     limit: int = 0,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get compliance gap analysis report.
 
@@ -1243,7 +1264,8 @@ async def map_control_to_requirement(
     control_id: str,
     confidence: str = "manual",
     notes: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Map a security control to a compliance framework requirement.
 
@@ -1270,7 +1292,8 @@ async def auto_map_controls(
     ctx: Context,
     control_id: Optional[str] = None,
     async_mode: bool = False,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Use LLM to map controls to framework requirements. Takes 20-45 seconds.
 
@@ -1305,7 +1328,8 @@ async def suggest_compliance_remediation(
     framework_id: str,
     ctx: Context,
     async_mode: bool = True,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Suggest missing assets and attackers to close compliance gaps.
 
@@ -1338,7 +1362,8 @@ async def apply_compliance_remediation(
     ctx: Context,
     job_id: Optional[str] = None,
     suggestions: Optional[list[dict]] = None,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Apply approved remediation suggestions to a threat model.
 
@@ -1372,7 +1397,7 @@ async def apply_compliance_remediation(
 
 
 @mcp.tool()
-async def list_workspaces(server_version: str = "") -> dict:
+async def list_workspaces(*, server_version: str) -> dict:
     """List workspaces the current user belongs to."""
     try:
         return _dump(await _get_client().list_workspaces())
@@ -1381,7 +1406,7 @@ async def list_workspaces(server_version: str = "") -> dict:
 
 
 @mcp.tool()
-async def list_systems(workspace_id: Optional[str] = None, server_version: str = "") -> dict:
+async def list_systems(workspace_id: Optional[str] = None, *, server_version: str) -> dict:
     """List all saved systems in current workspace.
 
     Args:
@@ -1394,7 +1419,7 @@ async def list_systems(workspace_id: Optional[str] = None, server_version: str =
 
 
 @mcp.tool()
-async def get_system(system_id: str, server_version: str = "") -> dict:
+async def get_system(system_id: str, *, server_version: str) -> dict:
     """Get a system container by ID with member model summaries.
 
     Args:
@@ -1411,7 +1436,8 @@ async def create_system(
     name: str,
     description: str = "",
     workspace_id: Optional[str] = None,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Create a new system container.
 
@@ -1427,7 +1453,7 @@ async def create_system(
 
 
 @mcp.tool()
-async def add_model_to_system(system_id: str, model_id: str, server_version: str = "") -> dict:
+async def add_model_to_system(system_id: str, model_id: str, *, server_version: str) -> dict:
     """Add a threat model to a system container.
 
     Args:
@@ -1447,7 +1473,8 @@ async def add_model_to_system(system_id: str, model_id: str, server_version: str
 async def select_system_compliance_frameworks(
     system_id: str,
     framework_ids: list[str],
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Select compliance frameworks for a system. Requires PRO tier.
 
@@ -1469,7 +1496,8 @@ async def get_system_compliance_report(
     status: Optional[str] = None,
     offset: int = 0,
     limit: int = 0,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get aggregated compliance report for a system. Requires PRO tier.
 
@@ -1516,7 +1544,8 @@ async def submit_assertions(
     model_id: str,
     control_id: str,
     assertions_json: str,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     try:
         assertions = json.loads(assertions_json)
@@ -1529,7 +1558,7 @@ async def submit_assertions(
 
 
 @mcp.tool()
-async def list_assertions(model_id: str, control_id: str, server_version: str = "") -> dict:
+async def list_assertions(model_id: str, control_id: str, *, server_version: str) -> dict:
     """List active assertions for a security control.
 
     Args:
@@ -1547,7 +1576,8 @@ async def delete_assertion(
     model_id: str,
     control_id: str,
     assertion_id: str,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Delete an assertion.
 
@@ -1570,7 +1600,8 @@ async def get_verification_report(
     summary_only: bool = True,
     offset: int = 0,
     limit: int = 0,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get verification report with summary stats and sufficiency gaps.
 
@@ -1604,7 +1635,8 @@ async def get_verification_report(
 async def submit_findings(
     model_id: str,
     findings_json: str,
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Submit negative findings discovered by scanning codebase.
 
@@ -1629,7 +1661,8 @@ async def list_findings(
     model_id: str,
     control_id: str = "",
     status: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """List negative findings for a threat model.
 
@@ -1653,7 +1686,8 @@ async def update_finding(
     notes: str = "",
     reason: str = "",
     remediation_assertion_ids: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Update lifecycle status of a finding.
 
@@ -1680,7 +1714,8 @@ async def update_finding(
 async def get_scan_prompt(
     model_id: str,
     control_id: str = "",
-    server_version: str = "",
+    *,
+    server_version: str,
 ) -> dict:
     """Get scan prompt to guide codebase gap discovery.
 
@@ -1701,7 +1736,7 @@ async def get_scan_prompt(
 
 
 @mcp.tool()
-async def get_operation_status(job_id: str, server_version: str = "") -> dict:
+async def get_operation_status(job_id: str, *, server_version: str) -> dict:
     """Check status of a background operation.
 
     Returns progress updates while running. When complete, returns result.
