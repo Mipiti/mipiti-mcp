@@ -217,7 +217,7 @@ class TestGenerateThreatModel:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _generate_threat_model("User login", ctx, async_mode=False, server_version="0")
+            result = await _generate_threat_model(server_version="0", feature_description="User login", ctx=ctx, async_mode=False)
         assert result["model_id"] == "tm-001"
         assert result["asset_count"] == 2
         mock.generate_threat_model.assert_awaited_once()
@@ -227,7 +227,7 @@ class TestGenerateThreatModel:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _generate_threat_model("User login", ctx, async_mode=True, server_version="0")
+            result = await _generate_threat_model(server_version="0", feature_description="User login", ctx=ctx, async_mode=True)
         assert "job_id" in result
         mock.generate_threat_model.assert_not_awaited()
 
@@ -238,7 +238,7 @@ class TestRefineThreatModel:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _refine_threat_model("tm-001", "Add CSRF", ctx, async_mode=False, server_version="0")
+            result = await _refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx, async_mode=False)
         assert result["model_id"] == "tm-001"
         mock.refine_threat_model.assert_awaited_once()
 
@@ -247,7 +247,7 @@ class TestRefineThreatModel:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _refine_threat_model("tm-001", "Add CSRF", ctx, async_mode=True, server_version="0")
+            result = await _refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx, async_mode=True)
         assert "job_id" in result
 
 
@@ -257,7 +257,7 @@ class TestQueryThreatModel:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _query_threat_model("tm-001", "SQL injection?", ctx, async_mode=False, server_version="0")
+            result = await _query_threat_model(server_version="0", model_id="tm-001", question="SQL injection?", ctx=ctx, async_mode=False)
         assert result["answer"] == "The model covers SQL injection."
 
     @pytest.mark.asyncio
@@ -265,7 +265,7 @@ class TestQueryThreatModel:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _query_threat_model("tm-001", "Q?", ctx, async_mode=True, server_version="0")
+            result = await _query_threat_model(server_version="0", model_id="tm-001", question="Q?", ctx=ctx, async_mode=True)
         assert "job_id" in result
 
 
@@ -291,7 +291,7 @@ class TestRenameThreatModel:
     async def test_rename(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _rename_threat_model("tm-001", "New Name", server_version="0")
+            result = await _rename_threat_model(server_version="0", model_id="tm-001", name="New Name")
         assert result["title"] == "New"
         mock.rename_model.assert_awaited_once_with("tm-001", "New Name")
 
@@ -301,7 +301,7 @@ class TestDeleteThreatModel:
     async def test_delete(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _delete_threat_model("tm-001", server_version="0")
+            result = await _delete_threat_model(server_version="0", model_id="tm-001")
         assert result["deleted"] is True
         mock.delete_model.assert_awaited_once()
 
@@ -311,7 +311,7 @@ class TestGetThreatModel:
     async def test_latest(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_threat_model("tm-001", server_version="0")
+            result = await _get_threat_model(server_version="0", model_id="tm-001")
         assert result["id"] == "tm-001"
         mock.get_model.assert_awaited_once_with("tm-001", None)
 
@@ -319,7 +319,7 @@ class TestGetThreatModel:
     async def test_specific_version(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            await _get_threat_model("tm-001", version=3, server_version="0")
+            await _get_threat_model(server_version="0", model_id="tm-001", version=3)
         mock.get_model.assert_awaited_once_with("tm-001", 3)
 
 
@@ -328,21 +328,21 @@ class TestExportThreatModel:
     async def test_csv(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _export_threat_model("tm-001", "csv", server_version="0")
+            result = await _export_threat_model(server_version="0", model_id="tm-001", format="csv")
         assert "AssetID,Name" in result
 
     @pytest.mark.asyncio
     async def test_pdf_returns_url(self) -> None:
         mock = _mock_client(export_model=AsyncMock(return_value=b"%PDF-binary"))
         with _patch_client(mock):
-            result = await _export_threat_model("tm-001", "pdf", server_version="0")
+            result = await _export_threat_model(server_version="0", model_id="tm-001", format="pdf")
         assert "Download from:" in result
         assert "/api/models/tm-001/export?format=pdf" in result
 
     @pytest.mark.asyncio
     async def test_invalid_format(self) -> None:
         with pytest.raises(ToolError, match="format must be"):
-            await _export_threat_model("tm-001", "xml", server_version="0")
+            await _export_threat_model(server_version="0", model_id="tm-001", format="xml")
 
 
 # ------------------------------------------------------------------
@@ -356,7 +356,7 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _get_controls("tm-001", ctx, async_mode=False, server_version="0")
+            result = await _get_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=False)
         assert result["total"] == 2
         assert result["returned"] == 2
 
@@ -366,7 +366,7 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            await _get_controls("tm-001", ctx, status="implemented", async_mode=False, server_version="0")
+            await _get_controls(server_version="0", model_id="tm-001", ctx=ctx, status="implemented", async_mode=False)
         mock.get_controls.assert_awaited_once()
         call_kwargs = mock.get_controls.call_args[1]
         assert call_kwargs["status"] == "implemented"
@@ -377,7 +377,7 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            await _get_controls("tm-001", ctx, offset=0, limit=1, async_mode=False, server_version="0")
+            await _get_controls(server_version="0", model_id="tm-001", ctx=ctx, offset=0, limit=1, async_mode=False)
         mock.get_controls.assert_awaited_once()
         call_kwargs = mock.get_controls.call_args[1]
         assert call_kwargs["limit"] == 1
@@ -387,7 +387,7 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _get_controls("tm-001", ctx, async_mode=True, server_version="0")
+            result = await _get_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=True)
         assert "job_id" in result
 
 
@@ -397,7 +397,7 @@ class TestRegenerateControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _regenerate_controls("tm-001", ctx, async_mode=False, server_version="0")
+            result = await _regenerate_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=False)
         assert "controls" in result
         mock.regenerate_controls.assert_awaited_once()
 
@@ -407,13 +407,13 @@ class TestUpdateControlStatus:
     async def test_valid_status(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _update_control_status("tm-001", "CTRL-01", "implemented", server_version="0")
+            result = await _update_control_status(server_version="0", model_id="tm-001", control_id="CTRL-01", status="implemented")
         assert result["status"] == "implemented"
 
     @pytest.mark.asyncio
     async def test_invalid_status(self) -> None:
         with pytest.raises(ToolError, match="status must be"):
-            await _update_control_status("tm-001", "CTRL-01", "invalid", server_version="0")
+            await _update_control_status(server_version="0", model_id="tm-001", control_id="CTRL-01", status="invalid")
 
 
 
@@ -423,10 +423,9 @@ class TestRefineControl:
         mock = _mock_client()
         with _patch_client(mock):
             result = await _refine_control(
-                "tm-001", "CTRL-01",
-                "Updated description matching implementation.",
-                "Implementation uses FastAPI Depends, not middleware.",
-                server_version="0",
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                description="Updated description matching implementation.",
+                justification="Implementation uses FastAPI Depends, not middleware.",
             )
         assert result["accepted"] is True
         mock.refine_control.assert_awaited_once()
@@ -442,10 +441,9 @@ class TestRefineControl:
         )
         with _patch_client(mock):
             result = await _refine_control(
-                "tm-001", "CTRL-01",
-                "Weaker description.",
-                "Trying to weaken the control.",
-                server_version="0",
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                description="Weaker description.",
+                justification="Trying to weaken the control.",
             )
         assert result["accepted"] is False
         assert "CO1" in result["per_co"]
@@ -453,12 +451,12 @@ class TestRefineControl:
     @pytest.mark.asyncio
     async def test_empty_description_and_findings(self) -> None:
         with pytest.raises(ToolError, match="Either description or codebase_findings is required"):
-            await _refine_control("tm-001", "CTRL-01", "  ", "Some justification here.", server_version="0")
+            await _refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="  ", justification="Some justification here.")
 
     @pytest.mark.asyncio
     async def test_short_justification(self) -> None:
         with pytest.raises(ToolError, match="justification must be at least 10"):
-            await _refine_control("tm-001", "CTRL-01", "New desc.", "Short", server_version="0")
+            await _refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="New desc.", justification="Short")
 
 
 class TestAddEvidence:
@@ -466,13 +464,13 @@ class TestAddEvidence:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _add_evidence("tm-001", "CTRL-01", "code", "bcrypt usage", server_version="0")
+            result = await _add_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", type="code", label="bcrypt usage")
         assert result["evidence_count"] == 2
 
     @pytest.mark.asyncio
     async def test_empty_label(self) -> None:
         with pytest.raises(ToolError, match="label is required"):
-            await _add_evidence("tm-001", "CTRL-01", "code", "  ", server_version="0")
+            await _add_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", type="code", label="  ")
 
 
 class TestRemoveEvidence:
@@ -480,7 +478,7 @@ class TestRemoveEvidence:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _remove_evidence("tm-001", "CTRL-01", 0, server_version="0")
+            result = await _remove_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", evidence_index=0)
         assert result["evidence_count"] == 0
 
 
@@ -490,7 +488,7 @@ class TestImportControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _import_controls("tm-001", ctx, free_text="Encrypt data at rest", async_mode=False, server_version="0")
+            result = await _import_controls(server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest", async_mode=False)
         assert result["imported"] == 3
 
     @pytest.mark.asyncio
@@ -498,7 +496,7 @@ class TestImportControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _import_controls("tm-001", ctx, async_mode=True, server_version="0")
+            result = await _import_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=True)
         assert "job_id" in result
 
 
@@ -507,7 +505,7 @@ class TestDeleteControl:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _delete_control("tm-001", "CTRL-01", "Duplicate", server_version="0")
+            result = await _delete_control(server_version="0", model_id="tm-001", control_id="CTRL-01", reason="Duplicate")
         assert result["deleted"] is True
 
 
@@ -517,7 +515,7 @@ class TestCheckControlGaps:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _check_control_gaps("tm-001", ctx, async_mode=False, server_version="0")
+            result = await _check_control_gaps(server_version="0", model_id="tm-001", ctx=ctx, async_mode=False)
         assert "gaps" in result
 
 
@@ -531,7 +529,7 @@ class TestGetControlObjectives:
     async def test_basic(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_control_objectives("tm-001", server_version="0")
+            result = await _get_control_objectives(server_version="0", model_id="tm-001")
         assert result["total"] == 1
 
 
@@ -540,7 +538,7 @@ class TestAssessModel:
     async def test_basic(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _assess_model("tm-001", server_version="0")
+            result = await _assess_model(server_version="0", model_id="tm-001")
         assert result["mitigated"] == 1
 
 
@@ -563,7 +561,7 @@ class TestAddAsset:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _add_asset("tm-001", "Session Store", server_version="0")
+            result = await _add_asset(server_version="0", model_id="tm-001", name="Session Store")
         assert result["id"] == "A3"
         mock.add_asset.assert_awaited_once()
 
@@ -573,7 +571,7 @@ class TestEditAsset:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _edit_asset("tm-001", "A1", name="Updated", server_version="0")
+            result = await _edit_asset(server_version="0", model_id="tm-001", asset_id="A1", name="Updated")
         assert result["name"] == "Updated"
 
 
@@ -582,7 +580,7 @@ class TestRemoveAsset:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _remove_asset("tm-001", "A1", server_version="0")
+            result = await _remove_asset(server_version="0", model_id="tm-001", asset_id="A1")
         assert result["deleted"] is True
 
 
@@ -591,7 +589,7 @@ class TestAddAttacker:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _add_attacker("tm-001", "Phishing", server_version="0")
+            result = await _add_attacker(server_version="0", model_id="tm-001", capability="Phishing")
         assert result["id"] == "T2"
 
 
@@ -600,7 +598,7 @@ class TestEditAttacker:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _edit_attacker("tm-001", "T1", capability="Updated", server_version="0")
+            result = await _edit_attacker(server_version="0", model_id="tm-001", attacker_id="T1", capability="Updated")
         assert result["capability"] == "Updated"
 
 
@@ -609,7 +607,7 @@ class TestRemoveAttacker:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _remove_attacker("tm-001", "T1", server_version="0")
+            result = await _remove_attacker(server_version="0", model_id="tm-001", attacker_id="T1")
         assert result["deleted"] is True
 
 
@@ -632,7 +630,7 @@ class TestSelectComplianceFrameworks:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _select_compliance_frameworks("tm-001", ["owasp-asvs"], server_version="0")
+            result = await _select_compliance_frameworks(server_version="0", model_id="tm-001", framework_ids=["owasp-asvs"])
         assert result["selected"] == 1
 
 
@@ -641,7 +639,7 @@ class TestGetComplianceReport:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_compliance_report("tm-001", "owasp-asvs", server_version="0")
+            result = await _get_compliance_report(server_version="0", model_id="tm-001", framework_id="owasp-asvs")
         assert result["coverage"] == 0.8
 
 
@@ -651,8 +649,8 @@ class TestMapControlToRequirement:
         mock = _mock_client()
         with _patch_client(mock):
             result = await _map_control_to_requirement(
-                "tm-001", "owasp-asvs", "V2.1.1", "CTRL-01",
-                server_version="0",
+                server_version="0", model_id="tm-001", framework_id="owasp-asvs",
+                requirement_id="V2.1.1", control_id="CTRL-01",
             )
         assert result["mapped"] is True
 
@@ -663,7 +661,7 @@ class TestAutoMapControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _auto_map_controls("tm-001", "owasp-asvs", ctx, async_mode=False, server_version="0")
+            result = await _auto_map_controls(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=False)
         assert result["mapped"] == 5
 
     @pytest.mark.asyncio
@@ -671,7 +669,7 @@ class TestAutoMapControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _auto_map_controls("tm-001", "owasp-asvs", ctx, async_mode=True, server_version="0")
+            result = await _auto_map_controls(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=True)
         assert "job_id" in result
 
 
@@ -681,7 +679,7 @@ class TestSuggestComplianceRemediation:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _suggest_compliance_remediation("tm-001", "owasp-asvs", ctx, async_mode=True, server_version="0")
+            result = await _suggest_compliance_remediation(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=True)
         assert "job_id" in result
 
     @pytest.mark.asyncio
@@ -689,7 +687,7 @@ class TestSuggestComplianceRemediation:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await _suggest_compliance_remediation("tm-001", "owasp-asvs", ctx, async_mode=False, server_version="0")
+            result = await _suggest_compliance_remediation(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=False)
         assert "suggestions" in result
 
 
@@ -700,9 +698,8 @@ class TestApplyComplianceRemediation:
         ctx = _mock_ctx()
         with _patch_client(mock):
             result = await _apply_compliance_remediation(
-                "tm-001", "owasp-asvs", ctx,
+                server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx,
                 suggestions=[{"action": "add_asset"}],
-                server_version="0",
             )
         assert result["applied"] == 1
 
@@ -718,9 +715,8 @@ class TestApplyComplianceRemediation:
         try:
             with _patch_client(mock):
                 result = await _apply_compliance_remediation(
-                    "tm-001", "owasp-asvs", ctx, job_id="job_test123",
-                    server_version="0",
-            )
+                    server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, job_id="job_test123",
+                )
             assert result["applied"] == 1
         finally:
             server._jobs.pop("job_test123", None)
@@ -730,8 +726,7 @@ class TestApplyComplianceRemediation:
         ctx = _mock_ctx()
         with pytest.raises(ToolError, match="not found"):
             await _apply_compliance_remediation(
-                "tm-001", "owasp-asvs", ctx, job_id="job_nonexistent",
-                server_version="0",
+                server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, job_id="job_nonexistent",
             )
 
 
@@ -763,7 +758,7 @@ class TestGetSystem:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_system("sys-1", server_version="0")
+            result = await _get_system(server_version="0", system_id="sys-1")
         assert result["id"] == "sys-1"
 
 
@@ -772,7 +767,7 @@ class TestCreateSystem:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _create_system("Platform", server_version="0")
+            result = await _create_system(server_version="0", name="Platform")
         assert result["id"] == "sys-2"
 
 
@@ -781,7 +776,7 @@ class TestAddModelToSystem:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _add_model_to_system("sys-1", "tm-001", server_version="0")
+            result = await _add_model_to_system(server_version="0", system_id="sys-1", model_id="tm-001")
         assert result["added"] is True
 
 
@@ -795,7 +790,7 @@ class TestSelectSystemComplianceFrameworks:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _select_system_compliance_frameworks("sys-1", ["owasp-asvs"], server_version="0")
+            result = await _select_system_compliance_frameworks(server_version="0", system_id="sys-1", framework_ids=["owasp-asvs"])
         assert result["selected"] == 1
 
 
@@ -804,7 +799,7 @@ class TestGetSystemComplianceReport:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_system_compliance_report("sys-1", "owasp-asvs", server_version="0")
+            result = await _get_system_compliance_report(server_version="0", system_id="sys-1", framework_id="owasp-asvs")
         assert result["coverage"] == 0.9
 
 
@@ -819,16 +814,15 @@ class TestSubmitAssertions:
         mock = _mock_client()
         with _patch_client(mock):
             result = await _submit_assertions(
-                "tm-001", "CTRL-01",
-                json.dumps([{"type": "file_exists", "params": {"path": "auth.py"}}]),
-                server_version="0",
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                assertions_json=json.dumps([{"type": "file_exists", "params": {"path": "auth.py"}}]),
             )
         assert result["count"] == 2
 
     @pytest.mark.asyncio
     async def test_bad_json(self) -> None:
         with pytest.raises(ToolError, match="assertions_json must be valid JSON"):
-            await _submit_assertions("tm-001", "CTRL-01", "not-json", server_version="0")
+            await _submit_assertions(server_version="0", model_id="tm-001", control_id="CTRL-01", assertions_json="not-json")
 
 
 class TestListAssertions:
@@ -836,7 +830,7 @@ class TestListAssertions:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _list_assertions("tm-001", "CTRL-01", server_version="0")
+            result = await _list_assertions(server_version="0", model_id="tm-001", control_id="CTRL-01")
         assert "assertions" in result
 
 
@@ -845,7 +839,7 @@ class TestDeleteAssertion:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _delete_assertion("tm-001", "CTRL-01", "a-1", server_version="0")
+            result = await _delete_assertion(server_version="0", model_id="tm-001", control_id="CTRL-01", assertion_id="a-1")
         assert result["deleted"] is True
 
 
@@ -854,7 +848,7 @@ class TestGetVerificationReport:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_verification_report("tm-001", server_version="0")
+            result = await _get_verification_report(server_version="0", model_id="tm-001")
         assert result["tier1_pass"] == 3
 
 
@@ -869,16 +863,15 @@ class TestSubmitFindings:
         mock = _mock_client()
         with _patch_client(mock):
             result = await _submit_findings(
-                "tm-001",
-                json.dumps([{"control_id": "CTRL-01", "title": "Missing encryption"}]),
-                server_version="0",
+                server_version="0", model_id="tm-001",
+                findings_json=json.dumps([{"control_id": "CTRL-01", "title": "Missing encryption"}]),
             )
         assert result["count"] == 1
 
     @pytest.mark.asyncio
     async def test_bad_json(self) -> None:
         with pytest.raises(ToolError, match="findings_json must be valid JSON"):
-            await _submit_findings("tm-001", "not-json", server_version="0")
+            await _submit_findings(server_version="0", model_id="tm-001", findings_json="not-json")
 
 
 class TestListFindings:
@@ -886,7 +879,7 @@ class TestListFindings:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _list_findings("tm-001", server_version="0")
+            result = await _list_findings(server_version="0", model_id="tm-001")
         assert "findings" in result
 
 
@@ -895,7 +888,7 @@ class TestUpdateFinding:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _update_finding("tm-001", "f1", "acknowledged", server_version="0")
+            result = await _update_finding(server_version="0", model_id="tm-001", finding_id="f1", status="acknowledged")
         assert result["status"] == "acknowledged"
 
 
@@ -909,7 +902,7 @@ class TestGetScanPrompt:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _get_scan_prompt("tm-001", server_version="0")
+            result = await _get_scan_prompt(server_version="0", model_id="tm-001")
         assert "prompt" in result
 
 
@@ -925,7 +918,7 @@ class TestGetOperationStatus:
             id="job_abc", tool_name="generate_threat_model", status="running",
         )
         try:
-            result = await _get_operation_status("job_abc", server_version="0")
+            result = await _get_operation_status(server_version="0", job_id="job_abc")
             assert result["status"] == "running"
             assert "poll_after_seconds" in result
         finally:
@@ -938,7 +931,7 @@ class TestGetOperationStatus:
             status="completed", result={"model_id": "tm-001"},
         )
         try:
-            result = await _get_operation_status("job_done", server_version="0")
+            result = await _get_operation_status(server_version="0", job_id="job_done")
             assert result["status"] == "completed"
             assert result["result"]["model_id"] == "tm-001"
         finally:
@@ -951,7 +944,7 @@ class TestGetOperationStatus:
             status="failed", error="Timeout",
         )
         try:
-            result = await _get_operation_status("job_fail", server_version="0")
+            result = await _get_operation_status(server_version="0", job_id="job_fail")
             assert result["status"] == "failed"
             assert result["error"] == "Timeout"
         finally:
@@ -960,4 +953,4 @@ class TestGetOperationStatus:
     @pytest.mark.asyncio
     async def test_unknown_job(self) -> None:
         with pytest.raises(ToolError, match="Unknown job_id"):
-            await _get_operation_status("job_nonexistent", server_version="0")
+            await _get_operation_status(server_version="0", job_id="job_nonexistent")
