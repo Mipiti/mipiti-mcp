@@ -117,16 +117,20 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             ParamSpec("pattern", "Python regex pattern to search for", example="force_https\\s*=\\s*true"),
             ParamSpec("scope_start", "Regex pattern marking the start of the search scope within the file. Only content between scope_start and scope_end is searched.", required=False, example="class.*Client"),
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
+            ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries (re.MULTILINE). Default: false.", required=False, example="true"),
+            ParamSpec("dotall", "If true, . matches newlines, enabling patterns that span multiple lines (re.DOTALL). Default: false.", required=False, example="true"),
         ),
     ),
     AssertionTypeSpec(
         name="pattern_absent",
-        description="Check that a regex pattern does NOT exist in a file. Uses Python regex syntax. Use scope_start/scope_end to limit the search to a specific section.",
+        description="Check that a regex pattern does NOT exist in a file. Uses Python regex syntax.",
         params=(
             _FILE,
             ParamSpec("pattern", "Python regex pattern that must be absent", example="verify\\s*=\\s*False"),
             ParamSpec("scope_start", "Regex pattern marking the start of the search scope within the file. Only content between scope_start and scope_end is checked for absence.", required=False, example="class.*Client"),
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
+            ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries (re.MULTILINE). Default: false.", required=False, example="true"),
+            ParamSpec("dotall", "If true, . matches newlines, enabling patterns that span multiple lines (re.DOTALL). Default: false.", required=False, example="true"),
         ),
     ),
     AssertionTypeSpec(
