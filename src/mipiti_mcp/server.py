@@ -202,7 +202,8 @@ class VersionCheckMiddleware(Middleware):
     """Check server_version on every tool call and inject update notice if stale."""
 
     async def on_call_tool(self, context, call_next):
-        client_version = (context.source.arguments or {}).get("server_version", "") if context.source else ""
+        args = (context.message.params.arguments or {}) if context.message and hasattr(context.message, "params") else {}
+        client_version = args.get("server_version", "")
         result = await call_next(context)
         if client_version and client_version != _SERVER_VERSION:
             if result.structured_content is not None:
