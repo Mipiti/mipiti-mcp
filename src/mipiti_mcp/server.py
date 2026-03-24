@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -589,11 +589,10 @@ async def get_threat_model(
 
 
 @mcp.tool()
-async def export_threat_model(server_version: str, model_id: str, format: str = "csv") -> str:
+async def export_threat_model(server_version: str, model_id: str, format: Literal["csv", "pdf", "html"] = "csv") -> dict:
     """Export a threat model as CSV, PDF, or HTML.
 
-    CSV content is returned directly as text. For PDF and HTML,
-    a download URL is returned.
+    CSV returns content inline. PDF and HTML return a download URL.
 
     Args:
         model_id: ID of the threat model to export.
@@ -604,13 +603,13 @@ async def export_threat_model(server_version: str, model_id: str, format: str = 
     try:
         content = await _get_client().export_model(model_id, format)
         if format == "csv":
-            return content.decode("utf-8")
+            return {"format": "csv", "content": content.decode("utf-8")}
         client = _get_client()
-        return (
-            f"Export ready. Download from:\n"
-            f"{client.api_url}/api/models/{model_id}/export?format={format}\n\n"
-            f"Include your API key as the X-API-Key header when downloading."
-        )
+        return {
+            "format": format,
+            "download_url": f"{client.api_url}/api/models/{model_id}/export?format={format}",
+            "message": "Include your API key as the X-API-Key header when downloading.",
+        }
     except Exception as exc:
         raise _api_error(exc) from exc
 

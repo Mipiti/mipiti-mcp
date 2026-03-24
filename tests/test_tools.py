@@ -329,15 +329,16 @@ class TestExportThreatModel:
         mock = _mock_client()
         with _patch_client(mock):
             result = await _export_threat_model(server_version="0", model_id="tm-001", format="csv")
-        assert "AssetID,Name" in result
+        assert result["format"] == "csv"
+        assert "AssetID,Name" in result["content"]
 
     @pytest.mark.asyncio
     async def test_pdf_returns_url(self) -> None:
         mock = _mock_client(export_model=AsyncMock(return_value=b"%PDF-binary"))
         with _patch_client(mock):
             result = await _export_threat_model(server_version="0", model_id="tm-001", format="pdf")
-        assert "Download from:" in result
-        assert "/api/models/tm-001/export?format=pdf" in result
+        assert result["format"] == "pdf"
+        assert "/api/models/tm-001/export?format=pdf" in result["download_url"]
 
     @pytest.mark.asyncio
     async def test_invalid_format(self) -> None:
