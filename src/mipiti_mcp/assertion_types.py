@@ -99,11 +99,14 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
     ),
     AssertionTypeSpec(
         name="file_hash",
-        description="Check that a file's hash matches an expected value.",
+        description="Check that a file's hash matches an expected value. Use scope_file/scope_start/scope_end to reference the code that pins this hash (e.g., a deploy script that verifies the file's integrity).",
         params=(
             _FILE,
             ParamSpec("algorithm", "Hash algorithm: sha256, sha384, sha512, md5", example="sha256"),
             ParamSpec("expected_hash", "Expected hex-encoded hash", example="a1b2c3..."),
+            ParamSpec("scope_file", "File containing code that references/checks this hash. Tier 2 reviews this code to verify the hash check is meaningful.", example="deploy/verify.py"),
+            ParamSpec("scope_start", "Regex marking start of the relevant code section in scope_file.", required=False, example="def verify_config"),
+            ParamSpec("scope_end", "Regex marking end of the relevant code section in scope_file.", required=False, example="^def |\\Z"),
         ),
     ),
     AssertionTypeSpec(
