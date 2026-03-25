@@ -350,6 +350,7 @@ STEP_NAMES = {
     3: "Generating attackers",
     4: "Refining attackers",
     5: "Generating trust boundaries and control objectives",
+    6: "Deriving security controls",
 }
 
 
