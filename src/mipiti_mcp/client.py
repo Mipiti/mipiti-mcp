@@ -231,11 +231,13 @@ class MipitiClient:
     async def get_controls(
         self, model_id: str, include_deleted: bool = False,
         control_id: str = "", status: str = "", co_id: str = "",
-        offset: int = 0, limit: int = 0,
+        offset: int = 0, limit: int = 0, summary_only: bool = False,
     ) -> ControlsResponse:
         params: dict[str, Any] = {}
         if include_deleted:
             params["include_deleted"] = "true"
+        if summary_only:
+            params["summary_only"] = "true"
         if control_id:
             params["control_id"] = control_id
         if status:

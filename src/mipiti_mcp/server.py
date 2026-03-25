@@ -70,7 +70,8 @@ typed, machine-verifiable claims about codebase properties that prove a \
 control is satisfied.
 
 **Key tools:**
-- `get_controls` — lists controls with current status.
+- `get_controls` — lists controls with current status. Use `summary_only=True` \
+for a compact response (id, description, status, assertion_count only).
 - `submit_assertions` — provide proof for a control. See that tool's docstring for \
 assertion types and required params. Always verify locally first: \
 `mipiti-verify verify <type> -p key=value --project-root .` \
@@ -632,6 +633,7 @@ async def get_controls(
     offset: int = 0,
     limit: int = 0,
     include_deleted: bool = False,
+    summary_only: bool = False,
     async_mode: bool = False,
 ) -> dict:
     """Get implementation controls for a threat model.
@@ -647,6 +649,8 @@ async def get_controls(
         offset: Skip first N (for pagination).
         limit: Max to return (0=all).
         include_deleted: Include soft-deleted controls.
+        summary_only: If True, returns only id, description, status, and
+            assertion_count per control (much smaller response).
         async_mode: If True, returns a job_id for polling.
     """
     async def _impl(**kw):
@@ -659,6 +663,7 @@ async def get_controls(
                 co_id=kw.get("co_id") or "",
                 offset=kw.get("offset", 0),
                 limit=kw.get("limit", 0),
+                summary_only=kw.get("summary_only", False),
             )
             result = _dump(data)
             # Ensure total/returned are set (older backends may not return them)
@@ -674,12 +679,12 @@ async def get_controls(
         return {"job_id": _start_job("get_controls", _impl, {
             "model_id": model_id, "control_id": control_id, "status": status,
             "co_id": co_id, "offset": offset, "limit": limit,
-            "include_deleted": include_deleted,
+            "include_deleted": include_deleted, "summary_only": summary_only,
         })}
     return await _impl(
         model_id=model_id, control_id=control_id, status=status,
         co_id=co_id, offset=offset, limit=limit,
-        include_deleted=include_deleted,
+        include_deleted=include_deleted, summary_only=summary_only,
     )
 
 
