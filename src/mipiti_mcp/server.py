@@ -81,6 +81,8 @@ assertions first, then update status.
 - `get_verification_report` — shows which controls are verified, which \
 have sufficiency gaps, and which lack assertions entirely. Read \
 `sufficiency_details` for the specific aspects that still need proof.
+- `get_sufficiency` — quick check: do assertions for a single control \
+collectively cover all aspects? Evaluated server-side at submission.
 - `refine_control` — modify a control's description if it doesn't match \
 the actual security requirement.
 - `regenerate_controls` — regenerate all controls from scratch if the \
@@ -112,8 +114,8 @@ a revised control if so. If accepted, submit assertions for the \
 refined control. If rejected or no existing mechanism found, implement \
 as prescribed, submit assertions, and update status.
 
-Sufficiency is re-evaluated automatically in CI after assertions are \
-submitted — no manual trigger needed.
+Sufficiency is evaluated automatically server-side when assertions \
+are submitted — no manual trigger needed.
 
 ## Assurance posture
 
@@ -1590,6 +1592,28 @@ async def get_verification_report(
             model_id, status=status, summary_only=summary_only,
             offset=offset, limit=limit,
         ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_sufficiency(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+) -> dict:
+    """Get sufficiency status for a single control.
+
+    Returns whether the submitted assertions collectively cover all
+    aspects of the control. Evaluated server-side when assertions
+    are submitted — no CI round-trip needed.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control (e.g., "CTRL-01").
+    """
+    try:
+        return await _get_client().get_sufficiency(model_id, control_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 

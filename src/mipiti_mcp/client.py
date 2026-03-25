@@ -622,6 +622,9 @@ class MipitiClient:
         data = await self._get(url)
         return VerificationReport.model_validate(data)
 
+    async def get_sufficiency(self, model_id: str, control_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/controls/{control_id}/sufficiency")
+
     # ------------------------------------------------------------------
     # Findings
     # ------------------------------------------------------------------
