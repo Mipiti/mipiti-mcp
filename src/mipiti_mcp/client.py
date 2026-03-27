@@ -711,3 +711,6 @@ class MipitiClient:
 
     async def complete_setup_step(self, step_id: str) -> dict:
         return await self._patch("/api/onboarding", {"check": step_id})
+
+    async def get_setup_status(self) -> dict:
+        return await self._get("/api/onboarding")

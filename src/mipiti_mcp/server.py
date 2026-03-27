@@ -145,6 +145,9 @@ against specific not_implemented controls.
 
 ## Project setup
 
+- `get_setup_status` — check which onboarding steps are done and which \
+are pending. Call before suggesting setup actions to avoid repeating \
+completed steps.
 - `complete_setup_step` — mark an onboarding step as done. Call after \
 completing a setup action: `mcp_configured` (after MCP server is \
 connected), `mipiti_verify_installed` (after installing mipiti-verify), \
@@ -1811,6 +1814,20 @@ async def complete_setup_step(server_version: str, step_id: str) -> dict:
         return {"error": f"Invalid step_id. Must be one of: {', '.join(sorted(valid))}"}
     try:
         return await _get_client().complete_setup_step(step_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_setup_status(server_version: str) -> dict:
+    """Get project onboarding status.
+
+    Returns the setup checklist with completed and pending steps.
+    Check this before suggesting setup actions to avoid repeating
+    steps that are already done.
+    """
+    try:
+        return await _get_client().get_setup_status()
     except Exception as exc:
         raise _api_error(exc) from exc
 
