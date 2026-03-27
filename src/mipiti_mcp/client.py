@@ -686,11 +686,8 @@ class MipitiClient:
             data = data.get("workspaces", [])
         return [Workspace.model_validate(w) for w in data]
 
-    async def list_systems(self, workspace_id: str = "") -> list[System]:
-        params = {}
-        if workspace_id:
-            params["workspace_id"] = workspace_id
-        data = await self._get("/api/systems", params=params)
+    async def list_systems(self) -> list[System]:
+        data = await self._get("/api/systems")
         return [System.model_validate(s) for s in data]
 
     async def get_system(self, system_id: str) -> System:
@@ -698,13 +695,11 @@ class MipitiClient:
         return System.model_validate(data)
 
     async def create_system(
-        self, name: str, description: str = "", workspace_id: str = "",
+        self, name: str, description: str = "",
     ) -> System:
         body: dict[str, Any] = {"name": name}
         if description:
             body["description"] = description
-        if workspace_id:
-            body["workspace_id"] = workspace_id
         data = await self._post("/api/systems", body)
         return System.model_validate(data)
 

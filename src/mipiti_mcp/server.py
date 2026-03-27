@@ -363,7 +363,6 @@ async def generate_threat_model(
     server_version: str,
     feature_description: str,
     ctx: Context,
-    workspace_id: Optional[str] = None,
     async_mode: bool = True,
     force: bool = False,
 ) -> dict:
@@ -379,7 +378,6 @@ async def generate_threat_model(
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
-        workspace_id: Optional workspace to create the model in.
         async_mode: If True (default), returns a job_id for polling.
         force: Skip similar model detection.
     """
@@ -519,7 +517,7 @@ async def query_threat_model(
 
 
 @mcp.tool()
-async def list_threat_models(server_version: str, workspace_id: Optional[str] = None) -> dict:
+async def list_threat_models(server_version: str) -> dict:
     """List all saved threat models.
 
     Returns a summary of each model including ID, title, creation date,
@@ -1396,14 +1394,10 @@ async def list_workspaces(server_version: str) -> dict:
 
 
 @mcp.tool()
-async def list_systems(server_version: str, workspace_id: Optional[str] = None) -> dict:
-    """List all saved systems in current workspace.
-
-    Args:
-        workspace_id: Optional workspace to list from.
-    """
+async def list_systems(server_version: str) -> dict:
+    """List all saved systems in current workspace."""
     try:
-        return _dump(await _get_client().list_systems(workspace_id or ""))
+        return _dump(await _get_client().list_systems())
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1426,17 +1420,15 @@ async def create_system(
     server_version: str,
     name: str,
     description: str = "",
-    workspace_id: Optional[str] = None,
 ) -> dict:
     """Create a new system container.
 
     Args:
         name: System name (e.g., "Mobile Banking Platform").
         description: Optional description.
-        workspace_id: Optional workspace to create in.
     """
     try:
-        return _dump(await _get_client().create_system(name, description, workspace_id or ""))
+        return _dump(await _get_client().create_system(name, description))
     except Exception as exc:
         raise _api_error(exc) from exc
 
