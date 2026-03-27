@@ -143,6 +143,14 @@ against specific not_implemented controls.
 - `submit_findings` — report confirmed gaps where controls are missing.
 - `list_findings` / `update_finding` — track finding lifecycle.
 
+## Project setup
+
+- `complete_setup_step` — mark an onboarding step as done. Call after \
+completing a setup action: `mcp_configured` (after MCP server is \
+connected), `mipiti_verify_installed` (after installing mipiti-verify), \
+`ci_secret_added` (after adding the API key to CI secrets), \
+`ci_pipeline_added` (after adding the verification job to CI).
+
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -1783,6 +1791,28 @@ async def get_operation_status(server_version: str, job_id: str) -> dict:
         result["error"] = job.error
 
     return result
+
+
+# === Project Setup ===
+
+
+@mcp.tool()
+async def complete_setup_step(server_version: str, step_id: str) -> dict:
+    """Mark an onboarding setup step as done.
+
+    Call after completing a setup action on behalf of the user.
+
+    Args:
+        step_id: One of: mcp_configured, mipiti_verify_installed,
+            ci_secret_added, ci_pipeline_added.
+    """
+    valid = {"mcp_configured", "mipiti_verify_installed", "ci_secret_added", "ci_pipeline_added"}
+    if step_id not in valid:
+        return {"error": f"Invalid step_id. Must be one of: {', '.join(sorted(valid))}"}
+    try:
+        return await _get_client().complete_setup_step(step_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 # ------------------------------------------------------------------
