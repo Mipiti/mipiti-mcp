@@ -694,25 +694,36 @@ async def regenerate_controls(
     model_id: str,
     ctx: Context,
     async_mode: bool = False,
+    mode: str = "batch",
+    co_ids: list[str] | None = None,
 ) -> dict:
     """Delete existing controls and regenerate from scratch.
 
-    WARNING: Deletes all existing controls including implementation status.
-    Takes 30-60 seconds.
+    WARNING: Full regeneration deletes all existing controls including
+    implementation status. When co_ids is specified, only the controls
+    for those COs are regenerated — other controls are preserved.
 
     Args:
         model_id: ID of the threat model.
         async_mode: If True, returns a job_id for polling.
+        mode: "batch" (default, fast) or "per_co" (thorough, one LLM
+            call per CO with accumulated context).
+        co_ids: Optional list of specific CO IDs to regenerate controls
+            for. When omitted, regenerates all controls.
     """
     async def _impl(**kw):
         try:
-            return _dump(await _get_client().regenerate_controls(kw["model_id"]))
+            return _dump(await _get_client().regenerate_controls(
+                kw["model_id"], mode=kw.get("mode", "batch"),
+                co_ids=kw.get("co_ids"),
+            ))
         except Exception as exc:
             raise _api_error(exc) from exc
 
+    params = {"model_id": model_id, "mode": mode, "co_ids": co_ids}
     if async_mode:
-        return {"job_id": _start_job("regenerate_controls", _impl, {"model_id": model_id})}
-    return await _impl(model_id=model_id)
+        return {"job_id": _start_job("regenerate_controls", _impl, params)}
+    return await _impl(**params)
 
 
 @mcp.tool()

@@ -251,8 +251,16 @@ class MipitiClient:
         data = await self._get(f"/api/models/{model_id}/controls", params=params)
         return ControlsResponse.model_validate(data)
 
-    async def regenerate_controls(self, model_id: str) -> ControlsResponse:
-        data = await self._post(f"/api/models/{model_id}/controls/regenerate")
+    async def regenerate_controls(
+        self,
+        model_id: str,
+        mode: str = "batch",
+        co_ids: list[str] | None = None,
+    ) -> ControlsResponse:
+        body: dict = {"mode": mode}
+        if co_ids is not None:
+            body["co_ids"] = co_ids
+        data = await self._post(f"/api/models/{model_id}/controls/regenerate", body)
         return ControlsResponse.model_validate(data)
 
     async def update_control_status(
