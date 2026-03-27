@@ -90,7 +90,9 @@ collectively cover all aspects? Evaluated server-side at submission.
 the actual security requirement.
 - `regenerate_controls` — regenerate controls. Supports `mode="per_co"` \
 for thorough single-responsibility generation, and `co_ids="CO1,CO5"` \
-to regenerate only specific COs (preserving other controls).
+to regenerate only specific COs (preserving other controls). Controls \
+whose descriptions survive unchanged keep their implementation status, \
+assertions, and mappings.
 
 **Workflow — handle in this order:**
 
@@ -698,11 +700,15 @@ async def regenerate_controls(
     mode: str = "batch",
     co_ids: Optional[str] = None,
 ) -> dict:
-    """Delete existing controls and regenerate from scratch.
+    """Regenerate controls from control objectives.
 
-    WARNING: Full regeneration deletes all existing controls including
-    implementation status. When co_ids is specified, only the controls
-    for those COs are regenerated — other controls are preserved.
+    Controls whose descriptions survive regeneration unchanged preserve
+    their implementation status, evidence, notes, assertions, Jira
+    mappings, and compliance mappings. Controls with changed or removed
+    descriptions are soft-deleted (queryable via include_deleted=True).
+
+    When co_ids is specified, only the controls for those COs are
+    regenerated — other controls are preserved as-is.
 
     Args:
         model_id: ID of the threat model.
