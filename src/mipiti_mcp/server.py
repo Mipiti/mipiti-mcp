@@ -66,8 +66,10 @@ changes without full refinement.
 
 A threat model produces control objectives. Controls are derived from these \
 and represent specific security requirements to implement. Assertions are \
-typed, machine-verifiable claims about codebase properties that prove a \
-control is satisfied.
+typed, machine-verifiable claims about system properties that prove a \
+control is satisfied. A system property can be verified by examining \
+source code, configuration files, infrastructure definitions, or \
+external service settings.
 
 **Key tools:**
 - `get_controls` — lists controls with current status. Use `summary_only=True` \
@@ -1508,7 +1510,8 @@ async def get_system_compliance_report(
 _SUBMIT_ASSERTIONS_DOC = f"""\
 Submit assertions for a security control.
 
-Each assertion is a typed, machine-verifiable claim about a codebase property.
+Each assertion is a typed, machine-verifiable claim about a system property \
+(source code, configuration, infrastructure, or external service settings).
 
 Args:
     model_id: ID of the threat model.
