@@ -708,3 +708,6 @@ class MipitiClient:
             f"/api/systems/{system_id}/models", {"model_id": model_id},
         )
         return OkResult.model_validate(data)
+
+    async def complete_setup_step(self, step_id: str) -> dict:
+        return await self._patch("/api/onboarding", {"check": step_id})
