@@ -86,8 +86,9 @@ have sufficiency gaps, and which lack assertions entirely. Read \
 collectively cover all aspects? Evaluated server-side at submission.
 - `refine_control` — modify a control's description if it doesn't match \
 the actual security requirement.
-- `regenerate_controls` — regenerate all controls from scratch if the \
-model was significantly refined.
+- `regenerate_controls` — regenerate controls. Supports `mode="per_co"` \
+for thorough single-responsibility generation, and `co_ids="CO1,CO5"` \
+to regenerate only specific COs (preserving other controls).
 
 **Workflow — handle in this order:**
 
@@ -693,7 +694,7 @@ async def regenerate_controls(
     ctx: Context,
     async_mode: bool = False,
     mode: str = "batch",
-    co_ids: list[str] | None = None,
+    co_ids: Optional[str] = None,
 ) -> dict:
     """Delete existing controls and regenerate from scratch.
 
@@ -706,9 +707,15 @@ async def regenerate_controls(
         async_mode: If True, returns a job_id for polling.
         mode: "batch" (default, fast) or "per_co" (thorough, one LLM
             call per CO with accumulated context).
-        co_ids: Optional list of specific CO IDs to regenerate controls
-            for. When omitted, regenerates all controls.
+        co_ids: Optional comma-separated CO IDs to regenerate (e.g.
+            "CO1,CO5"). When omitted, regenerates all controls.
     """
+    # Workaround for Claude Code MCP array serialization bug
+    # (anthropics/claude-code#18260) — accept comma-separated string
+    parsed_co_ids: list[str] | None = None
+    if co_ids:
+        parsed_co_ids = [c.strip() for c in co_ids.split(",") if c.strip()]
+
     async def _impl(**kw):
         try:
             return _dump(await _get_client().regenerate_controls(
@@ -718,7 +725,7 @@ async def regenerate_controls(
         except Exception as exc:
             raise _api_error(exc) from exc
 
-    params = {"model_id": model_id, "mode": mode, "co_ids": co_ids}
+    params = {"model_id": model_id, "mode": mode, "co_ids": parsed_co_ids}
     if async_mode:
         return {"job_id": _start_job("regenerate_controls", _impl, params)}
     return await _impl(**params)
@@ -1026,7 +1033,7 @@ async def add_asset(
     model_id: str,
     name: str,
     description: str = "",
-    security_properties: Optional[list[str]] = None,
+    security_properties: Optional[str] = None,
     impact: str = "M",
     notes: str = "",
 ) -> dict:
@@ -1036,7 +1043,7 @@ async def add_asset(
         model_id: ID of the threat model.
         name: Asset name (required).
         description: Optional description.
-        security_properties: List of "C", "I", "A", "U" (default: ["C"]).
+        security_properties: Comma-separated properties, e.g. "C,I,A" (default: "C").
         impact: Impact level: "H", "M", "L".
         notes: Optional notes.
     """
@@ -1044,7 +1051,7 @@ async def add_asset(
     if description:
         body["description"] = description
     if security_properties is not None:
-        body["security_properties"] = security_properties
+        body["security_properties"] = [p.strip() for p in security_properties.split(",") if p.strip()]
     if notes:
         body["notes"] = notes
     try:
@@ -1060,7 +1067,7 @@ async def edit_asset(
     asset_id: str,
     name: Optional[str] = None,
     description: Optional[str] = None,
-    security_properties: Optional[list[str]] = None,
+    security_properties: Optional[str] = None,
     impact: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> dict:
@@ -1071,7 +1078,7 @@ async def edit_asset(
         asset_id: ID of the asset (e.g., "A1").
         name: New name (optional).
         description: New description (optional).
-        security_properties: New properties (optional).
+        security_properties: Comma-separated properties, e.g. "C,I" (optional).
         impact: New impact level (optional).
         notes: New notes (optional).
     """
@@ -1081,7 +1088,7 @@ async def edit_asset(
     if description is not None:
         body["description"] = description
     if security_properties is not None:
-        body["security_properties"] = security_properties
+        body["security_properties"] = [p.strip() for p in security_properties.split(",") if p.strip()]
     if impact is not None:
         body["impact"] = impact
     if notes is not None:
@@ -1203,16 +1210,17 @@ async def list_compliance_frameworks(server_version: str) -> dict:
 async def select_compliance_frameworks(
     server_version: str,
     model_id: str,
-    framework_ids: list[str],
+    framework_ids: str,
 ) -> dict:
     """Select compliance frameworks for a threat model. Requires PRO tier.
 
     Args:
         model_id: ID of the threat model.
-        framework_ids: List of framework IDs to select.
+        framework_ids: Comma-separated framework IDs (e.g. "asvs-4.0,nist-csf").
     """
+    parsed_ids = [f.strip() for f in framework_ids.split(",") if f.strip()]
     try:
-        return _dump(await _get_client().select_compliance_frameworks(model_id, framework_ids))
+        return _dump(await _get_client().select_compliance_frameworks(model_id, parsed_ids))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1351,20 +1359,17 @@ async def apply_compliance_remediation(
     framework_id: str,
     ctx: Context,
     job_id: Optional[str] = None,
-    suggestions: Optional[list[dict]] = None,
 ) -> dict:
     """Apply approved remediation suggestions to a threat model.
 
-    Preferred: pass job_id from suggest_compliance_remediation.
-    Alternative: pass suggestions directly.
+    Pass the job_id from suggest_compliance_remediation.
 
     Args:
         model_id: ID of the threat model.
         framework_id: ID of the compliance framework.
-        job_id: Job ID from suggest_compliance_remediation.
-        suggestions: Direct list of suggestions (if no job_id).
+        job_id: Job ID from suggest_compliance_remediation (required).
     """
-    actual_suggestions = suggestions
+    actual_suggestions = None
     if job_id and not actual_suggestions:
         job = _jobs.get(job_id)
         if job is None:
@@ -1454,16 +1459,17 @@ async def add_model_to_system(server_version: str, system_id: str, model_id: str
 async def select_system_compliance_frameworks(
     server_version: str,
     system_id: str,
-    framework_ids: list[str],
+    framework_ids: str,
 ) -> dict:
     """Select compliance frameworks for a system. Requires PRO tier.
 
     Args:
         system_id: ID of the system.
-        framework_ids: List of framework IDs to select.
+        framework_ids: Comma-separated framework IDs (e.g. "asvs-4.0,nist-csf").
     """
+    parsed_ids = [f.strip() for f in framework_ids.split(",") if f.strip()]
     try:
-        return _dump(await _get_client().select_system_compliance_frameworks(system_id, framework_ids))
+        return _dump(await _get_client().select_system_compliance_frameworks(system_id, parsed_ids))
     except Exception as exc:
         raise _api_error(exc) from exc
 

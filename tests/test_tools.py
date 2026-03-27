@@ -631,7 +631,7 @@ class TestSelectComplianceFrameworks:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _select_compliance_frameworks(server_version="0", model_id="tm-001", framework_ids=["owasp-asvs"])
+            result = await _select_compliance_frameworks(server_version="0", model_id="tm-001", framework_ids="owasp-asvs")
         assert result["selected"] == 1
 
 
@@ -693,17 +693,6 @@ class TestSuggestComplianceRemediation:
 
 
 class TestApplyComplianceRemediation:
-    @pytest.mark.asyncio
-    async def test_with_suggestions(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await _apply_compliance_remediation(
-                server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx,
-                suggestions=[{"action": "add_asset"}],
-            )
-        assert result["applied"] == 1
-
     @pytest.mark.asyncio
     async def test_with_job_id(self) -> None:
         mock = _mock_client()
@@ -791,7 +780,7 @@ class TestSelectSystemComplianceFrameworks:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await _select_system_compliance_frameworks(server_version="0", system_id="sys-1", framework_ids=["owasp-asvs"])
+            result = await _select_system_compliance_frameworks(server_version="0", system_id="sys-1", framework_ids="owasp-asvs")
         assert result["selected"] == 1
 
 
