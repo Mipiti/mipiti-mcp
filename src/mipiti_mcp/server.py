@@ -164,7 +164,11 @@ Both are versioned (CRUD creates new model versions with carry-forward).
 covers via `linked_co_ids`. Linked assumptions can mitigate COs.
 - `edit_assumption` — update description and/or linked COs.
 - `remove_assumption` — soft-delete an assumption (preserved for audit). \
-Also clears assumed_by on controls and retires overrides.
+The override is retired; controls with `assumed_by` pointing to it become \
+inert (pointer preserved to enable restore).
+- `restore_assumption` — restore a soft-deleted assumption. Controls with \
+`assumed_by` pointing to it automatically reconnect. Re-attestation required \
+before the assumption mitigates COs again.
 - `submit_attestation` — record that a responsible party affirmed an \
 assumption holds. Include `attested_by`, `statement`, and `expires_at`. \
 Attestation expiry triggers CO re-evaluation.
@@ -176,12 +180,22 @@ reports `mitigated_by: "assumption"` vs `mitigated_by: "controls"`. Use \
 assumptions for security properties outside the system owner's trust \
 boundary (e.g., customer CI hardening, vendor SLAs).
 
+**Control-level assumed_by**: For COs that span trust boundaries, individual \
+controls within a CO can be marked as externally handled:
+- `assume_control(model_id, control_id, assumption_id)` — mark a control as \
+handled by an assumption. Counts as active for group completeness when the \
+assumption is active and attested.
+- `unassume_control(model_id, control_id)` — clear the externally-handled \
+status; control reverts to not_implemented.
+
 **Violation workflow**: When an assumption is violated or attestation \
-expires, affected COs become at-risk. Three remediation paths:
+expires, affected COs become at-risk. Four remediation paths:
 1. Re-attest — `submit_attestation` with new expiry (assumption still valid)
-2. Convert to controls — `convert_assumption_to_controls` generates \
+2. Restore — `restore_assumption` if assumption was soft-deleted and is \
+still valid; re-attest after restoring
+3. Convert to controls — `convert_assumption_to_controls` generates \
 controls for affected COs and retires the assumption linkage
-3. Accept risk — create a risk acceptance for the affected COs
+4. Accept risk — create a risk acceptance for the affected COs
 
 """
 
@@ -1986,9 +2000,10 @@ async def edit_assumption(
 async def remove_assumption(server_version: str, model_id: str, assumption_id: str) -> dict:
     """Soft-delete an assumption. Creates a new model version.
 
-    The assumption is marked as deleted (preserved for audit trail),
-    its override is retired, and any controls with assumed_by pointing
-    to it are cleared.
+    The assumption is marked as deleted (preserved for audit trail) and
+    its override is retired. Controls with assumed_by pointing to it are
+    preserved as inert pointers — they reconnect automatically if the
+    assumption is restored via restore_assumption.
 
     Args:
         model_id: ID of the threat model.
