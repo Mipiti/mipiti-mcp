@@ -58,8 +58,12 @@ a model ID and want to change it (returns `job_id`).
 - `add_asset` / `edit_asset` / `remove_asset` — targeted single-entity \
 changes without full refinement.
 - `add_attacker` / `edit_attacker` / `remove_attacker` — same for attackers.
+- `get_threat_model` — retrieve a model's full structure (excludes COs by \
+default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
 - `list_threat_models` — browse existing models.
+- `rename_threat_model` — rename a model (metadata only, no new version).
+- `delete_threat_model` — permanently delete a model and all its data.
 - `export_threat_model` — download as PDF, HTML, or CSV.
 
 ## Controls and assertions
@@ -74,10 +78,14 @@ external service settings.
 **Key tools:**
 - `get_controls` — lists controls with current status. Use `summary_only=True` \
 for a compact response (id, description, status, assertion_count only).
+- `get_control_objectives` — lists COs with which controls cover each one. \
+Useful for understanding scope before linking assumptions or regenerating.
 - `submit_assertions` — provide proof for a control. See that tool's docstring for \
 assertion types and required params. Always verify locally first: \
 `mipiti-verify verify <type> -p key=value --project-root .` \
 Read the target file and confirm a reviewer would agree with the claim.
+- `list_assertions` / `delete_assertion` — list active assertions for a control; \
+delete stale or incorrect ones before resubmitting.
 - `update_control_status` — mark implemented or not_implemented. Requires \
 at least one assertion BEFORE marking implemented. Always submit \
 assertions first, then update status.
@@ -88,6 +96,13 @@ have sufficiency gaps, and which lack assertions entirely. Read \
 collectively cover all aspects? Evaluated server-side at submission.
 - `refine_control` — modify a control's description if it doesn't match \
 the actual security requirement.
+- `delete_control` — soft-delete a control with justification. Blocked if \
+it is the only control covering a CO — add a replacement first.
+- `import_controls` — import existing controls from JSON or free text, \
+auto-mapped to COs and deduplicated against existing controls.
+- `add_evidence` / `remove_evidence` — attach auxiliary metadata (docs, links, \
+artifacts) to a control. Evidence is contextual only — it does NOT prove \
+a control is implemented. Only assertions do that.
 - `regenerate_controls` — regenerate controls. Supports `mode="per_co"` \
 for thorough single-responsibility generation, and `co_ids="CO1,CO5"` \
 to regenerate only specific COs (preserving other controls). Controls \
@@ -96,13 +111,21 @@ assertions, and mappings.
 
 **Workflow — handle in this order:**
 
-1. **Controls already satisfied by existing code** (no code changes): \
+1. **Controls outside the system boundary** (externally handled): Read each \
+not_implemented control description. If it describes something the system \
+owner cannot implement (e.g., "restrict CI runner egress", "vendor maintains \
+PCI DSS certification") — it belongs outside your trust boundary. Use \
+`assume_control` to link it to an existing assumption, or create an \
+assumption first with `add_assumption`. Do NOT submit codebase assertions \
+for controls outside your boundary.
+
+2. **Controls already satisfied by existing code** (no code changes): \
 use `get_controls` to list controls. For each, search the codebase for \
 code that already implements it. If found, craft assertions that prove \
 the implementation, verify locally, submit assertions, then call \
 `update_control_status` to mark as implemented.
 
-2. **Sufficiency gaps on verified controls** (no code changes): call \
+3. **Sufficiency gaps on verified controls** (no code changes): call \
 `get_verification_report` and read `sufficiency_details` for controls \
 that are partially verified. These are implemented but some aspects \
 lack proof. Search the codebase for code that proves the missing \
@@ -110,7 +133,7 @@ aspects and submit additional assertions. If you cannot find proof \
 for specific aspects, call `check_control_gaps` — the control's \
 prescribed mechanism may need refinement.
 
-3. **Controls requiring implementation** (code changes needed): before \
+4. **Controls requiring implementation** (code changes needed): before \
 implementing, call `check_control_gaps` to verify the control's \
 mechanism is appropriate. Then search the codebase for existing \
 mechanisms that may already address the control. If found, call \
@@ -130,13 +153,19 @@ Returns mitigated/at_risk/unassessed counts and progressive metrics \
 (defined/implemented/verified COs). Use `summary_only=True` for a \
 compact response with just the counts and a contextual `message` \
 explaining the current state (e.g., "13 controls not implemented, \
-blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate.
+blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. \
+Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` \
+— `"assumption"` is a fully resolved state, not a gap. Only `at_risk` \
+and `unassessed` COs require action.
 
 ## Gap discovery
 
 For controls with status not_implemented, determine whether the code \
 already implements them (submit assertions) or genuinely lacks them \
 (submit findings):
+- `get_review_queue` — start here for periodic maintenance: returns controls \
+not reviewed in 90+ days. For each stale control, verify its assertions \
+still hold against the current codebase.
 - `get_scan_prompt` — returns targeted prompts for scanning the codebase \
 against specific not_implemented controls.
 - `check_control_gaps` — AI-powered gap analysis across all controls.
@@ -154,6 +183,58 @@ connected), `mipiti_verify_installed` (after installing mipiti-verify), \
 `ci_secret_added` (after adding the API key to CI secrets), \
 `ci_pipeline_added` (after adding the verification job to CI).
 
+## Trust boundaries and assumptions
+
+Trust boundaries and assumptions are versioned (CRUD creates new model \
+versions with carry-forward).
+
+**Decision rule — control or assumption?** \
+If a security requirement can be implemented and machine-verified in the \
+codebase → it is a **control**. If it describes a property that must be \
+upheld by an external party (customer, vendor, operator) and cannot be \
+implemented by the system owner → it is an **assumption**. The trust boundary \
+is the dividing line. When in doubt: if you cannot write a codebase assertion \
+that proves it, it is an assumption.
+
+- `add_trust_boundary` / `edit_trust_boundary` / `remove_trust_boundary` \
+— CRUD for trust boundaries (defines where trust transitions occur).
+- `add_assumption` — add an assumption, optionally linking it to COs it \
+covers via `linked_co_ids`. Linked assumptions can mitigate COs when attested.
+- `edit_assumption` — update description and/or linked COs.
+- `remove_assumption` — soft-delete an assumption (preserved for audit). \
+Linked COs are no longer mitigated by it; controls with `assumed_by` pointing \
+to it become inert (pointer preserved to enable restore).
+- `restore_assumption` — restore a soft-deleted assumption. Controls with \
+`assumed_by` pointing to it automatically reconnect. Re-attestation required \
+before the assumption mitigates COs again.
+- `submit_attestation` — record that a responsible party affirmed an \
+assumption holds. Provide `attested_by`, `statement`, and `expires_at` \
+(ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation.
+- `list_attestations` — attestation history for an assumption.
+
+**Assumption-based mitigation**: An active assumption with linked COs and \
+a current (non-expired) attestation mitigates those COs. The assessment \
+reports `mitigated_by: "assumption"` — this is a resolved state, not a gap. \
+Use assumptions for security properties outside the system owner's trust \
+boundary (e.g., customer CI hardening, vendor SLAs, infrastructure isolation).
+
+**Control-level assumed_by**: For COs that span trust boundaries, individual \
+controls within a CO can be marked as externally handled:
+- `assume_control` — mark a control as handled by an assumption. Counts as \
+active for group completeness when the assumption is active and attested.
+- `unassume_control` — clear the externally-handled status; control reverts \
+to not_implemented.
+
+**Violation workflow**: When an assumption is violated or attestation \
+expires, affected COs become at-risk. Four remediation paths:
+1. Re-attest — `submit_attestation` with new expiry (assumption still valid)
+2. Restore — `restore_assumption` if assumption was soft-deleted and is \
+still valid; re-attest after restoring
+3. Convert to controls — `convert_assumption_to_controls` generates \
+controls for affected COs and retires the assumption linkage
+4. Accept risk — use the Mipiti web interface (no MCP tool available for \
+risk acceptance)
+
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -163,17 +244,21 @@ _INSTRUCTIONS_COMPLIANCE = """\
 Use after controls are implemented and have assertions:
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
 2. `select_compliance_frameworks` — activate frameworks for a model.
-3. `auto_map_controls` — map controls to framework requirements.
-4. `get_compliance_report` — coverage report.
-5. `suggest_compliance_remediation` / `apply_compliance_remediation` — \
+3. `auto_map_controls` — map controls to framework requirements automatically.
+4. `map_control_to_requirement` — manually map a specific control to a \
+specific requirement (use when auto-mapping misses or misassigns).
+5. `get_compliance_report` — coverage report.
+6. `suggest_compliance_remediation` / `apply_compliance_remediation` — \
 AI-suggested controls to close compliance gaps.
 
-## Systems
+## Systems and workspaces
 
-Group related models for aggregated compliance reporting:
-- `create_system` / `add_model_to_system` — organize models.
+- `list_workspaces` — list workspaces the current user can access. Use to \
+find the right workspace when working across team contexts.
+- `list_systems` / `get_system` — browse and retrieve system groups.
+- `create_system` / `add_model_to_system` — group related models into a system.
 - `select_system_compliance_frameworks` / `get_system_compliance_report` — \
-cross-model compliance.
+cross-model compliance reporting.
 """
 
 _INSTRUCTIONS_ASYNC = """\
@@ -1140,6 +1225,7 @@ async def add_attacker(
     position: str = "",
     archetype: str = "",
     likelihood: str = "M",
+    trust_boundary_ids: Optional[str] = None,
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
 
@@ -1149,12 +1235,16 @@ async def add_attacker(
         position: Position/access level.
         archetype: Archetype (e.g., "insider", "external").
         likelihood: Likelihood: "H", "M", "L".
+        trust_boundary_ids: Comma-separated trust boundary IDs this attacker
+            is positioned at (e.g., "TB1,TB2").
     """
     body: dict[str, Any] = {"capability": capability, "likelihood": likelihood}
     if position:
         body["position"] = position
     if archetype:
         body["archetype"] = archetype
+    if trust_boundary_ids:
+        body["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
     try:
         return _dump(await _get_client().add_attacker(model_id, **body))
     except Exception as exc:
@@ -1170,6 +1260,7 @@ async def edit_attacker(
     position: Optional[str] = None,
     archetype: Optional[str] = None,
     likelihood: Optional[str] = None,
+    trust_boundary_ids: Optional[str] = None,
 ) -> dict:
     """Edit an existing attacker. Creates a new version. Only provided fields changed.
 
@@ -1180,6 +1271,7 @@ async def edit_attacker(
         position: New position (optional).
         archetype: New archetype (optional).
         likelihood: New likelihood (optional).
+        trust_boundary_ids: Comma-separated trust boundary IDs (replaces existing).
     """
     body: dict[str, Any] = {}
     if capability is not None:
@@ -1190,6 +1282,8 @@ async def edit_attacker(
         body["archetype"] = archetype
     if likelihood is not None:
         body["likelihood"] = likelihood
+    if trust_boundary_ids is not None:
+        body["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
     try:
         return _dump(await _get_client().edit_attacker(model_id, attacker_id, **body))
     except Exception as exc:
@@ -1828,6 +1922,277 @@ async def get_setup_status(server_version: str) -> dict:
     """
     try:
         return await _get_client().get_setup_status()
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Trust Boundary CRUD ===
+
+
+@mcp.tool()
+async def add_trust_boundary(
+    server_version: str, model_id: str, description: str,
+    crosses: Optional[str] = None,
+) -> dict:
+    """Add a trust boundary. Creates a new model version.
+
+    Args:
+        model_id: ID of the threat model.
+        description: What this boundary represents (e.g., "Public network to API server").
+        crosses: Optional comma-separated asset IDs that cross this boundary.
+    """
+    parsed_crosses = [c.strip() for c in crosses.split(",") if c.strip()] if crosses else []
+    try:
+        return await _get_client().add_trust_boundary(model_id, description, parsed_crosses or None)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def edit_trust_boundary(
+    server_version: str, model_id: str, tb_id: str,
+    description: Optional[str] = None,
+    crosses: Optional[str] = None,
+) -> dict:
+    """Edit a trust boundary. Creates a new model version.
+
+    Args:
+        model_id: ID of the threat model.
+        tb_id: ID of the trust boundary (e.g., "TB1").
+        description: New description.
+        crosses: New comma-separated asset IDs.
+    """
+    kwargs: dict = {}
+    if description is not None:
+        kwargs["description"] = description
+    if crosses is not None:
+        kwargs["crosses"] = [c.strip() for c in crosses.split(",") if c.strip()]
+    try:
+        return await _get_client().edit_trust_boundary(model_id, tb_id, **kwargs)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def remove_trust_boundary(server_version: str, model_id: str, tb_id: str) -> dict:
+    """Remove a trust boundary. Creates a new model version.
+
+    Args:
+        model_id: ID of the threat model.
+        tb_id: ID of the trust boundary to remove.
+    """
+    try:
+        return await _get_client().remove_trust_boundary(model_id, tb_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Assumption CRUD ===
+
+
+@mcp.tool()
+async def add_assumption(
+    server_version: str, model_id: str, description: str,
+    linked_co_ids: Optional[str] = None,
+) -> dict:
+    """Add an assumption. Creates a new model version.
+
+    Assumptions represent security properties outside the system owner's
+    trust boundary. When linked to COs and attested, they mitigate those
+    COs in the assessment.
+
+    Args:
+        model_id: ID of the threat model.
+        description: What is assumed (e.g., "Customer restricts CI runner egress").
+        linked_co_ids: Optional comma-separated CO IDs this assumption covers.
+    """
+    parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
+    try:
+        return await _get_client().add_assumption(model_id, description, parsed)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def edit_assumption(
+    server_version: str, model_id: str, assumption_id: str,
+    description: Optional[str] = None,
+    linked_co_ids: Optional[str] = None,
+) -> dict:
+    """Edit an assumption. Creates a new model version.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: ID of the assumption (e.g., "AS1").
+        description: New description.
+        linked_co_ids: New comma-separated CO IDs (replaces existing linkage).
+    """
+    kwargs: dict = {}
+    if description is not None:
+        kwargs["description"] = description
+    if linked_co_ids is not None:
+        kwargs["linked_co_ids"] = [c.strip() for c in linked_co_ids.split(",") if c.strip()]
+    try:
+        return await _get_client().edit_assumption(model_id, assumption_id, **kwargs)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def remove_assumption(server_version: str, model_id: str, assumption_id: str) -> dict:
+    """Soft-delete an assumption. Creates a new model version.
+
+    The assumption is marked as deleted (preserved for audit trail). Linked
+    COs are no longer mitigated by it. Controls with assumed_by pointing to
+    it are preserved as inert pointers — they reconnect automatically if the
+    assumption is restored via restore_assumption.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: ID of the assumption to soft-delete.
+    """
+    try:
+        return await _get_client().remove_assumption(model_id, assumption_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Attestation ===
+
+
+@mcp.tool()
+async def submit_attestation(
+    server_version: str, model_id: str, assumption_id: str,
+    attested_by: str = "", statement: str = "",
+    expires_at: str = "", evidence_url: str = "",
+) -> dict:
+    """Record that a responsible party affirmed an assumption holds.
+
+    An assumption with a current attestation can mitigate linked COs.
+    When the attestation expires, those COs become at-risk until
+    re-attested or covered by controls.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: ID of the assumption (e.g., "AS1").
+        attested_by: Who is attesting (name, role, organization).
+        statement: What was attested.
+        expires_at: ISO 8601 expiry date (e.g., "2026-06-30T00:00:00Z").
+        evidence_url: Optional link to supporting documentation.
+    """
+    try:
+        return await _get_client().submit_attestation(
+            model_id, assumption_id,
+            attested_by=attested_by, statement=statement,
+            expires_at=expires_at, evidence_url=evidence_url,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_attestations(server_version: str, model_id: str, assumption_id: str) -> dict:
+    """List attestation history for an assumption.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: ID of the assumption.
+    """
+    try:
+        return await _get_client().list_attestations(model_id, assumption_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Control Assumption ===
+
+
+@mcp.tool()
+async def assume_control(
+    server_version: str, model_id: str, control_id: str, assumption_id: str,
+) -> dict:
+    """Mark a control as externally handled by an assumption.
+
+    The control counts as active for mitigation group completeness
+    when the referenced assumption is active and attested.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control (e.g., "CTRL-03").
+        assumption_id: ID of the assumption that covers this control.
+    """
+    try:
+        client = _get_client()
+        return await client._post(
+            f"/api/models/{model_id}/controls/{control_id}/assume",
+            {"assumption_id": assumption_id},
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def unassume_control(server_version: str, model_id: str, control_id: str) -> dict:
+    """Clear the externally-handled status on a control.
+
+    The control reverts to not_implemented and needs to be implemented
+    by the system owner.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control.
+    """
+    try:
+        client = _get_client()
+        return await client._delete(f"/api/models/{model_id}/controls/{control_id}/assume")
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Assumption Restore ===
+
+
+@mcp.tool()
+async def restore_assumption(server_version: str, model_id: str, assumption_id: str) -> dict:
+    """Restore a soft-deleted assumption. Creates a new model version.
+
+    The assumption returns to active status. Controls with assumed_by
+    pointing to this assumption automatically reconnect. Re-attestation
+    is required before the assumption mitigates COs.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: ID of the assumption to restore.
+    """
+    try:
+        client = _get_client()
+        return await client._post(
+            f"/api/models/{model_id}/assumptions/{assumption_id}/restore", {},
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Assumption Violation Workflow ===
+
+
+@mcp.tool()
+async def convert_assumption_to_controls(
+    server_version: str, model_id: str, assumption_id: str,
+) -> dict:
+    """Convert a violated or retired assumption to controls.
+
+    Generates controls for the COs that were covered by this assumption,
+    then retires the assumption's CO linkage. Use when an assumption is
+    no longer valid and the system owner needs to implement controls
+    instead.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: ID of the assumption to convert.
+    """
+    try:
+        return await _get_client().convert_assumption_to_controls(model_id, assumption_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 

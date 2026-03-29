@@ -714,3 +714,55 @@ class MipitiClient:
 
     async def get_setup_status(self) -> dict:
         return await self._get("/api/onboarding")
+
+    # --- Trust boundary CRUD ---
+
+    async def add_trust_boundary(self, model_id: str, description: str, crosses: list[str] | None = None) -> dict:
+        body: dict = {"description": description}
+        if crosses:
+            body["crosses"] = crosses
+        return await self._post(f"/api/models/{model_id}/trust-boundaries", body)
+
+    async def edit_trust_boundary(self, model_id: str, tb_id: str, **kwargs) -> dict:
+        return await self._put(f"/api/models/{model_id}/trust-boundaries/{tb_id}", kwargs)
+
+    async def remove_trust_boundary(self, model_id: str, tb_id: str) -> dict:
+        return await self._delete(f"/api/models/{model_id}/trust-boundaries/{tb_id}")
+
+    # --- Assumption CRUD ---
+
+    async def add_assumption(self, model_id: str, description: str, linked_co_ids: list[str] | None = None) -> dict:
+        body: dict = {"description": description}
+        if linked_co_ids:
+            body["linked_co_ids"] = linked_co_ids
+        return await self._post(f"/api/models/{model_id}/assumptions", body)
+
+    async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:
+        return await self._put(f"/api/models/{model_id}/assumptions/{as_id}", kwargs)
+
+    async def remove_assumption(self, model_id: str, as_id: str) -> dict:
+        return await self._delete(f"/api/models/{model_id}/assumptions/{as_id}")
+
+    # --- Attestation ---
+
+    async def submit_attestation(
+        self, model_id: str, assumption_id: str,
+        attested_by: str = "", statement: str = "",
+        expires_at: str = "", evidence_url: str = "",
+    ) -> dict:
+        body: dict = {}
+        if attested_by:
+            body["attested_by"] = attested_by
+        if statement:
+            body["statement"] = statement
+        if expires_at:
+            body["expires_at"] = expires_at
+        if evidence_url:
+            body["evidence_url"] = evidence_url
+        return await self._post(f"/api/models/{model_id}/assumptions/{assumption_id}/attest", body)
+
+    async def list_attestations(self, model_id: str, assumption_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/assumptions/{assumption_id}/attestations")
+
+    async def convert_assumption_to_controls(self, model_id: str, assumption_id: str) -> dict:
+        return await self._post(f"/api/models/{model_id}/assumptions/{assumption_id}/convert-to-controls", {})
