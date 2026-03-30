@@ -79,6 +79,7 @@ external service settings.
 - `get_controls` — lists controls with current status. Use `summary_only=True` \
 for a compact response (id, description, status, assertion_count only).
 - `get_control_objectives` — lists COs with which controls cover each one. \
+Includes `boundary_reachable` and `boundary_unreachable_reason` per CO. \
 Useful for understanding scope before linking assumptions or regenerating.
 - `submit_assertions` — provide proof for a control. See that tool's docstring for \
 assertion types and required params. Always verify locally first: \
@@ -158,6 +159,27 @@ Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` \
 — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` \
 and `unassessed` COs require action.
 
+**Boundary context and risk reason**: Each CO assessment includes:
+- `boundary_reachable` — false if the attacker cannot reach the asset \
+across any trust boundary.
+- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` \
+(implement controls), `pending_attestation` (submit an attestation for \
+the linked boundary assumption), `expired_attestation` (renew an expired \
+attestation), or `unassessed` (generate controls or create an assumption).
+- `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs \
+that need attestation action.
+
+**Action routing by risk_reason**: \
+`missing_controls` → implement controls and submit assertions. \
+`pending_attestation` → call `submit_attestation` for the assumption IDs \
+listed in `pending_assumption_ids` — do NOT try to implement controls \
+for boundary-excluded COs. \
+`expired_attestation` → call `submit_attestation` to renew for the \
+assumption IDs listed in `expired_assumption_ids`. \
+`unassessed` → generate controls with `regenerate_controls`, or if the \
+CO is boundary-unreachable (`boundary_reachable=false`), create an \
+assumption with `add_assumption`.
+
 ## Gap discovery
 
 For controls with status not_implemented, determine whether the code \
@@ -196,6 +218,9 @@ implemented by the system owner → it is an **assumption**. The trust boundary 
 is the dividing line. When in doubt: if you cannot write a codebase assertion \
 that proves it, it is an assumption.
 
+- `get_threat_model` — returns existing trust boundaries (along with assets, \
+attackers, and assumptions). Use this to review current boundaries before \
+adding or modifying them.
 - `add_trust_boundary` / `edit_trust_boundary` / `remove_trust_boundary` \
 — CRUD for trust boundaries (defines where trust transitions occur).
 - `add_assumption` — add an assumption, optionally linking it to COs it \
