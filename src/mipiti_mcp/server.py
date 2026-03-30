@@ -499,7 +499,9 @@ async def generate_threat_model(
     Produces trust boundaries, asset inventory, attacker inventory,
     control objective matrix, and assumptions.
 
-    This operation takes 30-60 seconds as it runs a 5-step AI pipeline.
+    Runs a multi-step AI pipeline as a background job. Poll with
+    get_operation_status — the response includes poll_after_seconds
+    with adaptive intervals.
 
     Args:
         feature_description: Description of the feature or system to
@@ -566,7 +568,8 @@ async def refine_threat_model(
 
     Updates the model's assets, attackers, trust boundaries, and control
     objectives based on the instruction. Creates a new version.
-    Takes 30-60 seconds.
+    Runs as a background job — poll with get_operation_status
+    (includes adaptive poll_after_seconds).
 
     Args:
         model_id: ID of the threat model to refine.
