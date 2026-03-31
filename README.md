@@ -2,7 +2,7 @@
 
 MCP (Model Context Protocol) server for [Mipiti](https://mipiti.io) — security posture platform.
 
-Lets AI coding agents (Claude Code, Claude Desktop, Cursor, etc.) generate and manage security models, controls, compliance mapping, and evidence programmatically.
+Lets AI coding agents (Claude Code, Claude Desktop, Cursor, etc.) generate and manage threat models, controls, assumptions, compliance mapping, and evidence programmatically.
 
 ## Hosted Endpoint (Recommended)
 
@@ -84,55 +84,109 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools
+## Tools (63)
 
-### `generate_threat_model`
+### Threat Modeling
 
-Generate a complete threat model from a feature description. Runs a 5-step AI pipeline (30-60 seconds) producing trust boundaries, assets, attackers, control objectives, and assumptions. Async mode reports step-by-step progress (e.g., "Step 2/5: Refining assets").
+| Tool | Description |
+|------|-------------|
+| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Returns a `job_id` — poll with `get_operation_status`. |
+| `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. |
+| `query_threat_model` | Ask a question about an existing threat model. |
+| `get_threat_model` | Get the full details of a specific threat model (trust boundaries, assets, attackers, assumptions). Use `include_cos=True` to include control objectives. |
+| `list_threat_models` | List all saved threat models with IDs, titles, versions, and creation dates. |
+| `rename_threat_model` | Rename a model (metadata only, no new version). |
+| `delete_threat_model` | Permanently delete a model and all its data. |
+| `export_threat_model` | Export as PDF, HTML, or CSV. |
 
-**Example prompt**: "Generate a threat model for our new OAuth login feature that supports Google and GitHub providers"
+### Entity CRUD
 
-### `refine_threat_model`
+| Tool | Description |
+|------|-------------|
+| `add_asset` / `edit_asset` / `remove_asset` | Targeted single-entity changes for assets. Creates a new version. |
+| `add_attacker` / `edit_attacker` / `remove_attacker` | Same for attackers. |
 
-Refine an existing threat model based on an instruction. Creates a new version.
+### Trust Boundaries
 
-**Example prompt**: "Add CSRF attack vectors to model tm-001"
+| Tool | Description |
+|------|-------------|
+| `get_threat_model` | Returns existing trust boundaries (along with assets, attackers, assumptions). Review current boundaries before adding or modifying. |
+| `add_trust_boundary` / `edit_trust_boundary` / `remove_trust_boundary` | CRUD for trust boundaries. Defines where trust transitions occur in the system architecture. Attackers are positioned at boundaries; COs are annotated with boundary reachability. Changes auto-generate boundary assumptions for newly unreachable COs. |
 
-### `query_threat_model`
+### Controls
 
-Ask a question about an existing threat model.
+| Tool | Description |
+|------|-------------|
+| `get_controls` | List controls with current status. Use `summary_only=True` for compact response. |
+| `get_control_objectives` | List COs with which controls cover each one. Includes `boundary_reachable` per CO. |
+| `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
+| `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. |
+| `regenerate_controls` | Regenerate controls. Supports `mode="per_co"` and `co_ids` to target specific COs. |
+| `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. |
+| `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
+| `check_control_gaps` | AI-powered gap analysis across all controls. |
 
-**Example prompt**: "Does model tm-001 cover SQL injection attacks?"
+### Assumptions and Attestation
 
-### `list_threat_models`
+| Tool | Description |
+|------|-------------|
+| `get_threat_model` | Returns existing assumptions (along with assets, attackers, trust boundaries). Review current assumptions before adding or modifying. |
+| `add_assumption` | Add an assumption, optionally linking it to COs via `linked_co_ids`. |
+| `edit_assumption` | Update description and/or linked COs. |
+| `remove_assumption` | Soft-delete (preserved for audit). Linked COs are no longer mitigated by it. |
+| `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
+| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. |
+| `list_attestations` | Attestation history for an assumption. |
+| `assume_control` | Mark a control as externally handled by an assumption. Counts as active for mitigation group completeness when attested. |
+| `unassume_control` | Clear externally-handled status; control reverts to not_implemented. |
+| `convert_assumption_to_controls` | Generate controls for assumption-covered COs and retire the assumption linkage. |
 
-List all saved threat models with IDs, titles, versions, and creation dates.
+### Assertions and Evidence
 
-### `get_threat_model`
+| Tool | Description |
+|------|-------------|
+| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (21 assertion types). |
+| `list_assertions` / `delete_assertion` | List or delete assertions for a control. |
+| `add_evidence` / `remove_evidence` | Attach auxiliary metadata (docs, links). Evidence is contextual — only assertions prove implementation. |
+| `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |
+| `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? |
+| `get_scan_prompt` | Returns targeted prompts for scanning the codebase against not_implemented controls. |
+| `get_review_queue` | Controls not reviewed in 90+ days. Start here for periodic maintenance. |
+| `submit_findings` / `list_findings` / `update_finding` | Report and track negative findings (gap discovery). |
 
-Get the full details of a specific threat model by ID, optionally at a specific version.
+### Assurance
 
-### `get_controls`
+| Tool | Description |
+|------|-------------|
+| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation) and `boundary_reachable` per CO. |
 
-Get implementation controls for a threat model's control objectives. Auto-generates controls if none exist yet.
+### Compliance
 
-### `export_threat_model`
+| Tool | Description |
+|------|-------------|
+| `list_compliance_frameworks` | Available frameworks (OWASP ASVS, ISO 27001, SOC 2, NIST CSF, GDPR, FedRAMP, PCI DSS, EU CRA). |
+| `select_compliance_frameworks` | Select frameworks for a model. |
+| `get_compliance_report` | Coverage report for a selected framework. |
+| `auto_map_controls` | AI-powered semantic mapping of controls to framework requirements. |
+| `map_control_to_requirement` | Manual control-to-requirement mapping. |
+| `suggest_compliance_remediation` / `apply_compliance_remediation` | AI-suggested controls for uncovered requirements. |
 
-Export a threat model as CSV (returned as text), PDF, or DOCX (download URL).
+### Systems and Workspaces
 
-### Additional tools
+| Tool | Description |
+|------|-------------|
+| `list_workspaces` | List available workspaces. |
+| `list_systems` / `get_system` / `create_system` | Manage systems (groups of related models). |
+| `add_model_to_system` | Add a model to a system. |
+| `select_system_compliance_frameworks` / `get_system_compliance_report` | System-level compliance aggregation. |
 
-| Category | Tools |
-|----------|-------|
-| **Entity CRUD** | `add_asset`, `edit_asset`, `remove_asset`, `add_attacker`, `edit_attacker`, `remove_attacker` |
-| **Controls** | `get_control_objectives`, `update_control_status`, `refine_control`, `regenerate_controls`, `import_controls`, `delete_control` |
-| **Assertions** | `submit_assertions`, `list_assertions`, `delete_assertion` |
-| **Verification** | `get_verification_report`, `get_scan_prompt`, `check_control_gaps` |
-| **Findings** | `submit_findings`, `list_findings`, `update_finding` |
-| **Evidence** | `add_evidence`, `remove_evidence`, `assess_model`, `get_review_queue` |
-| **Compliance** | `list_compliance_frameworks`, `select_compliance_frameworks`, `get_compliance_report`, `auto_map_controls`, `map_control_to_requirement`, `suggest_compliance_remediation`, `apply_compliance_remediation` |
-| **Systems** | `list_systems`, `get_system`, `create_system`, `add_model_to_system`, `select_system_compliance_frameworks`, `get_system_compliance_report` |
-| **Management** | `rename_threat_model`, `delete_threat_model`, `list_workspaces`, `get_operation_status` |
+### Setup and Operations
+
+| Tool | Description |
+|------|-------------|
+| `get_setup_status` | Check which onboarding steps are done. |
+| `complete_setup_step` | Mark an onboarding step as done (mcp_configured, mipiti_verify_installed, ci_secret_added, ci_pipeline_added). |
+| `get_operation_status` | Poll background operations. Response includes adaptive `poll_after_seconds`. |
 
 ## Development
 
