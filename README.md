@@ -84,7 +84,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (65)
+## Tools (63)
 
 ### Threat Modeling
 
