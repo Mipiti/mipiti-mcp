@@ -56,8 +56,13 @@ existing models and routes accordingly. Returns a `job_id` — poll with \
 - `refine_threat_model` — updates an existing model when you already have \
 a model ID and want to change it (returns `job_id`).
 - `add_asset` / `edit_asset` / `remove_asset` — targeted single-entity \
-changes without full refinement.
-- `add_attacker` / `edit_attacker` / `remove_attacker` — same for attackers.
+changes without full refinement. Each asset has a `status` field: \
+`unverified` (default), `confirmed` (assertions prove it exists), \
+`absent` (agent confirmed it is not applicable). Use `edit_asset` to \
+update status after verifying.
+- `add_attacker` / `edit_attacker` / `remove_attacker` — same for attackers. \
+Attacker `status` works the same way: `confirmed` means the attack \
+surface exists, `absent` means it is not applicable.
 - `get_threat_model` — retrieve a model's full structure (excludes COs by \
 default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
@@ -165,7 +170,11 @@ across any trust boundary.
 - `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` \
 (implement controls), `pending_attestation` (submit an attestation for \
 the linked boundary assumption), `expired_attestation` (renew an expired \
-attestation), or `unassessed` (generate controls or create an assumption).
+attestation), `unassessed` (generate controls or create an assumption), \
+`asset_absent` (asset is not applicable — skip this CO), \
+`attacker_irrelevant` (attack surface is not applicable — skip this CO).
+- `asset_status` / `attacker_status` — verification status of the \
+asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs \
 that need attestation action.
 
@@ -178,7 +187,11 @@ for boundary-excluded COs. \
 assumption IDs listed in `expired_assumption_ids`. \
 `unassessed` → generate controls with `regenerate_controls`, or if the \
 CO is boundary-unreachable (`boundary_reachable=false`), create an \
-assumption with `add_assumption`.
+assumption with `add_assumption`. \
+`asset_absent` → the asset is not applicable. No action \
+needed — skip controls for this CO. \
+`attacker_irrelevant` → the attack surface is not applicable. No action \
+needed — skip controls for this CO.
 
 ## Gap discovery
 
@@ -1647,17 +1660,28 @@ async def get_system_compliance_report(
 
 
 _SUBMIT_ASSERTIONS_DOC = f"""\
-Submit assertions for a security control.
+Submit assertions for a security control or an assumption.
 
 Each assertion is a typed, machine-verifiable claim about a system property \
 (source code, configuration, infrastructure, or external service settings).
 
+Provide exactly one of control_id or assumption_id:
+- control_id: proves a control is implemented (e.g., "CTRL-01")
+- assumption_id: proves a system property claim (e.g., "AS5" — asset \
+non-applicability, attacker non-applicability, scope decisions)
+
+For assumption assertions against the feature description (greenfield), \
+use target instead of file in params:
+{{"type": "pattern_matches", "params": {{"target": "feature_description", \
+"pattern": "password.*TOTP"}}, "description": "..."}}
+
 Args:
     model_id: ID of the threat model.
-    control_id: ID of the control (e.g., "CTRL-01").
+    control_id: ID of the control (omit if using assumption_id).
+    assumption_id: ID of the assumption (omit if using control_id).
     assertions_json: JSON array of assertion objects. Each object has:
         - type (required): one of the assertion types below
-        - params (required): type-specific parameters
+        - params (required): type-specific parameters (file or target + pattern/name/etc.)
         - description (required): human-readable explanation of what this proves
         - repo (optional): "org/repo-name" for multi-repo setups
 
@@ -1670,15 +1694,24 @@ Assertion types:
 async def submit_assertions(
     server_version: str,
     model_id: str,
-    control_id: str,
     assertions_json: str,
+    control_id: Optional[str] = None,
+    assumption_id: Optional[str] = None,
 ) -> dict:
+    if not control_id and not assumption_id:
+        raise ToolError("Exactly one of control_id or assumption_id must be provided.")
+    if control_id and assumption_id:
+        raise ToolError("Provide control_id OR assumption_id, not both.")
     try:
         assertions = json.loads(assertions_json)
     except json.JSONDecodeError:
         raise ToolError("assertions_json must be valid JSON array.")
     try:
-        return _dump(await _get_client().submit_assertions(model_id, control_id, assertions))
+        return _dump(await _get_client().submit_assertions(
+            model_id, assertions,
+            control_id=control_id or "",
+            assumption_id=assumption_id or "",
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
