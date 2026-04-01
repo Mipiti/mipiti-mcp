@@ -181,11 +181,13 @@ async def test_add_asset(mock_env: None) -> None:
 @respx.mock
 async def test_submit_assertions(mock_env: None) -> None:
     respx.post("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions").mock(
-        return_value=httpx.Response(200, json={"count": 1})
+        return_value=httpx.Response(200, json={"assertions": [{"id": "a1"}]})
     )
     client = MipitiClient()
-    result = await client.submit_assertions("tm-001", "CTRL-01", [{"type": "file_exists"}])
-    assert result.count == 1
+    result = await client.submit_assertions(
+        "tm-001", [{"type": "file_exists"}], control_id="CTRL-01",
+    )
+    assert len(result.assertions) == 1
     await client.close()
 
 
@@ -412,3 +414,96 @@ async def test_delete_control_404_raises(mock_env: None) -> None:
         await client.delete_control("tm-001", "CTRL-99", reason="test")
     assert exc_info.value.response.status_code == 404
     await client.close()
+
+
+# ------------------------------------------------------------------
+# submit_assertions URL routing tests
+# ------------------------------------------------------------------
+
+
+class TestSubmitAssertionsClient:
+    """Verify submit_assertions routes to the correct endpoint based on
+    control_id vs assumption_id."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_routes_to_assumption_endpoint(self, mock_env: None) -> None:
+        route = respx.post(
+            "https://test.api.mipiti.io/api/models/tm-001/assumptions/AS1/assertions"
+        ).mock(
+            return_value=httpx.Response(
+                200, json={"assertions": [{"id": "a1"}]},
+            )
+        )
+        client = MipitiClient()
+        result = await client.submit_assertions(
+            "tm-001",
+            [{"type": "file_exists", "params": {"path": "auth.py"}}],
+            assumption_id="AS1",
+        )
+        assert len(result.assertions) == 1
+        assert route.called
+        await client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_routes_to_control_endpoint(self, mock_env: None) -> None:
+        route = respx.post(
+            "https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions"
+        ).mock(
+            return_value=httpx.Response(
+                200, json={"assertions": [{"id": "a2"}]},
+            )
+        )
+        client = MipitiClient()
+        result = await client.submit_assertions(
+            "tm-001",
+            [{"type": "test_passes", "params": {"command": "pytest"}}],
+            control_id="CTRL-01",
+        )
+        assert len(result.assertions) == 1
+        assert route.called
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_rejects_both_ids(self, mock_env: None) -> None:
+        client = MipitiClient()
+        with pytest.raises(ValueError, match="not both"):
+            await client.submit_assertions(
+                "tm-001",
+                [{"type": "file_exists"}],
+                control_id="CTRL-01",
+                assumption_id="AS1",
+            )
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_rejects_neither_id(self, mock_env: None) -> None:
+        client = MipitiClient()
+        with pytest.raises(ValueError, match="required"):
+            await client.submit_assertions(
+                "tm-001",
+                [{"type": "file_exists"}],
+            )
+        await client.close()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_list_response_wrapped(self, mock_env: None) -> None:
+        """When the API returns a raw list, it should be wrapped into
+        SubmitAssertionsResult.assertions."""
+        respx.post(
+            "https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions"
+        ).mock(
+            return_value=httpx.Response(
+                200, json=[{"id": "a1", "type": "file_exists"}],
+            )
+        )
+        client = MipitiClient()
+        result = await client.submit_assertions(
+            "tm-001",
+            [{"type": "file_exists"}],
+            control_id="CTRL-01",
+        )
+        assert len(result.assertions) == 1
+        await client.close()
