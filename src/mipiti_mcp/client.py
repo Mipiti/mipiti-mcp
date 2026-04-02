@@ -582,30 +582,42 @@ class MipitiClient:
     # ------------------------------------------------------------------
 
     async def submit_assertions(
-        self, model_id: str, control_id: str, assertions: list[dict],
+        self, model_id: str, assertions: list[dict],
+        control_id: str = "", assumption_id: str = "",
     ) -> SubmitAssertionsResult:
-        data = await self._post(
-            f"/api/models/{model_id}/controls/{control_id}/assertions",
-            {"assertions": assertions},
-        )
-        # API may return a bare list or a wrapped dict
+        if control_id and assumption_id:
+            raise ValueError("Provide control_id or assumption_id, not both")
+        if not control_id and not assumption_id:
+            raise ValueError("One of control_id or assumption_id is required")
+        if assumption_id:
+            url = f"/api/models/{model_id}/assumptions/{assumption_id}/assertions"
+        else:
+            url = f"/api/models/{model_id}/controls/{control_id}/assertions"
+        data = await self._post(url, {"assertions": assertions})
         if isinstance(data, list):
             return SubmitAssertionsResult(assertions=data)
         return SubmitAssertionsResult.model_validate(data)
 
     async def list_assertions(
-        self, model_id: str, control_id: str,
+        self, model_id: str, control_id: str = "", assumption_id: str = "",
     ) -> list[_Base]:
-        data = await self._get(
-            f"/api/models/{model_id}/controls/{control_id}/assertions",
-        )
+        if assumption_id:
+            url = f"/api/models/{model_id}/assumptions/{assumption_id}/assertions"
+        else:
+            url = f"/api/models/{model_id}/controls/{control_id}/assertions"
+        data = await self._get(url)
         return [_Base.model_validate(a) for a in data]
 
     async def delete_assertion(
-        self, model_id: str, control_id: str, assertion_id: str,
+        self, model_id: str, assertion_id: str,
+        control_id: str = "", assumption_id: str = "",
     ) -> None:
+        # Backend delete endpoint uses assertion_id only (control_id in path is
+        # cosmetic). Route assumption assertions through the control path with
+        # the assumption_id as placeholder — backend ignores the path segment.
+        path_id = control_id or assumption_id or "_"
         await self._delete(
-            f"/api/models/{model_id}/controls/{control_id}/assertions/{assertion_id}",
+            f"/api/models/{model_id}/controls/{path_id}/assertions/{assertion_id}",
         )
 
     async def get_verification_report(
@@ -731,10 +743,12 @@ class MipitiClient:
 
     # --- Assumption CRUD ---
 
-    async def add_assumption(self, model_id: str, description: str, linked_co_ids: list[str] | None = None) -> dict:
+    async def add_assumption(self, model_id: str, description: str, linked_co_ids: list[str] | None = None, *, assumption_type: str = "external") -> dict:
         body: dict = {"description": description}
         if linked_co_ids:
             body["linked_co_ids"] = linked_co_ids
+        if assumption_type != "external":
+            body["assumption_type"] = assumption_type
         return await self._post(f"/api/models/{model_id}/assumptions", body)
 
     async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:
