@@ -250,11 +250,18 @@ assumption holds. Provide `attested_by`, `statement`, and `expires_at` \
 (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation.
 - `list_attestations` — attestation history for an assumption.
 
+**Assumption types**: Two types, set via `assumption_type` in `add_assumption`:
+- `non_applicability` — entity is not applicable to the feature. Requires CI \
+verification (submit assertions + run mipiti-verify). Manual attestation is \
+rejected. Auto-created during generation for flagged entities.
+- `external_obligation` (default) — responsibility handled by a third party \
+that cannot be CI-verified against the codebase (e.g., vendor SLAs, \
+infrastructure isolation, customer CI hardening). Allows manual attestation \
+via `submit_attestation`.
+
 **Assumption-based mitigation**: An active assumption with linked COs and \
 a current (non-expired) attestation mitigates those COs. The assessment \
-reports `mitigated_by: "assumption"` — this is a resolved state, not a gap. \
-Use assumptions for security properties outside the system owner's trust \
-boundary (e.g., customer CI hardening, vendor SLAs, infrastructure isolation).
+reports `mitigated_by: "assumption"` — this is a resolved state, not a gap.
 
 **Control-level assumed_by**: For COs that span trust boundaries, individual \
 controls within a CO can be marked as externally handled:
@@ -2131,6 +2138,10 @@ async def submit_attestation(
     expires_at: str = "", evidence_url: str = "",
 ) -> dict:
     """Record that a responsible party affirmed an assumption holds.
+
+    Only for external_obligation assumptions. Non-applicability assumptions
+    require CI verification (submit assertions + run mipiti-verify) — manual
+    attestation is rejected for them.
 
     An assumption with a current attestation can mitigate linked COs.
     When the attestation expires, those COs become at-risk until
