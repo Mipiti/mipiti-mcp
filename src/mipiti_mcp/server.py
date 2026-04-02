@@ -254,7 +254,7 @@ assumption holds. Provide `attested_by`, `statement`, and `expires_at` \
 - `non_applicability` — entity is not applicable to the feature. Requires CI \
 verification (submit assertions + run mipiti-verify). Manual attestation is \
 rejected. Auto-created during generation for flagged entities.
-- `external_obligation` (default) — responsibility handled by a third party \
+- `external` (default) — responsibility handled by a third party \
 that cannot be CI-verified against the codebase (e.g., vendor SLAs, \
 infrastructure isolation, customer CI hardening). Allows manual attestation \
 via `submit_attestation`.
@@ -2082,7 +2082,7 @@ async def remove_trust_boundary(server_version: str, model_id: str, tb_id: str) 
 async def add_assumption(
     server_version: str, model_id: str, description: str,
     linked_co_ids: Optional[str] = None,
-    assumption_type: str = "external_obligation",
+    assumption_type: str = "external",
 ) -> dict:
     """Add an assumption. Creates a new model version.
 
@@ -2094,7 +2094,7 @@ async def add_assumption(
         model_id: ID of the threat model.
         description: What is assumed (e.g., "Customer restricts CI runner egress").
         linked_co_ids: Optional comma-separated CO IDs this assumption covers.
-        assumption_type: "external_obligation" (default, allows manual attestation)
+        assumption_type: "external" (default, allows manual attestation)
             or "non_applicability" (requires CI verification, no manual attestation).
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
@@ -2159,7 +2159,7 @@ async def submit_attestation(
 ) -> dict:
     """Record that a responsible party affirmed an assumption holds.
 
-    Only for external_obligation assumptions. Non-applicability assumptions
+    Only for external assumptions. Non-applicability assumptions
     require CI verification (submit assertions + run mipiti-verify) — manual
     attestation is rejected for them.
 
