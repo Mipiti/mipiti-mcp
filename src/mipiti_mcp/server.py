@@ -2055,6 +2055,7 @@ async def remove_trust_boundary(server_version: str, model_id: str, tb_id: str) 
 async def add_assumption(
     server_version: str, model_id: str, description: str,
     linked_co_ids: Optional[str] = None,
+    assumption_type: str = "external_obligation",
 ) -> dict:
     """Add an assumption. Creates a new model version.
 
@@ -2066,10 +2067,12 @@ async def add_assumption(
         model_id: ID of the threat model.
         description: What is assumed (e.g., "Customer restricts CI runner egress").
         linked_co_ids: Optional comma-separated CO IDs this assumption covers.
+        assumption_type: "external_obligation" (default, allows manual attestation)
+            or "non_applicability" (requires CI verification, no manual attestation).
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
     try:
-        return await _get_client().add_assumption(model_id, description, parsed)
+        return await _get_client().add_assumption(model_id, description, parsed, assumption_type=assumption_type)
     except Exception as exc:
         raise _api_error(exc) from exc
 
