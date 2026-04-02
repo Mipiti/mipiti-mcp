@@ -1724,15 +1724,28 @@ async def submit_assertions(
 
 
 @mcp.tool()
-async def list_assertions(server_version: str, model_id: str, control_id: str) -> dict:
-    """List active assertions for a security control.
+async def list_assertions(
+    server_version: str, model_id: str,
+    control_id: Optional[str] = None,
+    assumption_id: Optional[str] = None,
+) -> dict:
+    """List active assertions for a control or assumption.
+
+    Provide exactly one of control_id or assumption_id.
 
     Args:
         model_id: ID of the threat model.
-        control_id: ID of the control.
+        control_id: ID of the control (omit if using assumption_id).
+        assumption_id: ID of the assumption (omit if using control_id).
     """
+    if not control_id and not assumption_id:
+        raise ToolError("Exactly one of control_id or assumption_id must be provided.")
+    if control_id and assumption_id:
+        raise ToolError("Provide control_id OR assumption_id, not both.")
     try:
-        return _dump(await _get_client().list_assertions(model_id, control_id))
+        return _dump(await _get_client().list_assertions(
+            model_id, control_id=control_id or "", assumption_id=assumption_id or "",
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1741,18 +1754,25 @@ async def list_assertions(server_version: str, model_id: str, control_id: str) -
 async def delete_assertion(
     server_version: str,
     model_id: str,
-    control_id: str,
     assertion_id: str,
+    control_id: Optional[str] = None,
+    assumption_id: Optional[str] = None,
 ) -> dict:
     """Delete an assertion.
 
+    Provide the control_id or assumption_id the assertion belongs to.
+
     Args:
         model_id: ID of the threat model.
-        control_id: ID of the control.
         assertion_id: ID of the assertion to delete.
+        control_id: ID of the control (omit if using assumption_id).
+        assumption_id: ID of the assumption (omit if using control_id).
     """
     try:
-        await _get_client().delete_assertion(model_id, control_id, assertion_id)
+        await _get_client().delete_assertion(
+            model_id, assertion_id,
+            control_id=control_id or "", assumption_id=assumption_id or "",
+        )
         return {"deleted": True, "assertion_id": assertion_id}
     except Exception as exc:
         raise _api_error(exc) from exc

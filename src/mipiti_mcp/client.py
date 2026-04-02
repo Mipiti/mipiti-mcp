@@ -599,18 +599,25 @@ class MipitiClient:
         return SubmitAssertionsResult.model_validate(data)
 
     async def list_assertions(
-        self, model_id: str, control_id: str,
+        self, model_id: str, control_id: str = "", assumption_id: str = "",
     ) -> list[_Base]:
-        data = await self._get(
-            f"/api/models/{model_id}/controls/{control_id}/assertions",
-        )
+        if assumption_id:
+            url = f"/api/models/{model_id}/assumptions/{assumption_id}/assertions"
+        else:
+            url = f"/api/models/{model_id}/controls/{control_id}/assertions"
+        data = await self._get(url)
         return [_Base.model_validate(a) for a in data]
 
     async def delete_assertion(
-        self, model_id: str, control_id: str, assertion_id: str,
+        self, model_id: str, assertion_id: str,
+        control_id: str = "", assumption_id: str = "",
     ) -> None:
+        # Backend delete endpoint uses assertion_id only (control_id in path is
+        # cosmetic). Route assumption assertions through the control path with
+        # the assumption_id as placeholder — backend ignores the path segment.
+        path_id = control_id or assumption_id or "_"
         await self._delete(
-            f"/api/models/{model_id}/controls/{control_id}/assertions/{assertion_id}",
+            f"/api/models/{model_id}/controls/{path_id}/assertions/{assertion_id}",
         )
 
     async def get_verification_report(

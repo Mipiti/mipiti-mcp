@@ -248,7 +248,7 @@ async def test_delete_returns_none_on_204(mock_env: None) -> None:
         "https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions/a1"
     ).mock(return_value=httpx.Response(204))
     client = MipitiClient()
-    result = await client.delete_assertion("tm-001", "CTRL-01", "a1")
+    result = await client.delete_assertion("tm-001", "a1", control_id="CTRL-01")
     assert result is None
     await client.close()
 
