@@ -286,15 +286,18 @@ _INSTRUCTIONS_COMPLIANCE = """\
 
 ## Compliance
 
-Use after controls are implemented and have assertions:
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
-2. `select_compliance_frameworks` — activate frameworks for a model.
-3. `auto_map_controls` — map controls to framework requirements automatically.
-4. `map_control_to_requirement` — manually map a specific control to a \
+2. `select_compliance_frameworks` — activate frameworks for a model. \
+**Automatically triggers auto-remediation**: maps existing controls, \
+excludes non-applicable requirements by taxonomy, and suggests/applies \
+new entities for remaining gaps. Returns `auto_remediate_jobs` with \
+job IDs for polling.
+3. `get_compliance_report` — coverage report (run after auto-remediation completes).
+4. `auto_remediate` — re-trigger auto-remediation manually (e.g. after model changes).
+5. `auto_map_controls` — map controls to framework requirements (runs automatically \
+during auto-remediation, but can be triggered independently).
+6. `map_control_to_requirement` — manually map a specific control to a \
 specific requirement (use when auto-mapping misses or misassigns).
-5. `get_compliance_report` — coverage report.
-6. `suggest_compliance_remediation` / `apply_compliance_remediation` — \
-AI-suggested controls to close compliance gaps.
 
 ## Systems and workspaces
 
@@ -310,8 +313,8 @@ _INSTRUCTIONS_ASYNC = """\
 
 ## Async operations
 
-`generate_threat_model`, `refine_threat_model`, and \
-`suggest_compliance_remediation` return a `job_id` by default. \
+`generate_threat_model`, `refine_threat_model`, \
+`suggest_compliance_remediation`, and `auto_remediate` return a `job_id` by default. \
 `get_controls`, `check_control_gaps`, `auto_map_controls`, \
 `import_controls`, and `regenerate_controls` accept `async_mode=True` \
 for long-running operations. Poll with `get_operation_status(job_id)` \
@@ -1495,9 +1498,11 @@ async def suggest_compliance_remediation(
     ctx: Context,
     async_mode: bool = True,
 ) -> dict:
-    """Suggest missing assets and attackers to close compliance gaps.
+    """DEPRECATED: Use select_compliance_frameworks (auto-remediates) or auto_remediate instead.
 
-    Takes 3-5 minutes. Requires PRO tier.
+    Suggest missing assets and attackers to close compliance gaps.
+    The suggest → apply manual flow is no longer needed — auto-remediation
+    handles the entire cycle automatically when a framework is selected.
 
     Args:
         model_id: ID of the threat model.
@@ -1555,11 +1560,11 @@ async def apply_compliance_remediation(
     ctx: Context,
     job_id: Optional[str] = None,
 ) -> dict:
-    """Apply approved remediation suggestions to a threat model.
+    """DEPRECATED: Use select_compliance_frameworks (auto-remediates) or auto_remediate instead.
 
-    Pass the job_id from suggest_compliance_remediation.
-    Note: for most use cases, use auto_remediate instead — it handles
-    the entire suggest/apply/map cycle automatically.
+    Apply approved remediation suggestions to a threat model.
+    The suggest → apply manual flow is no longer needed — auto-remediation
+    handles the entire cycle automatically when a framework is selected.
 
     Args:
         model_id: ID of the threat model.
