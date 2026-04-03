@@ -1491,40 +1491,6 @@ async def auto_map_controls(
 
 
 @mcp.tool()
-async def suggest_compliance_remediation(
-    server_version: str,
-    model_id: str,
-    framework_id: str,
-    ctx: Context,
-    async_mode: bool = True,
-) -> dict:
-    """DEPRECATED: Use select_compliance_frameworks (auto-remediates) or auto_remediate instead.
-
-    Suggest missing assets and attackers to close compliance gaps.
-    The suggest → apply manual flow is no longer needed — auto-remediation
-    handles the entire cycle automatically when a framework is selected.
-
-    Args:
-        model_id: ID of the threat model.
-        framework_id: ID of the compliance framework.
-        async_mode: If True (default), returns a job_id for polling.
-    """
-    async def _impl(**kw):
-        try:
-            return _dump(await _get_client().suggest_compliance_remediation(
-                kw["model_id"], kw["framework_id"],
-            ))
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("suggest_compliance_remediation", _impl, {
-            "model_id": model_id, "framework_id": framework_id,
-        })}
-    return await _impl(model_id=model_id, framework_id=framework_id)
-
-
-@mcp.tool()
 async def auto_remediate(
     server_version: str,
     model_id: str,
@@ -1548,42 +1514,6 @@ async def auto_remediate(
     """
     try:
         return _dump(await _get_client().auto_remediate(model_id, framework_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def apply_compliance_remediation(
-    server_version: str,
-    model_id: str,
-    framework_id: str,
-    ctx: Context,
-    job_id: Optional[str] = None,
-) -> dict:
-    """DEPRECATED: Use select_compliance_frameworks (auto-remediates) or auto_remediate instead.
-
-    Apply approved remediation suggestions to a threat model.
-    The suggest → apply manual flow is no longer needed — auto-remediation
-    handles the entire cycle automatically when a framework is selected.
-
-    Args:
-        model_id: ID of the threat model.
-        framework_id: ID of the compliance framework.
-        job_id: Job ID from suggest_compliance_remediation (required).
-    """
-    actual_suggestions = None
-    if job_id and not actual_suggestions:
-        job = _jobs.get(job_id)
-        if job is None:
-            raise ToolError(f"Job {job_id} not found.")
-        if job.status != "completed":
-            raise ToolError(f"Job {job_id} is {job.status}, not completed.")
-        actual_suggestions = job.result.get("suggestions", []) if isinstance(job.result, dict) else []
-
-    try:
-        return _dump(await _get_client().apply_compliance_remediation(
-            model_id, framework_id, actual_suggestions,
-        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
