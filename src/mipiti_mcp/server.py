@@ -1375,6 +1375,12 @@ async def select_compliance_frameworks(
 ) -> dict:
     """Select compliance frameworks for a threat model. Requires PRO tier.
 
+    Selecting a framework automatically triggers auto-remediation in the
+    background: auto-maps existing controls, excludes non-applicable
+    requirements by taxonomy, and suggests/applies new entities for remaining
+    gaps. The response includes auto_remediate_jobs with job IDs that can be
+    polled via get_operation_status.
+
     Args:
         model_id: ID of the threat model.
         framework_ids: Comma-separated framework IDs (e.g. "asvs-4.0,nist-csf").
@@ -1514,6 +1520,34 @@ async def suggest_compliance_remediation(
 
 
 @mcp.tool()
+async def auto_remediate(
+    server_version: str,
+    model_id: str,
+    framework_id: str,
+) -> dict:
+    """Automatically close compliance gaps for a framework. Requires PRO tier.
+
+    Three-phase loop: (1) auto-map existing controls to unmapped requirements,
+    (2) exclude requirements for non-applicable taxonomy primitives,
+    (3) suggest and apply new assets/attackers for remaining gaps.
+
+    Converges automatically: stops when fully covered or when no further
+    progress can be made. Returns a job_id for polling.
+
+    This runs automatically when a framework is selected, but can be
+    re-triggered manually if the model changes.
+
+    Args:
+        model_id: ID of the threat model.
+        framework_id: ID of the compliance framework.
+    """
+    try:
+        return _dump(await _get_client().auto_remediate(model_id, framework_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def apply_compliance_remediation(
     server_version: str,
     model_id: str,
@@ -1524,6 +1558,8 @@ async def apply_compliance_remediation(
     """Apply approved remediation suggestions to a threat model.
 
     Pass the job_id from suggest_compliance_remediation.
+    Note: for most use cases, use auto_remediate instead — it handles
+    the entire suggest/apply/map cycle automatically.
 
     Args:
         model_id: ID of the threat model.
