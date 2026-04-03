@@ -21,8 +21,8 @@ from mipiti_mcp.server import (
     add_attacker,
     add_evidence,
     add_model_to_system,
-    apply_compliance_remediation,
     assess_model,
+    auto_remediate,
     auto_map_controls,
     check_control_gaps,
     create_system,
@@ -62,7 +62,6 @@ from mipiti_mcp.server import (
     select_system_compliance_frameworks,
     submit_assertions,
     submit_findings,
-    suggest_compliance_remediation,
     refine_control,
     update_control_status,
     update_finding,
@@ -117,8 +116,7 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "get_compliance_report": {"coverage": 0.8},
         "map_control_to_requirement": {"mapped": True},
         "auto_map_controls": {"mapped": 5},
-        "suggest_compliance_remediation": {"suggestions": [{"action": "add_asset"}]},
-        "apply_compliance_remediation": {"applied": 1},
+        "auto_remediate": {"job_id": "job_auto_rem"},
         "select_system_compliance_frameworks": {"selected": 1},
         "get_system_compliance_report": {"coverage": 0.9},
         "submit_assertions": {"count": 2},
@@ -624,50 +622,13 @@ class TestAutoMapControls:
         assert "job_id" in result
 
 
-class TestSuggestComplianceRemediation:
+class TestAutoRemediate:
     @pytest.mark.asyncio
-    async def test_async(self) -> None:
+    async def test_returns_job_id(self) -> None:
         mock = _mock_client()
-        ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await suggest_compliance_remediation(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=True)
+            result = await auto_remediate(server_version="0", model_id="tm-001", framework_id="owasp-asvs")
         assert "job_id" in result
-
-    @pytest.mark.asyncio
-    async def test_sync(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await suggest_compliance_remediation(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=False)
-        assert "suggestions" in result
-
-
-class TestApplyComplianceRemediation:
-    @pytest.mark.asyncio
-    async def test_with_job_id(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        server._jobs["job_test123"] = server._Job(
-            id="job_test123", tool_name="suggest_compliance_remediation",
-            status="completed",
-            result={"suggestions": [{"action": "add_asset"}]},
-        )
-        try:
-            with _patch_client(mock):
-                result = await apply_compliance_remediation(
-                    server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, job_id="job_test123",
-                )
-            assert result["applied"] == 1
-        finally:
-            server._jobs.pop("job_test123", None)
-
-    @pytest.mark.asyncio
-    async def test_job_not_found(self) -> None:
-        ctx = _mock_ctx()
-        with pytest.raises(ToolError, match="not found"):
-            await apply_compliance_remediation(
-                server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, job_id="job_nonexistent",
-            )
 
 
 # ------------------------------------------------------------------
