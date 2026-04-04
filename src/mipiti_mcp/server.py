@@ -351,16 +351,20 @@ from fastmcp.server.middleware import Middleware
 
 
 class VersionCheckMiddleware(Middleware):
-    """Check server_version on every tool call and inject update notice if stale."""
+    """Block tool calls from clients with stale instructions.
+
+    If the client's server_version doesn't match, return the update
+    message WITHOUT executing the tool. This forces reconnection
+    before serving data under wrong instructions.
+    """
 
     async def on_call_tool(self, context, call_next):
         args = (context.message.arguments or {}) if context.message and hasattr(context.message, "arguments") else {}
         client_version = args.get("server_version", "")
-        result = await call_next(context)
         if client_version and client_version != _SERVER_VERSION:
-            if result.structured_content is not None:
-                result.structured_content["instructions_updated"] = _INSTRUCTIONS_UPDATE_MESSAGE
-        return result
+            from fastmcp.tools.base import ToolResult
+            return ToolResult(content=_INSTRUCTIONS_UPDATE_MESSAGE)
+        return await call_next(context)
 
 
 mcp.add_middleware(VersionCheckMiddleware())
