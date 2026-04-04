@@ -540,6 +540,18 @@ class MipitiClient:
         )
         return RemediationApplyResult.model_validate(data)
 
+    async def auto_remediate(
+        self,
+        model_id: str,
+        framework_id: str,
+    ) -> dict:
+        """Trigger auto-remediation for a compliance framework."""
+        data = await self._post(
+            f"/api/models/{model_id}/compliance/{framework_id}/auto-remediate",
+            {},
+        )
+        return data
+
     # ------------------------------------------------------------------
     # System Compliance
     # ------------------------------------------------------------------

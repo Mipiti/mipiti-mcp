@@ -286,15 +286,18 @@ _INSTRUCTIONS_COMPLIANCE = """\
 
 ## Compliance
 
-Use after controls are implemented and have assertions:
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
-2. `select_compliance_frameworks` — activate frameworks for a model.
-3. `auto_map_controls` — map controls to framework requirements automatically.
-4. `map_control_to_requirement` — manually map a specific control to a \
+2. `select_compliance_frameworks` — activate frameworks for a model. \
+**Automatically triggers auto-remediation**: maps existing controls, \
+excludes non-applicable requirements by taxonomy, and suggests/applies \
+new entities for remaining gaps. Returns `auto_remediate_jobs` with \
+job IDs for polling.
+3. `get_compliance_report` — coverage report (run after auto-remediation completes).
+4. `auto_remediate` — re-trigger auto-remediation manually (e.g. after model changes).
+5. `auto_map_controls` — map controls to framework requirements (runs automatically \
+during auto-remediation, but can be triggered independently).
+6. `map_control_to_requirement` — manually map a specific control to a \
 specific requirement (use when auto-mapping misses or misassigns).
-5. `get_compliance_report` — coverage report.
-6. `suggest_compliance_remediation` / `apply_compliance_remediation` — \
-AI-suggested controls to close compliance gaps.
 
 ## Systems and workspaces
 
@@ -310,8 +313,8 @@ _INSTRUCTIONS_ASYNC = """\
 
 ## Async operations
 
-`generate_threat_model`, `refine_threat_model`, and \
-`suggest_compliance_remediation` return a `job_id` by default. \
+`generate_threat_model`, `refine_threat_model`, \
+`suggest_compliance_remediation`, and `auto_remediate` return a `job_id` by default. \
 `get_controls`, `check_control_gaps`, `auto_map_controls`, \
 `import_controls`, and `regenerate_controls` accept `async_mode=True` \
 for long-running operations. Poll with `get_operation_status(job_id)` \
@@ -1375,6 +1378,12 @@ async def select_compliance_frameworks(
 ) -> dict:
     """Select compliance frameworks for a threat model. Requires PRO tier.
 
+    Selecting a framework automatically triggers auto-remediation in the
+    background: auto-maps existing controls, excludes non-applicable
+    requirements by taxonomy, and suggests/applies new entities for remaining
+    gaps. The response includes auto_remediate_jobs with job IDs that can be
+    polled via get_operation_status.
+
     Args:
         model_id: ID of the threat model.
         framework_ids: Comma-separated framework IDs (e.g. "asvs-4.0,nist-csf").
@@ -1482,67 +1491,29 @@ async def auto_map_controls(
 
 
 @mcp.tool()
-async def suggest_compliance_remediation(
+async def auto_remediate(
     server_version: str,
     model_id: str,
     framework_id: str,
-    ctx: Context,
-    async_mode: bool = True,
 ) -> dict:
-    """Suggest missing assets and attackers to close compliance gaps.
+    """Automatically close compliance gaps for a framework. Requires PRO tier.
 
-    Takes 3-5 minutes. Requires PRO tier.
+    Three-phase loop: (1) auto-map existing controls to unmapped requirements,
+    (2) exclude requirements for non-applicable taxonomy primitives,
+    (3) suggest and apply new assets/attackers for remaining gaps.
+
+    Converges automatically: stops when fully covered or when no further
+    progress can be made. Returns a job_id for polling.
+
+    This runs automatically when a framework is selected, but can be
+    re-triggered manually if the model changes.
 
     Args:
         model_id: ID of the threat model.
         framework_id: ID of the compliance framework.
-        async_mode: If True (default), returns a job_id for polling.
     """
-    async def _impl(**kw):
-        try:
-            return _dump(await _get_client().suggest_compliance_remediation(
-                kw["model_id"], kw["framework_id"],
-            ))
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("suggest_compliance_remediation", _impl, {
-            "model_id": model_id, "framework_id": framework_id,
-        })}
-    return await _impl(model_id=model_id, framework_id=framework_id)
-
-
-@mcp.tool()
-async def apply_compliance_remediation(
-    server_version: str,
-    model_id: str,
-    framework_id: str,
-    ctx: Context,
-    job_id: Optional[str] = None,
-) -> dict:
-    """Apply approved remediation suggestions to a threat model.
-
-    Pass the job_id from suggest_compliance_remediation.
-
-    Args:
-        model_id: ID of the threat model.
-        framework_id: ID of the compliance framework.
-        job_id: Job ID from suggest_compliance_remediation (required).
-    """
-    actual_suggestions = None
-    if job_id and not actual_suggestions:
-        job = _jobs.get(job_id)
-        if job is None:
-            raise ToolError(f"Job {job_id} not found.")
-        if job.status != "completed":
-            raise ToolError(f"Job {job_id} is {job.status}, not completed.")
-        actual_suggestions = job.result.get("suggestions", []) if isinstance(job.result, dict) else []
-
     try:
-        return _dump(await _get_client().apply_compliance_remediation(
-            model_id, framework_id, actual_suggestions,
-        ))
+        return _dump(await _get_client().auto_remediate(model_id, framework_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
