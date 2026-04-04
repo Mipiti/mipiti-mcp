@@ -362,8 +362,8 @@ class VersionCheckMiddleware(Middleware):
         args = (context.message.arguments or {}) if context.message and hasattr(context.message, "arguments") else {}
         client_version = args.get("server_version", "")
         if client_version and client_version != _SERVER_VERSION:
-            from fastmcp.tools.base import ToolResult
-            return ToolResult(content=_INSTRUCTIONS_UPDATE_MESSAGE)
+            from fastmcp.exceptions import ToolError
+            raise ToolError(_INSTRUCTIONS_UPDATE_MESSAGE)
         return await call_next(context)
 
 
