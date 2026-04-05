@@ -304,6 +304,26 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def set_mitigation_groups(
+        self,
+        model_id: str,
+        co_id: str,
+        groups: dict,
+        defense_in_depth: list[str],
+        justification: str,
+    ) -> dict:
+        body = {
+            "groups": groups,
+            "defense_in_depth": defense_in_depth,
+            "justification": justification,
+        }
+        resp = await self._get_client().put(
+            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def add_evidence(
         self,
         model_id: str,

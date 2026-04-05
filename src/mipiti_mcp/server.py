@@ -23,7 +23,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "2"
+_SERVER_VERSION = "3"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -100,6 +100,12 @@ have sufficiency gaps, and which lack assertions entirely. Read \
 `sufficiency_details` for the specific aspects that still need proof.
 - `get_sufficiency` — quick check: do assertions for a single control \
 collectively cover all aspects? Evaluated server-side at submission.
+- `set_mitigation_groups` — set which controls are required vs defense-in-depth \
+for a CO. Use when a control is blocking a CO but is redundant with existing \
+mitigations (e.g., HMAC signing redundant with TLS + content hash), or when \
+restructuring alternative mitigation paths. Groups define: within group AND \
+(all required), across groups OR (any complete group mitigates). AI-gated: \
+rejected if the new structure doesn't satisfy the CO.
 - `refine_control` — modify a control's description if it doesn't match \
 the actual security requirement.
 - `delete_control` — soft-delete a control with justification. Blocked if \
@@ -960,6 +966,55 @@ async def refine_control(
             model_id, control_id,
             description.strip(), justification.strip(),
             codebase_findings=codebase_findings.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def set_mitigation_groups(
+    server_version: str,
+    model_id: str,
+    co_id: str,
+    groups: str,
+    defense_in_depth: str = "",
+    justification: str = "",
+) -> dict:
+    """Declaratively set the mitigation group structure for a CO.
+
+    Replaces all mitigation group assignments for this CO. AI-gated:
+    the platform evaluates whether the new structure satisfies the CO.
+
+    Mitigation groups define alternative paths to satisfy a CO:
+    - Within a group: AND — all controls must be implemented
+    - Across groups: OR — any complete group mitigates the CO
+    - Defense-in-depth: tracked but not required for mitigation
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: ID of the control objective (e.g., "CO5").
+        groups: JSON object mapping group numbers to control ID lists.
+            Example: '{"1": ["CTRL-01", "CTRL-02"], "2": ["CTRL-03"]}'
+        defense_in_depth: Comma-separated control IDs for defense-in-depth.
+            Example: "CTRL-04,CTRL-05"
+        justification: Why this group structure is appropriate (min 10 chars).
+    """
+    import json as _json
+    try:
+        parsed_groups = _json.loads(groups)
+    except _json.JSONDecodeError:
+        raise ToolError("groups must be valid JSON: {\"1\": [\"CTRL-01\"], ...}")
+    if not isinstance(parsed_groups, dict):
+        raise ToolError("groups must be a JSON object")
+
+    did_list = [s.strip() for s in defense_in_depth.split(",") if s.strip()] if defense_in_depth else []
+
+    if len(justification.strip()) < 10:
+        raise ToolError("justification must be at least 10 characters.")
+
+    try:
+        return _dump(await _get_client().set_mitigation_groups(
+            model_id, co_id, parsed_groups, did_list, justification.strip(),
         ))
     except Exception as exc:
         raise _api_error(exc) from exc
