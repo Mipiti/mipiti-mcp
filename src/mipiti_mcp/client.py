@@ -304,6 +304,15 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_mitigation_groups(
+        self, model_id: str, co_id: str,
+    ) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def set_mitigation_groups(
         self,
         model_id: str,
