@@ -111,10 +111,10 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
     ),
     AssertionTypeSpec(
         name="pattern_matches",
-        description="Check that a regex pattern exists in a file. Uses Python regex syntax.",
+        description="Check that a regex pattern exists in a file. Uses RE2 syntax (no backreferences, lookahead, or lookbehind).",
         params=(
             _FILE,
-            ParamSpec("pattern", "Python regex pattern to search for", example="force_https\\s*=\\s*true"),
+            ParamSpec("pattern", "RE2 regex pattern to search for", example="force_https\\s*=\\s*true"),
             ParamSpec("scope_start", "Regex pattern marking the start of the search scope within the file. Only content between scope_start and scope_end is searched.", required=False, example="class.*Client"),
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
             ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries (re.MULTILINE). Default: false.", required=False, example="true"),
@@ -123,10 +123,10 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
     ),
     AssertionTypeSpec(
         name="pattern_absent",
-        description="Check that a regex pattern does NOT exist in a file. Uses Python regex syntax.",
+        description="Check that a regex pattern does NOT exist in a file. Uses RE2 syntax (no backreferences, lookahead, or lookbehind).",
         params=(
             _FILE,
-            ParamSpec("pattern", "Python regex pattern that must be absent", example="verify\\s*=\\s*False"),
+            ParamSpec("pattern", "RE2 regex pattern that must be absent", example="verify\\s*=\\s*False"),
             ParamSpec("scope_start", "Regex pattern marking the start of the search scope within the file. Only content between scope_start and scope_end is checked for absence.", required=False, example="class.*Client"),
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
             ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries (re.MULTILINE). Default: false.", required=False, example="true"),
@@ -135,7 +135,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
     ),
     AssertionTypeSpec(
         name="no_plaintext_secret",
-        description="Check that no plaintext secrets matching given patterns exist in a file.",
+        description="Check that no plaintext secrets matching given patterns exist in a file. Patterns use RE2 syntax (no backreferences, lookahead, or lookbehind).",
         params=(
             _FILE,
             ParamSpec("patterns", "JSON array of regex patterns to check for secrets", example='["password\\\\s*=\\\\s*[\'\\"].*[\'\\"]"]'),
@@ -153,11 +153,11 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
     ),
     AssertionTypeSpec(
         name="config_value_matches",
-        description="Check that a config value matches a regex pattern.",
+        description="Check that a config value matches a regex pattern. Uses RE2 syntax (no backreferences, lookahead, or lookbehind).",
         params=(
             _FILE,
             ParamSpec("key", "Config key (dot notation for nested)", example="http_service.force_https"),
-            ParamSpec("pattern", "Regex pattern the value must match", example="True|true"),
+            ParamSpec("pattern", "RE2 regex pattern the value must match", example="True|true"),
         ),
     ),
     AssertionTypeSpec(
