@@ -23,7 +23,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "3"
+_SERVER_VERSION = "4"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -100,6 +100,11 @@ have sufficiency gaps, and which lack assertions entirely. Read \
 `sufficiency_details` for the specific aspects that still need proof.
 - `get_sufficiency` — quick check: do assertions for a single control \
 collectively cover all aspects? Evaluated server-side at submission.
+- `get_mitigation_groups` — get the current group structure for a CO with \
+control details (id, description, status) for each entry. Shows numbered \
+groups (AND within, OR across), defense-in-depth controls, and unmapped \
+controls available for assignment. Use before `set_mitigation_groups`, \
+when reviewing why a CO is at_risk, or to find unmapped controls.
 - `set_mitigation_groups` — set which controls are required vs defense-in-depth \
 for a CO. Use when a control is blocking a CO but is redundant with existing \
 mitigations (e.g., HMAC signing redundant with TLS + content hash), or when \
@@ -967,6 +972,35 @@ async def refine_control(
             description.strip(), justification.strip(),
             codebase_findings=codebase_findings.strip(),
         ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_mitigation_groups(
+    server_version: str,
+    model_id: str,
+    co_id: str,
+) -> dict:
+    """Get the current mitigation group structure for a control objective.
+
+    Returns the grouped view of controls for this CO with details
+    (id, description, status) for each control:
+    - groups: numbered groups (within=AND, across=OR)
+    - defense_in_depth: tracked but not required for mitigation
+    - unmapped: model controls not mapped to this CO (available for assignment)
+
+    Use cases:
+    - Before set_mitigation_groups to see the current structure
+    - When reviewing a CO's assessment to understand why it is at_risk or mitigated
+    - When deciding which unmapped controls to assign to a CO
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: ID of the control objective (e.g., "CO5").
+    """
+    try:
+        return _dump(await _get_client().get_mitigation_groups(model_id, co_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
