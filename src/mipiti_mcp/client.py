@@ -333,6 +333,23 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def link_assumption(
+        self, model_id: str, assumption_id: str, target_model_id: str,
+    ) -> dict:
+        resp = await self._get_client().post(
+            f"/api/models/{model_id}/assumptions/{assumption_id}/link",
+            json={"target_model_id": target_model_id},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_system_dependencies(self, system_id: str) -> dict:
+        resp = await self._get_client().get(
+            f"/api/systems/{system_id}/dependencies",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def add_evidence(
         self,
         model_id: str,
