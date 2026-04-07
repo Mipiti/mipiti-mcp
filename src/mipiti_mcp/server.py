@@ -23,7 +23,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "4"
+_SERVER_VERSION = "5"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -316,6 +316,12 @@ specific requirement (use when auto-mapping misses or misassigns).
 find the right workspace when working across team contexts.
 - `list_systems` / `get_system` — browse and retrieve system groups.
 - `create_system` / `add_model_to_system` — group related models into a system.
+- `get_system_dependencies` — view cross-model dependency graph. Shows \
+which assumptions are linked to other models and whether they are satisfied \
+by the target model's controls.
+- `link_dependency` — link an external assumption to a target model in the \
+same system. Makes it a cross-model dependency that appears as a compliance \
+requirement on the target model. Auto-attested when satisfied.
 - `select_system_compliance_frameworks` / `get_system_compliance_report` — \
 cross-model compliance reporting.
 """
@@ -1673,6 +1679,64 @@ async def add_model_to_system(server_version: str, system_id: str, model_id: str
     """
     try:
         return _dump(await _get_client().add_model_to_system(system_id, model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Cross-Model Dependencies ===
+
+
+@mcp.tool()
+async def get_system_dependencies(
+    server_version: str,
+    system_id: str,
+) -> dict:
+    """Get cross-model dependency graph for a system.
+
+    Returns all assumptions linked to other models in the system, with
+    satisfaction status based on mapped controls in the target model.
+
+    Use cases:
+    - View which assumptions are satisfied by other models' controls
+    - Identify unsatisfied cross-model dependencies
+    - Verify system-level completeness (all dependencies met)
+
+    Args:
+        system_id: ID of the system.
+    """
+    try:
+        return _dump(await _get_client().get_system_dependencies(system_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def link_dependency(
+    server_version: str,
+    model_id: str,
+    assumption_id: str,
+    target_model_id: str = "",
+) -> dict:
+    """Link an external assumption to a target model in the same system.
+
+    Makes the assumption a cross-model dependency: it becomes a compliance
+    requirement on the target model. When the target model's controls
+    satisfy the requirement, the assumption is auto-attested.
+
+    The assumption must already be linked to control objectives (via
+    add_assumption or edit_assumption with linked_co_ids). Pass empty
+    target_model_id to unlink.
+
+    Args:
+        model_id: ID of the threat model containing the assumption.
+        assumption_id: ID of the assumption (e.g., "AS1").
+        target_model_id: ID of the target model in the same system.
+            Pass "" to unlink.
+    """
+    try:
+        return _dump(await _get_client().link_assumption(
+            model_id, assumption_id, target_model_id,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
