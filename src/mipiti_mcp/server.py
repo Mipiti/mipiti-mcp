@@ -317,11 +317,12 @@ find the right workspace when working across team contexts.
 - `list_systems` / `get_system` — browse and retrieve system groups.
 - `create_system` / `add_model_to_system` — group related models into a system.
 - `get_system_dependencies` — view cross-model dependency graph. Shows \
-which assumptions are linked to other models and whether they are satisfied \
-by the target model's controls.
+which assumptions are linked to other models and whether they are satisfied.
 - `link_dependency` — link an external assumption to a target model in the \
 same system. Makes it a cross-model dependency that appears as a compliance \
-requirement on the target model. Auto-attested when satisfied.
+requirement on the target model. Two independent satisfaction paths: \
+auto-attestation from target controls (no manual action needed), or manual \
+attestation via `submit_attestation`. Either alone suffices.
 - `select_system_compliance_frameworks` / `get_system_compliance_report` — \
 cross-model compliance reporting.
 """
@@ -1694,7 +1695,9 @@ async def get_system_dependencies(
     """Get cross-model dependency graph for a system.
 
     Returns all assumptions linked to other models in the system, with
-    satisfaction status based on mapped controls in the target model.
+    satisfaction status. Each dependency is satisfied when either the
+    target model's mapped controls are implemented or a valid manual
+    attestation exists.
 
     Use cases:
     - View which assumptions are satisfied by other models' controls
@@ -1720,8 +1723,10 @@ async def link_dependency(
     """Link an external assumption to a target model in the same system.
 
     Makes the assumption a cross-model dependency: it becomes a compliance
-    requirement on the target model. When the target model's controls
-    satisfy the requirement, the assumption is auto-attested.
+    requirement on the target model. Two independent satisfaction paths:
+    auto-attestation when the target model's controls satisfy the
+    requirement (no manual action needed), or manual attestation via
+    submit_attestation. Either path alone suffices.
 
     The assumption must already be linked to control objectives (via
     add_assumption or edit_assumption with linked_co_ids). Pass empty
