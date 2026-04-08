@@ -48,10 +48,9 @@ controls to guide your implementation.
 
 - `generate_threat_model` — creates a new model with trust boundaries, \
 assets, attackers, and control objectives. Automatically detects similar \
-existing models and routes accordingly. Returns a `job_id` — poll with \
-`get_operation_status`.
+existing models and routes accordingly. Progress reported automatically.
 - `refine_threat_model` — updates an existing model when you already have \
-a model ID and want to change it (returns `job_id`).
+a model ID and want to change it. Progress reported automatically.
 - `add_asset` / `edit_asset` / `remove_asset` — targeted single-entity \
 changes without full refinement. Each asset has a `status` field: \
 `unverified` (default), `confirmed` (assertions prove it exists), \
@@ -1329,8 +1328,8 @@ async def select_compliance_frameworks(
     Selecting a framework automatically triggers auto-remediation in the
     background: auto-maps existing controls, excludes non-applicable
     requirements by taxonomy, and suggests/applies new entities for remaining
-    gaps. The response includes auto_remediate_jobs with job IDs that can be
-    polled via get_operation_status.
+    gaps. The response includes auto_remediate_jobs — these run in the
+    background and complete automatically.
 
     Args:
         model_id: ID of the threat model.
