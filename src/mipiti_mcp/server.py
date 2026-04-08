@@ -331,7 +331,7 @@ _INSTRUCTIONS_ASYNC = """\
 ## Async operations
 
 `generate_threat_model`, `refine_threat_model`, \
-`suggest_compliance_remediation`, and `auto_remediate` return a `job_id` by default. \
+and `auto_remediate` return a `job_id` by default. \
 `get_controls`, `check_control_gaps`, `auto_map_controls`, \
 `import_controls`, and `regenerate_controls` accept `async_mode=True` \
 for long-running operations. Poll with `get_operation_status(job_id)` \

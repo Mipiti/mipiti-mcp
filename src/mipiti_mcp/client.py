@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any, Awaitable, Callable
@@ -114,6 +115,26 @@ class MipitiClient:
         if resp.status_code == 204:
             return None
         return resp.json()
+
+    async def _poll_job(self, job_id: str) -> Any:
+        """Poll GET /api/operations/{job_id} until completion, return result."""
+        while True:
+            data = await self._get(f"/api/operations/{job_id}")
+            status = data.get("status")
+            if status == "completed":
+                return data.get("result", {})
+            if status == "failed":
+                raise RuntimeError(data.get("error", "Background job failed"))
+            wait = data.get("poll_after_seconds", 3)
+            await asyncio.sleep(wait)
+
+    async def _post_job(self, path: str, body: dict | None = None) -> Any:
+        """POST to an always-async endpoint, poll until done, return result."""
+        data = await self._post(path, body)
+        job_id = data.get("job_id") if isinstance(data, dict) else None
+        if job_id:
+            return await self._poll_job(job_id)
+        return data
 
     # ------------------------------------------------------------------
     # SSE stream consumer (generate / refine / query)
@@ -260,7 +281,7 @@ class MipitiClient:
         body: dict = {"mode": mode}
         if co_ids is not None:
             body["co_ids"] = co_ids
-        data = await self._post(f"/api/models/{model_id}/controls/regenerate", body)
+        data = await self._post_job(f"/api/models/{model_id}/controls/regenerate", body)
         return ControlsResponse.model_validate(data)
 
     async def update_control_status(
@@ -404,7 +425,7 @@ class MipitiClient:
         return DeleteControlResult.model_validate(data)
 
     async def check_control_gaps(self, model_id: str) -> GapAnalysisResult:
-        data = await self._post(f"/api/models/{model_id}/controls/check-gaps")
+        data = await self._post_job(f"/api/models/{model_id}/controls/check-gaps")
         return GapAnalysisResult.model_validate(data)
 
     async def get_scan_prompt(
@@ -558,7 +579,7 @@ class MipitiClient:
         body: dict[str, Any] = {}
         if control_id:
             body["control_id"] = control_id
-        data = await self._post(
+        data = await self._post_job(
             f"/api/models/{model_id}/compliance/{framework_id}/auto-map", body,
         )
         return AutoMapResult.model_validate(data)
@@ -566,7 +587,7 @@ class MipitiClient:
     async def suggest_compliance_remediation(
         self, model_id: str, framework_id: str,
     ) -> RemediationSuggestions:
-        data = await self._post(
+        data = await self._post_job(
             f"/api/models/{model_id}/compliance/{framework_id}/remediate",
         )
         return RemediationSuggestions.model_validate(data)
