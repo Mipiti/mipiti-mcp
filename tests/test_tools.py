@@ -36,7 +36,6 @@ from mipiti_mcp.server import (
     get_compliance_report,
     get_control_objectives,
     get_controls,
-    get_operation_status,
     get_review_queue,
     get_scan_prompt,
     get_system,
@@ -94,13 +93,13 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "delete_model": None,
         "export_model": b"AssetID,Name\nA1,Tokens\n",
         "get_controls": ControlsResponse(controls=_controls),
-        "regenerate_controls": ControlsResponse(controls=_controls),
+        "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
         "remove_evidence": {"control_id": "CTRL-01", "evidence_count": 0},
         "import_controls": {"imported": 3},
         "delete_control": {"deleted": True},
-        "check_control_gaps": {"gaps": []},
+        "check_control_gaps": {"job_id": "job_gaps"},
         "get_scan_prompt": {"prompt": "Scan for..."},
         "get_control_objectives": {"model_id": "tm-001", "total": 1},
         "add_asset": {"id": "A3", "name": "New"},
@@ -115,8 +114,9 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "select_compliance_frameworks": {"selected": 1},
         "get_compliance_report": {"coverage": 0.8},
         "map_control_to_requirement": {"mapped": True},
-        "auto_map_controls": {"mapped": 5},
+        "auto_map_controls": {"job_id": "job_automap"},
         "auto_remediate": {"job_id": "job_auto_rem"},
+        "get_operation": {"status": "completed", "result": {}},
         "select_system_compliance_frameworks": {"selected": 1},
         "get_system_compliance_report": {"coverage": 0.9},
         "submit_assertions": {"count": 2},
@@ -161,60 +161,35 @@ def _patch_client(mock=None):
 
 class TestGenerateThreatModel:
     @pytest.mark.asyncio
-    async def test_sync_mode(self) -> None:
+    async def test_success(self) -> None:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await generate_threat_model(server_version="0", feature_description="User login", ctx=ctx, async_mode=False)
+            result = await generate_threat_model(server_version="0", feature_description="User login", ctx=ctx)
         assert result["model_id"] == "tm-001"
         assert result["asset_count"] == 2
         mock.generate_threat_model.assert_awaited_once()
 
-    @pytest.mark.asyncio
-    async def test_async_mode(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await generate_threat_model(server_version="0", feature_description="User login", ctx=ctx, async_mode=True)
-        assert "job_id" in result
-        mock.generate_threat_model.assert_not_awaited()
-
 
 class TestRefineThreatModel:
     @pytest.mark.asyncio
-    async def test_sync_mode(self) -> None:
+    async def test_success(self) -> None:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx, async_mode=False)
+            result = await refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx)
         assert result["model_id"] == "tm-001"
         mock.refine_threat_model.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_async_mode(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx, async_mode=True)
-        assert "job_id" in result
 
 
 class TestQueryThreatModel:
     @pytest.mark.asyncio
-    async def test_sync_mode(self) -> None:
+    async def test_success(self) -> None:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await query_threat_model(server_version="0", model_id="tm-001", question="SQL injection?", ctx=ctx, async_mode=False)
+            result = await query_threat_model(server_version="0", model_id="tm-001", question="SQL injection?", ctx=ctx)
         assert result["answer"] == "The model covers SQL injection."
-
-    @pytest.mark.asyncio
-    async def test_async_mode(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await query_threat_model(server_version="0", model_id="tm-001", question="Q?", ctx=ctx, async_mode=True)
-        assert "job_id" in result
 
 
 class TestListThreatModels:
@@ -305,7 +280,7 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await get_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=False)
+            result = await get_controls(server_version="0", model_id="tm-001", ctx=ctx)
         assert result["total"] == 2
         assert result["returned"] == 2
 
@@ -315,7 +290,7 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            await get_controls(server_version="0", model_id="tm-001", ctx=ctx, status="implemented", async_mode=False)
+            await get_controls(server_version="0", model_id="tm-001", ctx=ctx, status="implemented")
         mock.get_controls.assert_awaited_once()
         call_kwargs = mock.get_controls.call_args[1]
         assert call_kwargs["status"] == "implemented"
@@ -326,29 +301,25 @@ class TestGetControls:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            await get_controls(server_version="0", model_id="tm-001", ctx=ctx, offset=0, limit=1, async_mode=False)
+            await get_controls(server_version="0", model_id="tm-001", ctx=ctx, offset=0, limit=1)
         mock.get_controls.assert_awaited_once()
         call_kwargs = mock.get_controls.call_args[1]
         assert call_kwargs["limit"] == 1
 
-    @pytest.mark.asyncio
-    async def test_async_mode(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await get_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=True)
-        assert "job_id" in result
-
 
 class TestRegenerateControls:
     @pytest.mark.asyncio
-    async def test_sync(self) -> None:
+    async def test_with_backend_job(self) -> None:
         mock = _mock_client()
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {"controls": [{"id": "CTRL-01"}], "total": 1},
+        })
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await regenerate_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=False)
-        assert "controls" in result
-        mock.regenerate_controls.assert_awaited_once()
+            result = await regenerate_controls(server_version="0", model_id="tm-001", ctx=ctx)
+        assert result["total"] == 1
+        mock.get_operation.assert_awaited_once_with("job_regen")
 
 
 class TestUpdateControlStatus:
@@ -433,20 +404,12 @@ class TestRemoveEvidence:
 
 class TestImportControls:
     @pytest.mark.asyncio
-    async def test_sync(self) -> None:
+    async def test_success(self) -> None:
         mock = _mock_client()
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await import_controls(server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest", async_mode=False)
+            result = await import_controls(server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest")
         assert result["imported"] == 3
-
-    @pytest.mark.asyncio
-    async def test_async(self) -> None:
-        mock = _mock_client()
-        ctx = _mock_ctx()
-        with _patch_client(mock):
-            result = await import_controls(server_version="0", model_id="tm-001", ctx=ctx, async_mode=True)
-        assert "job_id" in result
 
 
 class TestDeleteControl:
@@ -460,12 +423,17 @@ class TestDeleteControl:
 
 class TestCheckControlGaps:
     @pytest.mark.asyncio
-    async def test_sync(self) -> None:
+    async def test_with_backend_job(self) -> None:
         mock = _mock_client()
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {"gaps": [], "gap_count": 0},
+        })
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await check_control_gaps(server_version="0", model_id="tm-001", ctx=ctx, async_mode=False)
-        assert "gaps" in result
+            result = await check_control_gaps(server_version="0", model_id="tm-001", ctx=ctx)
+        assert result["gap_count"] == 0
+        mock.get_operation.assert_awaited_once_with("job_gaps")
 
 
 # ------------------------------------------------------------------
@@ -606,29 +574,72 @@ class TestMapControlToRequirement:
 
 class TestAutoMapControls:
     @pytest.mark.asyncio
-    async def test_sync(self) -> None:
+    async def test_with_backend_job(self) -> None:
+        """Backend returns job_id, tool polls until completion."""
         mock = _mock_client()
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {"mappings_created": 9, "controls_mapped": 5, "controls_total": 12},
+        })
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await auto_map_controls(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=False)
-        assert result["mapped"] == 5
+            result = await auto_map_controls(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx)
+        assert result["mappings_created"] == 9
+        mock.get_operation.assert_awaited_once_with("job_automap")
 
     @pytest.mark.asyncio
-    async def test_async(self) -> None:
-        mock = _mock_client()
+    async def test_sync_response(self) -> None:
+        """Backend returns result directly (e.g. all already mapped)."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"mappings_created": 0, "controls_mapped": 0, "controls_total": 5}))
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await auto_map_controls(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx, async_mode=True)
-        assert "job_id" in result
+            result = await auto_map_controls(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx)
+        assert result["controls_total"] == 5
 
 
 class TestAutoRemediate:
     @pytest.mark.asyncio
-    async def test_returns_job_id(self) -> None:
-        mock = _mock_client()
+    async def test_with_backend_job(self) -> None:
+        mock = _mock_client(auto_remediate=AsyncMock(return_value={"job_id": "job_rem"}))
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {"coverage": 0.95},
+        })
+        ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await auto_remediate(server_version="0", model_id="tm-001", framework_id="owasp-asvs")
-        assert "job_id" in result
+            result = await auto_remediate(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx)
+        assert result["coverage"] == 0.95
+
+
+class TestAwaitBackendJob:
+    @pytest.mark.asyncio
+    async def test_failure(self) -> None:
+        """Backend job fails — ToolError raised with error message."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_fail"}))
+        mock.get_operation = AsyncMock(return_value={
+            "status": "failed",
+            "error": "LLM rate limit exceeded",
+        })
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="LLM rate limit exceeded"):
+                await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+    @pytest.mark.asyncio
+    async def test_timeout(self) -> None:
+        """Backend job never completes — ToolError raised after timeout."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_hang"}))
+        mock.get_operation = AsyncMock(return_value={
+            "status": "running",
+            "poll_after_seconds": 0,
+        })
+        ctx = _mock_ctx()
+        # Make time.monotonic() jump past deadline on second call
+        monotonic_values = iter([0, 0, 999])
+        with _patch_client(mock), patch("mipiti_mcp.server.time") as mock_time:
+            mock_time.monotonic = lambda: next(monotonic_values)
+            with pytest.raises(ToolError, match="timed out"):
+                await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
 
 
 # ------------------------------------------------------------------
@@ -807,51 +818,3 @@ class TestGetScanPrompt:
         assert "prompt" in result
 
 
-# ------------------------------------------------------------------
-# Async Operations
-# ------------------------------------------------------------------
-
-
-class TestGetOperationStatus:
-    @pytest.mark.asyncio
-    async def test_running(self) -> None:
-        server._jobs["job_abc"] = server._Job(
-            id="job_abc", tool_name="generate_threat_model", status="running",
-        )
-        try:
-            result = await get_operation_status(server_version="0", job_id="job_abc")
-            assert result["status"] == "running"
-            assert "poll_after_seconds" in result
-        finally:
-            server._jobs.pop("job_abc", None)
-
-    @pytest.mark.asyncio
-    async def test_completed(self) -> None:
-        server._jobs["job_done"] = server._Job(
-            id="job_done", tool_name="generate_threat_model",
-            status="completed", result={"model_id": "tm-001"},
-        )
-        try:
-            result = await get_operation_status(server_version="0", job_id="job_done")
-            assert result["status"] == "completed"
-            assert result["result"]["model_id"] == "tm-001"
-        finally:
-            server._jobs.pop("job_done", None)
-
-    @pytest.mark.asyncio
-    async def test_failed(self) -> None:
-        server._jobs["job_fail"] = server._Job(
-            id="job_fail", tool_name="generate_threat_model",
-            status="failed", error="Timeout",
-        )
-        try:
-            result = await get_operation_status(server_version="0", job_id="job_fail")
-            assert result["status"] == "failed"
-            assert result["error"] == "Timeout"
-        finally:
-            server._jobs.pop("job_fail", None)
-
-    @pytest.mark.asyncio
-    async def test_unknown_job(self) -> None:
-        with pytest.raises(ToolError, match="Unknown job_id"):
-            await get_operation_status(server_version="0", job_id="job_nonexistent")

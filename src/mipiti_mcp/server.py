@@ -7,10 +7,7 @@ All tools call the Mipiti REST API via MipitiClient.
 import asyncio
 import contextvars
 import json
-import threading
 import time
-import uuid
-from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 from fastmcp import Context, FastMCP
@@ -329,14 +326,12 @@ cross-model compliance reporting.
 
 _INSTRUCTIONS_ASYNC = """\
 
-## Async operations
+## Long-running operations
 
-`generate_threat_model`, `refine_threat_model`, \
-and `auto_remediate` return a `job_id` by default. \
-`get_controls`, `check_control_gaps`, `auto_map_controls`, \
-`import_controls`, and `regenerate_controls` accept `async_mode=True` \
-for long-running operations. Poll with `get_operation_status(job_id)` \
-and respect `poll_after_seconds` in the response.
+`generate_threat_model`, `refine_threat_model`, `auto_remediate`, \
+`auto_map_controls`, `regenerate_controls`, and `check_control_gaps` \
+run LLM pipelines that may take several minutes. They block until complete \
+and report progress automatically — no polling needed.
 """
 
 
@@ -417,74 +412,27 @@ def _get_client() -> MipitiClient:
 
 
 # ------------------------------------------------------------------
-# Background job system (async_mode support)
+# Backend job polling helper
 # ------------------------------------------------------------------
 
-_JOB_TTL = 3600
 
-
-@dataclass
-class _Job:
-    id: str
-    tool_name: str
-    status: str = "running"
-    progress: int = 0
-    total: int = 0
-    message: str = ""
-    result: Any = None
-    error: str = ""
-    created_at: float = field(default_factory=time.monotonic)
-
-
-_jobs: dict[str, _Job] = {}
-
-
-def _poll_interval(job: _Job, elapsed: float) -> int:
-    if elapsed < 10:
-        return 3
-    if elapsed < 30:
-        return 5
-    if elapsed < 120:
-        return 10
-    return 15
-
-
-def _start_job(tool_name: str, coro_factory, kwargs: dict) -> str:
-    # Evict expired jobs
-    now = time.monotonic()
-    expired = [k for k, j in _jobs.items() if now - j.created_at > _JOB_TTL]
-    for k in expired:
-        del _jobs[k]
-
-    job_id = f"job_{uuid.uuid4().hex[:12]}"
-    job = _Job(id=job_id, tool_name=tool_name)
-    _jobs[job_id] = job
-
-    # Inject job_id so async coroutines can update progress
-    if "_job_id" in kwargs:
-        kwargs["_job_id"] = job_id
-
-    # Capture the per-request client for the background thread
-    caller_client = _request_client.get(None)
-
-    def _run():
-        loop = asyncio.new_event_loop()
-        # Propagate per-request client into the new thread's contextvars
-        if caller_client is not None:
-            _request_client.set(caller_client)
-        try:
-            result = loop.run_until_complete(coro_factory(**kwargs))
-            job.result = result
-            job.status = "completed"
-        except Exception as e:
-            job.error = str(e)
-            job.status = "failed"
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return job_id
+async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, timeout: float = 600) -> dict:
+    """Poll a backend job until completion, reporting progress via MCP protocol."""
+    deadline = time.monotonic() + timeout
+    while True:
+        data = await client.get_operation(job_id)
+        status = data.get("status")
+        if status == "completed":
+            return data.get("result", {})
+        if status == "failed":
+            raise ToolError(data.get("error", "Background job failed"))
+        if time.monotonic() > deadline:
+            raise ToolError(f"Operation timed out after {timeout}s")
+        progress = data.get("progress", "")
+        if progress:
+            await ctx.info(str(progress))
+        wait = data.get("poll_after_seconds", 3)
+        await asyncio.sleep(wait)
 
 
 def _dump(obj: Any) -> dict:
@@ -534,7 +482,6 @@ async def generate_threat_model(
     server_version: str,
     feature_description: str,
     ctx: Context,
-    async_mode: bool = True,
     force: bool = False,
 ) -> dict:
     """Generate a complete threat model from a feature description.
@@ -544,17 +491,21 @@ async def generate_threat_model(
     Produces trust boundaries, asset inventory, attacker inventory,
     control objective matrix, and assumptions.
 
-    Runs a multi-step AI pipeline as a background job. Poll with
-    get_operation_status — the response includes poll_after_seconds
-    with adaptive intervals.
+    Runs a multi-step AI pipeline. Progress is reported automatically.
 
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
-        async_mode: If True (default), returns a job_id for polling.
         force: Skip similar model detection.
     """
-    def _summarise(result):
+    async def on_progress(step, total, title):
+        await ctx.report_progress(step, total)
+        label = STEP_NAMES.get(step, title)
+        await ctx.info(f"Step {step}/{total}: {label}")
+    try:
+        result = await _get_client().generate_threat_model(
+            feature_description, on_progress=on_progress,
+        )
         tm = result.threat_model
         return {
             "model_id": tm.id,
@@ -564,39 +515,6 @@ async def generate_threat_model(
             "attacker_count": len(tm.attackers),
             "control_objective_count": len(tm.control_objectives),
         }
-
-    async def _run(**kw):
-        client = _get_client()
-        job = _jobs.get(kw.get("_job_id", ""))
-        async def _on_progress(step, total, title):
-            if job:
-                job.progress = step
-                job.total = total
-                job.message = f"Step {step}/{total}: {STEP_NAMES.get(step, title)}"
-        try:
-            result = await client.generate_threat_model(
-                kw["feature_description"], on_progress=_on_progress,
-            )
-            return _summarise(result)
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        job_id = _start_job("generate_threat_model", _run,
-                            {"feature_description": feature_description,
-                             "_job_id": None})  # populated by _start_job
-        return {"job_id": job_id}
-
-    client = _get_client()
-    async def on_progress(step, total, title):
-        await ctx.report_progress(step, total)
-        label = STEP_NAMES.get(step, title)
-        await ctx.info(f"Step {step}/{total}: {label}")
-    try:
-        result = await client.generate_threat_model(
-            feature_description, on_progress=on_progress,
-        )
-        return _summarise(result)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -607,21 +525,24 @@ async def refine_threat_model(
     model_id: str,
     instruction: str,
     ctx: Context,
-    async_mode: bool = True,
 ) -> dict:
     """Refine an existing threat model based on an instruction.
 
     Updates the model's assets, attackers, trust boundaries, and control
     objectives based on the instruction. Creates a new version.
-    Runs as a background job — poll with get_operation_status
-    (includes adaptive poll_after_seconds).
+    Progress is reported automatically.
 
     Args:
         model_id: ID of the threat model to refine.
         instruction: What to change, e.g. "Add CSRF attack vectors".
-        async_mode: If True (default), returns a job_id for polling.
     """
-    def _summarise(result):
+    async def on_progress(step, total, title):
+        await ctx.report_progress(step, total)
+        await ctx.info(f"Step {step}/{total}: {title}")
+    try:
+        result = await _get_client().refine_threat_model(
+            model_id, instruction, on_progress=on_progress,
+        )
         tm = result.threat_model
         return {
             "model_id": tm.id,
@@ -631,29 +552,6 @@ async def refine_threat_model(
             "attacker_count": len(tm.attackers),
             "control_objective_count": len(tm.control_objectives),
         }
-
-    async def _run(**kw):
-        client = _get_client()
-        try:
-            result = await client.refine_threat_model(kw["model_id"], kw["instruction"])
-            return _summarise(result)
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        job_id = _start_job("refine_threat_model", _run,
-                            {"model_id": model_id, "instruction": instruction})
-        return {"job_id": job_id}
-
-    client = _get_client()
-    async def on_progress(step, total, title):
-        await ctx.report_progress(step, total)
-        await ctx.info(f"Step {step}/{total}: {title}")
-    try:
-        result = await client.refine_threat_model(
-            model_id, instruction, on_progress=on_progress,
-        )
-        return _summarise(result)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -664,7 +562,6 @@ async def query_threat_model(
     model_id: str,
     question: str,
     ctx: Context,
-    async_mode: bool = False,
 ) -> dict:
     """Ask a question about an existing threat model.
 
@@ -674,20 +571,12 @@ async def query_threat_model(
     Args:
         model_id: ID of the threat model to query.
         question: The question to ask.
-        async_mode: If True, returns a job_id for polling.
     """
-    async def _impl(**kw):
-        client = _get_client()
-        try:
-            result = await client.query_threat_model(kw["model_id"], kw["question"])
-            return {"model_id": kw["model_id"], "answer": result.content}
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("query_threat_model", _impl,
-                                     {"model_id": model_id, "question": question})}
-    return await _impl(model_id=model_id, question=question)
+    try:
+        result = await _get_client().query_threat_model(model_id, question)
+        return {"model_id": model_id, "answer": result.content}
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -806,7 +695,6 @@ async def get_controls(
     limit: int = 0,
     include_deleted: bool = False,
     summary_only: bool = False,
-    async_mode: bool = False,
 ) -> dict:
     """Get implementation controls for a threat model.
 
@@ -823,41 +711,26 @@ async def get_controls(
         include_deleted: Include soft-deleted controls.
         summary_only: If True, returns only id, description, status, and
             assertion_count per control (much smaller response).
-        async_mode: If True, returns a job_id for polling.
     """
-    async def _impl(**kw):
-        try:
-            data = await _get_client().get_controls(
-                kw["model_id"],
-                include_deleted=kw.get("include_deleted", False),
-                control_id=kw.get("control_id") or "",
-                status=kw.get("status") or "",
-                co_id=kw.get("co_id") or "",
-                offset=kw.get("offset", 0),
-                limit=kw.get("limit", 0),
-                summary_only=kw.get("summary_only", False),
-            )
-            result = _dump(data)
-            # Ensure total/returned are set (older backends may not return them)
-            if not result.get("total"):
-                result["total"] = len(result.get("controls", []))
-            if not result.get("returned"):
-                result["returned"] = len(result.get("controls", []))
-            return result
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("get_controls", _impl, {
-            "model_id": model_id, "control_id": control_id, "status": status,
-            "co_id": co_id, "offset": offset, "limit": limit,
-            "include_deleted": include_deleted, "summary_only": summary_only,
-        })}
-    return await _impl(
-        model_id=model_id, control_id=control_id, status=status,
-        co_id=co_id, offset=offset, limit=limit,
-        include_deleted=include_deleted, summary_only=summary_only,
-    )
+    try:
+        data = await _get_client().get_controls(
+            model_id,
+            include_deleted=include_deleted,
+            control_id=control_id or "",
+            status=status or "",
+            co_id=co_id or "",
+            offset=offset,
+            limit=limit,
+            summary_only=summary_only,
+        )
+        result = _dump(data)
+        if not result.get("total"):
+            result["total"] = len(result.get("controls", []))
+        if not result.get("returned"):
+            result["returned"] = len(result.get("controls", []))
+        return result
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -865,7 +738,6 @@ async def regenerate_controls(
     server_version: str,
     model_id: str,
     ctx: Context,
-    async_mode: bool = False,
     mode: str = "batch",
     co_ids: Optional[str] = None,
 ) -> dict:
@@ -881,7 +753,6 @@ async def regenerate_controls(
 
     Args:
         model_id: ID of the threat model.
-        async_mode: If True, returns a job_id for polling.
         mode: "batch" (default, fast) or "per_co" (thorough, one LLM
             call per CO with accumulated context).
         co_ids: Optional comma-separated CO IDs to regenerate (e.g.
@@ -892,20 +763,16 @@ async def regenerate_controls(
     parsed_co_ids: list[str] | None = None
     if co_ids:
         parsed_co_ids = [c.strip() for c in co_ids.split(",") if c.strip()]
-
-    async def _impl(**kw):
-        try:
-            return _dump(await _get_client().regenerate_controls(
-                kw["model_id"], mode=kw.get("mode", "batch"),
-                co_ids=kw.get("co_ids"),
-            ))
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    params = {"model_id": model_id, "mode": mode, "co_ids": parsed_co_ids}
-    if async_mode:
-        return {"job_id": _start_job("regenerate_controls", _impl, params)}
-    return await _impl(**params)
+    try:
+        client = _get_client()
+        result = await client.regenerate_controls(
+            model_id, mode=mode, co_ids=parsed_co_ids,
+        )
+        if isinstance(result, dict) and "job_id" in result:
+            return await _await_backend_job(client, result["job_id"], ctx)
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -1119,7 +986,6 @@ async def import_controls(
     free_text: str = "",
     source_label: str = "",
     auto_map: bool = True,
-    async_mode: bool = False,
 ) -> dict:
     """Import existing security controls into a threat model.
 
@@ -1132,28 +998,13 @@ async def import_controls(
         free_text: Free-text controls (narrative/CSV/bullets).
         source_label: Origin label (e.g., "ISO 27001").
         auto_map: Auto-map controls to COs using LLM (default: True).
-        async_mode: If True, returns a job_id for polling.
     """
-    async def _impl(**kw):
-        try:
-            return _dump(await _get_client().import_controls(
-                kw["model_id"], kw.get("controls_json", ""),
-                kw.get("free_text", ""), kw.get("source_label", ""),
-                kw.get("auto_map", True),
-            ))
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("import_controls", _impl, {
-            "model_id": model_id, "controls_json": controls_json,
-            "free_text": free_text, "source_label": source_label,
-            "auto_map": auto_map,
-        })}
-    return await _impl(
-        model_id=model_id, controls_json=controls_json,
-        free_text=free_text, source_label=source_label, auto_map=auto_map,
-    )
+    try:
+        return _dump(await _get_client().import_controls(
+            model_id, controls_json, free_text, source_label, auto_map,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -1184,7 +1035,6 @@ async def check_control_gaps(
     server_version: str,
     model_id: str,
     ctx: Context,
-    async_mode: bool = False,
 ) -> dict:
     """Check for missing controls.
 
@@ -1193,17 +1043,15 @@ async def check_control_gaps(
 
     Args:
         model_id: ID of the threat model.
-        async_mode: If True, returns a job_id for polling.
     """
-    async def _impl(**kw):
-        try:
-            return _dump(await _get_client().check_control_gaps(kw["model_id"]))
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("check_control_gaps", _impl, {"model_id": model_id})}
-    return await _impl(model_id=model_id)
+    try:
+        client = _get_client()
+        result = await client.check_control_gaps(model_id)
+        if isinstance(result, dict) and "job_id" in result:
+            return await _await_backend_job(client, result["job_id"], ctx)
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 # === Control Objectives & Assurance ===
@@ -1561,7 +1409,6 @@ async def auto_map_controls(
     framework_id: str,
     ctx: Context,
     control_id: Optional[str] = None,
-    async_mode: bool = False,
 ) -> dict:
     """Use LLM to map controls to framework requirements. Takes 20-45 seconds.
 
@@ -1571,23 +1418,17 @@ async def auto_map_controls(
         model_id: ID of the threat model.
         framework_id: ID of the compliance framework.
         control_id: Optional specific control to map.
-        async_mode: If True, returns a job_id for polling.
     """
-    async def _impl(**kw):
-        try:
-            return _dump(await _get_client().auto_map_controls(
-                kw["model_id"], kw["framework_id"], kw.get("control_id", ""),
-            ))
-        except Exception as exc:
-            raise _api_error(exc) from exc
-
-    if async_mode:
-        return {"job_id": _start_job("auto_map_controls", _impl, {
-            "model_id": model_id, "framework_id": framework_id,
-            "control_id": control_id or "",
-        })}
-    return await _impl(model_id=model_id, framework_id=framework_id,
-                       control_id=control_id or "")
+    try:
+        client = _get_client()
+        result = await client.auto_map_controls(
+            model_id, framework_id, control_id or "",
+        )
+        if isinstance(result, dict) and "job_id" in result:
+            return await _await_backend_job(client, result["job_id"], ctx)
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -1595,6 +1436,7 @@ async def auto_remediate(
     server_version: str,
     model_id: str,
     framework_id: str,
+    ctx: Context,
 ) -> dict:
     """Automatically close compliance gaps for a framework. Requires PRO tier.
 
@@ -1603,7 +1445,7 @@ async def auto_remediate(
     (3) suggest and apply new assets/attackers for remaining gaps.
 
     Converges automatically: stops when fully covered or when no further
-    progress can be made. Returns a job_id for polling.
+    progress can be made.
 
     This runs automatically when a framework is selected, but can be
     re-triggered manually if the model changes.
@@ -1613,7 +1455,11 @@ async def auto_remediate(
         framework_id: ID of the compliance framework.
     """
     try:
-        return _dump(await _get_client().auto_remediate(model_id, framework_id))
+        client = _get_client()
+        result = await client.auto_remediate(model_id, framework_id)
+        if isinstance(result, dict) and "job_id" in result:
+            return await _await_backend_job(client, result["job_id"], ctx)
+        return _dump(result)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2067,48 +1913,6 @@ async def get_scan_prompt(
         raise _api_error(exc) from exc
 
 
-# === Async Operations ===
-
-
-@mcp.tool()
-async def get_operation_status(server_version: str, job_id: str) -> dict:
-    """Check status of a background operation.
-
-    Returns progress updates while running. When complete, returns result.
-
-    IMPORTANT POLLING PROTOCOL: When status="running", response includes
-    poll_after_seconds. MUST sleep for that many seconds before calling again.
-
-    Args:
-        job_id: Job ID returned when async_mode=True.
-    """
-    job = _jobs.get(job_id)
-    if job is None:
-        raise ToolError(f"Unknown job_id: {job_id}")
-
-    elapsed = time.monotonic() - job.created_at
-    result: dict[str, Any] = {
-        "job_id": job.id,
-        "tool_name": job.tool_name,
-        "status": job.status,
-        "progress": job.progress,
-        "total": job.total,
-        "message": job.message,
-        "elapsed_seconds": round(elapsed, 1),
-    }
-
-    if job.status == "running":
-        result["poll_after_seconds"] = _poll_interval(job, elapsed)
-        result["instruction"] = (
-            f"Operation in progress. Wait {result['poll_after_seconds']} seconds "
-            f"before polling again."
-        )
-    elif job.status == "completed":
-        result["result"] = job.result
-    elif job.status == "failed":
-        result["error"] = job.error
-
-    return result
 
 
 # === Project Setup ===
