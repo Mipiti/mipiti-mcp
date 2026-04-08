@@ -10,7 +10,6 @@ import httpx
 from httpx_sse import aconnect_sse
 
 from .types import (
-    AutoMapResult,
     ChatResponse,
     ComplianceFramework,
     ComplianceReport,
@@ -21,13 +20,11 @@ from .types import (
     DeleteControlResult,
     EvidenceActionResult,
     Finding,
-    GapAnalysisResult,
     GenerateResult,
     ImportConfirmResult,
     ModelSummary,
     OkResult,
     RemediationApplyResult,
-    RemediationSuggestions,
     RenameResult,
     ReviewQueueResponse,
     ScanPromptResult,
@@ -256,12 +253,11 @@ class MipitiClient:
         model_id: str,
         mode: str = "batch",
         co_ids: list[str] | None = None,
-    ) -> ControlsResponse:
+    ) -> dict:
         body: dict = {"mode": mode}
         if co_ids is not None:
             body["co_ids"] = co_ids
-        data = await self._post(f"/api/models/{model_id}/controls/regenerate", body)
-        return ControlsResponse.model_validate(data)
+        return await self._post(f"/api/models/{model_id}/controls/regenerate", body)
 
     async def update_control_status(
         self,
@@ -403,9 +399,8 @@ class MipitiClient:
         )
         return DeleteControlResult.model_validate(data)
 
-    async def check_control_gaps(self, model_id: str) -> GapAnalysisResult:
-        data = await self._post(f"/api/models/{model_id}/controls/check-gaps")
-        return GapAnalysisResult.model_validate(data)
+    async def check_control_gaps(self, model_id: str) -> dict:
+        return await self._post(f"/api/models/{model_id}/controls/check-gaps")
 
     async def get_scan_prompt(
         self, model_id: str, control_id: str = "",
@@ -554,22 +549,20 @@ class MipitiClient:
         model_id: str,
         framework_id: str,
         control_id: str = "",
-    ) -> AutoMapResult:
+    ) -> dict:
         body: dict[str, Any] = {}
         if control_id:
             body["control_id"] = control_id
-        data = await self._post(
+        return await self._post(
             f"/api/models/{model_id}/compliance/{framework_id}/auto-map", body,
         )
-        return AutoMapResult.model_validate(data)
 
     async def suggest_compliance_remediation(
         self, model_id: str, framework_id: str,
-    ) -> RemediationSuggestions:
-        data = await self._post(
+    ) -> dict:
+        return await self._post(
             f"/api/models/{model_id}/compliance/{framework_id}/remediate",
         )
-        return RemediationSuggestions.model_validate(data)
 
     async def apply_compliance_remediation(
         self,
@@ -597,6 +590,13 @@ class MipitiClient:
             {},
         )
         return data
+
+    # ------------------------------------------------------------------
+    # Operations (job polling)
+    # ------------------------------------------------------------------
+
+    async def get_operation(self, job_id: str) -> dict:
+        return await self._get(f"/api/operations/{job_id}")
 
     # ------------------------------------------------------------------
     # System Compliance
