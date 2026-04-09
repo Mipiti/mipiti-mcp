@@ -321,6 +321,17 @@ auto-attestation from target controls (no manual action needed), or manual \
 attestation via `submit_attestation`. Either alone suffices.
 - `select_system_compliance_frameworks` / `get_system_compliance_report` — \
 cross-model compliance reporting.
+
+## Components
+
+Components bridge security architecture (trust boundaries) to code \
+organization (repos). Add components to a model to scope controls \
+to specific codebases.
+
+- `add_component` — create a component with name, repo_url, and \
+optional path (for monorepos) and trust_boundary_ids.
+- `edit_component` / `remove_component` — modify or delete a component.
+- `get_controls` with `component_id` — filter controls by component.
 """
 
 _INSTRUCTIONS_ASYNC = """\
@@ -681,6 +692,7 @@ async def get_controls(
     control_id: Optional[str] = None,
     status: Optional[str] = None,
     co_id: Optional[str] = None,
+    component_id: Optional[str] = None,
     offset: int = 0,
     limit: int = 0,
     include_deleted: bool = False,
@@ -696,6 +708,7 @@ async def get_controls(
         control_id: Optional specific control for detail mode.
         status: Filter by "implemented", "not_implemented", "verified".
         co_id: Filter by control objective ID.
+        component_id: Filter by component ID (e.g., "CMP1").
         offset: Skip first N (for pagination).
         limit: Max to return (0=all).
         include_deleted: Include soft-deleted controls.
@@ -709,6 +722,7 @@ async def get_controls(
             control_id=control_id or "",
             status=status or "",
             co_id=co_id or "",
+            component_id=component_id or "",
             offset=offset,
             limit=limit,
             summary_only=summary_only,
@@ -1516,6 +1530,93 @@ async def add_model_to_system(server_version: str, system_id: str, model_id: str
     """
     try:
         return _dump(await _get_client().add_model_to_system(system_id, model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Components ===
+
+
+@mcp.tool()
+async def add_component(
+    server_version: str,
+    model_id: str,
+    name: str,
+    repo_url: str = "",
+    path: str = "",
+    trust_boundary_ids: str = "",
+) -> dict:
+    """Add a component to a threat model.
+
+    Components bridge security architecture to code organization. They map
+    trust boundaries to repos so controls can be scoped to the codebase
+    that implements them.
+
+    Args:
+        model_id: ID of the threat model.
+        name: Component name (e.g., "Backend API", "Auth Worker").
+        repo_url: Repository URL (e.g., "github.com/org/backend").
+        path: Path within repo for monorepos (e.g., "services/auth").
+        trust_boundary_ids: Comma-separated trust boundary IDs.
+    """
+    tb_ids = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()] if trust_boundary_ids else []
+    try:
+        return _dump(await _get_client().add_component(
+            model_id, name, repo_url, path, tb_ids or None,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def edit_component(
+    server_version: str,
+    model_id: str,
+    component_id: str,
+    name: str = "",
+    repo_url: str = "",
+    path: str = "",
+    trust_boundary_ids: str = "",
+) -> dict:
+    """Edit a component's properties.
+
+    Args:
+        model_id: ID of the threat model.
+        component_id: ID of the component (e.g., "CMP1").
+        name: New name (empty = unchanged).
+        repo_url: New repo URL (empty = unchanged).
+        path: New path (empty = unchanged).
+        trust_boundary_ids: New trust boundary IDs (comma-separated, empty = unchanged).
+    """
+    fields: dict = {}
+    if name:
+        fields["name"] = name
+    if repo_url:
+        fields["repo_url"] = repo_url
+    if path:
+        fields["path"] = path
+    if trust_boundary_ids:
+        fields["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
+    try:
+        return _dump(await _get_client().edit_component(model_id, component_id, **fields))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def remove_component(
+    server_version: str,
+    model_id: str,
+    component_id: str,
+) -> dict:
+    """Remove a component. Clears component_id from associated controls.
+
+    Args:
+        model_id: ID of the threat model.
+        component_id: ID of the component to remove.
+    """
+    try:
+        return _dump(await _get_client().remove_component(model_id, component_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
