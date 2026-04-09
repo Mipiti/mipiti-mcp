@@ -743,6 +743,7 @@ async def regenerate_controls(
     model_id: str,
     ctx: Context,
     mode: str = "batch",
+    batch_size: int = 0,
     co_ids: Optional[str] = None,
 ) -> dict:
     """Regenerate controls from control objectives.
@@ -757,8 +758,10 @@ async def regenerate_controls(
 
     Args:
         model_id: ID of the threat model.
-        mode: "batch" (default, fast) or "per_co" (thorough, one LLM
-            call per CO with accumulated context).
+        mode: "batch" (default) or "per_co" (most thorough, one LLM
+            call per CO).
+        batch_size: COs per batch in batch mode (default: 15). Smaller
+            = more accurate + granular progress, more LLM calls.
         co_ids: Optional comma-separated CO IDs to regenerate (e.g.
             "CO1,CO5"). When omitted, regenerates all controls.
     """
@@ -770,7 +773,7 @@ async def regenerate_controls(
     try:
         client = _get_client()
         result = await client.regenerate_controls(
-            model_id, mode=mode, co_ids=parsed_co_ids,
+            model_id, mode=mode, batch_size=batch_size, co_ids=parsed_co_ids,
         )
         if isinstance(result, dict) and "job_id" in result:
             return await _await_backend_job(client, result["job_id"], ctx)

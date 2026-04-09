@@ -270,9 +270,12 @@ class MipitiClient:
         self,
         model_id: str,
         mode: str = "batch",
+        batch_size: int = 0,
         co_ids: list[str] | None = None,
     ) -> dict:
         body: dict = {"mode": mode}
+        if batch_size > 0:
+            body["batch_size"] = batch_size
         if co_ids is not None:
             body["co_ids"] = co_ids
         return await self._post(f"/api/models/{model_id}/controls/regenerate", body)
