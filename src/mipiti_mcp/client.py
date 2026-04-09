@@ -45,7 +45,7 @@ ProgressCallback = Callable[[float, float, str], Awaitable[None]]
 
 progress/total represent completed work (0/6 = starting, 5.6/6 = 93%).
 step_start: progress = step - 1 (previous step completed).
-step_progress: progress = step - 1 + sub_step/sub_total (fractional).
+step_progress: progress = step - 1 + (sub_step - 1)/sub_total (fractional, sub_step is 1-indexed).
 """
 
 
@@ -157,7 +157,7 @@ class MipitiClient:
                         sub_total = data.get("sub_total", 1)
                         detail = data.get("detail", "")
                         await on_progress(
-                            step - 1 + sub / sub_total, total, detail,
+                            step - 1 + (sub - 1) / sub_total, total, detail,
                         )
                 elif event_type == "result":
                     result_data = json.loads(sse.data)
