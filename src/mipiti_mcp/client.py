@@ -40,8 +40,13 @@ from .types import (
 
 DEFAULT_API_URL = "https://api.mipiti.io"
 
-ProgressCallback = Callable[[int, int, str], Awaitable[None]]
-"""Signature: (step, total_steps, title) -> None"""
+ProgressCallback = Callable[[float, float, str], Awaitable[None]]
+"""Signature: (progress, total, message) -> None.
+
+progress/total represent completed work (0/6 = starting, 5.6/6 = 93%).
+step_start: progress = step - 1 (previous step completed).
+step_progress: progress = step - 1 + sub_step/sub_total (fractional).
+"""
 
 
 class MipitiClient:
@@ -139,10 +144,20 @@ class MipitiClient:
                 if event_type == "step_start":
                     if on_progress:
                         data = json.loads(sse.data)
+                        step = data.get("step", 0)
+                        total = data.get("total_steps", 5)
+                        title = data.get("title", "")
+                        await on_progress(step - 1, total, title)
+                elif event_type == "step_progress":
+                    if on_progress:
+                        data = json.loads(sse.data)
+                        step = data.get("step", 0)
+                        total = data.get("total_steps", 5)
+                        sub = data.get("sub_step", 0)
+                        sub_total = data.get("sub_total", 1)
+                        detail = data.get("detail", "")
                         await on_progress(
-                            data.get("step", 0),
-                            data.get("total_steps", 5),
-                            data.get("title", ""),
+                            step - 1 + sub / sub_total, total, detail,
                         )
                 elif event_type == "result":
                     result_data = json.loads(sse.data)
