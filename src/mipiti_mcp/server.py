@@ -429,7 +429,7 @@ async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, ti
             raise ToolError(f"Operation timed out after {timeout}s")
         progress = data.get("progress", "")
         if progress:
-            await ctx.info(str(progress))
+            await ctx.report_progress(0, 1, message=str(progress))
         wait = data.get("poll_after_seconds", 3)
         await asyncio.sleep(wait)
 
@@ -463,14 +463,6 @@ def _api_error(exc: Exception) -> ToolError:
 # Tool implementations
 # ------------------------------------------------------------------
 
-STEP_NAMES = {
-    1: "Generating assets",
-    2: "Refining assets",
-    3: "Generating attackers",
-    4: "Refining attackers",
-    5: "Generating trust boundaries and control objectives",
-    6: "Deriving security controls",
-}
 
 
 # === Threat Model Generation & Management ===
@@ -497,14 +489,13 @@ async def generate_threat_model(
             threat model. Can be a few sentences or a detailed spec.
         force: Skip similar model detection.
     """
-    async def on_progress(step, total, title):
-        await ctx.report_progress(step, total)
-        label = STEP_NAMES.get(step, title)
-        await ctx.info(f"Step {step}/{total}: {label}")
+    async def on_progress(progress, total, message):
+        await ctx.report_progress(progress, total, message=message)
     try:
         result = await _get_client().generate_threat_model(
             feature_description, on_progress=on_progress,
         )
+        await ctx.report_progress(1, 1, message="Complete")
         tm = result.threat_model
         return {
             "model_id": tm.id,
@@ -535,13 +526,13 @@ async def refine_threat_model(
         model_id: ID of the threat model to refine.
         instruction: What to change, e.g. "Add CSRF attack vectors".
     """
-    async def on_progress(step, total, title):
-        await ctx.report_progress(step, total)
-        await ctx.info(f"Step {step}/{total}: {title}")
+    async def on_progress(progress, total, message):
+        await ctx.report_progress(progress, total, message=message)
     try:
         result = await _get_client().refine_threat_model(
             model_id, instruction, on_progress=on_progress,
         )
+        await ctx.report_progress(1, 1, message="Complete")
         tm = result.threat_model
         return {
             "model_id": tm.id,
