@@ -243,6 +243,7 @@ class MipitiClient:
     async def get_controls(
         self, model_id: str, include_deleted: bool = False,
         control_id: str = "", status: str = "", co_id: str = "",
+        component_id: str = "",
         offset: int = 0, limit: int = 0, summary_only: bool = False,
     ) -> ControlsResponse:
         params: dict[str, Any] = {}
@@ -256,6 +257,8 @@ class MipitiClient:
             params["status"] = status
         if co_id:
             params["co_id"] = co_id
+        if component_id:
+            params["component_id"] = component_id
         if offset:
             params["offset"] = offset
         if limit:
@@ -267,9 +270,12 @@ class MipitiClient:
         self,
         model_id: str,
         mode: str = "batch",
+        batch_size: int = 0,
         co_ids: list[str] | None = None,
     ) -> dict:
         body: dict = {"mode": mode}
+        if batch_size > 0:
+            body["batch_size"] = batch_size
         if co_ids is not None:
             body["co_ids"] = co_ids
         return await self._post(f"/api/models/{model_id}/controls/regenerate", body)
@@ -612,6 +618,25 @@ class MipitiClient:
 
     async def get_operation(self, job_id: str) -> dict:
         return await self._get(f"/api/operations/{job_id}")
+
+    # ------------------------------------------------------------------
+    # Components
+    # ------------------------------------------------------------------
+
+    async def add_component(self, model_id: str, name: str, repo_url: str = "", path: str = "", trust_boundary_ids: list[str] | None = None) -> dict:
+        body: dict = {"name": name, "repo_url": repo_url, "path": path}
+        if trust_boundary_ids:
+            body["trust_boundary_ids"] = trust_boundary_ids
+        return await self._post(f"/api/models/{model_id}/components", body)
+
+    async def edit_component(self, model_id: str, component_id: str, **fields) -> dict:
+        return await self._put(f"/api/models/{model_id}/components/{component_id}", fields)
+
+    async def remove_component(self, model_id: str, component_id: str) -> dict:
+        return await self._delete(f"/api/models/{model_id}/components/{component_id}")
+
+    async def discover_components(self, repo_url: str) -> dict:
+        return await self._get("/api/components/discover", params={"repo_url": repo_url})
 
     # ------------------------------------------------------------------
     # System Compliance
