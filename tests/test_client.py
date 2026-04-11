@@ -507,3 +507,180 @@ class TestSubmitAssertionsClient:
         )
         assert len(result.assertions) == 1
         await client.close()
+
+
+# ------------------------------------------------------------------
+# Idempotency-Key + retry tests
+# ------------------------------------------------------------------
+
+
+class TestIdempotencyKey:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_post_includes_fresh_key(self, mock_env: None) -> None:
+        """Each _post call generates a fresh Idempotency-Key UUID."""
+        captured_keys: list[str] = []
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured_keys.append(request.headers.get("Idempotency-Key", ""))
+            return httpx.Response(200, json={"id": "A1", "name": "ok"})
+
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_capture)
+
+        client = MipitiClient()
+        await client.add_asset("tm-001", name="One")
+        await client.add_asset("tm-001", name="Two")
+        await client.close()
+
+        assert len(captured_keys) == 2
+        assert all(k for k in captured_keys), f"missing keys: {captured_keys}"
+        assert captured_keys[0] != captured_keys[1], "each call should get a fresh UUID"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_patch_includes_key(self, mock_env: None) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured["key"] = request.headers.get("Idempotency-Key", "")
+            return httpx.Response(200, json={"ok": True})
+
+        respx.patch("https://test.api.mipiti.io/api/models/tm-001").mock(side_effect=_capture)
+
+        client = MipitiClient()
+        await client.rename_model("tm-001", "New Name")
+        await client.close()
+        assert captured["key"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_put_includes_key(self, mock_env: None) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured["key"] = request.headers.get("Idempotency-Key", "")
+            return httpx.Response(200, json={"id": "A1", "name": "edited"})
+
+        respx.put("https://test.api.mipiti.io/api/models/tm-001/assets/A1").mock(side_effect=_capture)
+
+        client = MipitiClient()
+        await client.edit_asset("tm-001", "A1", name="edited")
+        await client.close()
+        assert captured["key"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_delete_includes_key(self, mock_env: None) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured["key"] = request.headers.get("Idempotency-Key", "")
+            return httpx.Response(200, json={"deleted": True})
+
+        respx.delete("https://test.api.mipiti.io/api/models/tm-001/assets/A1").mock(side_effect=_capture)
+
+        client = MipitiClient()
+        await client.remove_asset("tm-001", "A1")
+        await client.close()
+        assert captured["key"]
+
+
+class TestTransientRetry:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_retry_on_connect_error(self, mock_env: None, monkeypatch) -> None:
+        """ConnectError on first attempt → retry → success on second attempt."""
+        # Skip the actual sleep delays to keep tests fast
+        async def _no_sleep(_): pass
+        monkeypatch.setattr("mipiti_mcp.client.asyncio.sleep", _no_sleep)
+
+        captured_keys: list[str] = []
+        attempts = {"n": 0}
+
+        def _flaky(request: httpx.Request) -> httpx.Response:
+            captured_keys.append(request.headers.get("Idempotency-Key", ""))
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise httpx.ConnectError("network blip")
+            return httpx.Response(200, json={"id": "A1", "name": "after retry"})
+
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
+
+        client = MipitiClient()
+        result = await client.add_asset("tm-001", name="x")
+        await client.close()
+
+        assert result.name == "after retry"
+        assert attempts["n"] == 2
+        # Both attempts must use the SAME key so the server cache deduplicates
+        assert len(captured_keys) == 2
+        assert captured_keys[0] == captured_keys[1]
+        assert captured_keys[0]  # non-empty
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_retry_on_503(self, mock_env: None, monkeypatch) -> None:
+        """503 status → retry → success."""
+        async def _no_sleep(_): pass
+        monkeypatch.setattr("mipiti_mcp.client.asyncio.sleep", _no_sleep)
+
+        captured_keys: list[str] = []
+        attempts = {"n": 0}
+
+        def _flaky(request: httpx.Request) -> httpx.Response:
+            captured_keys.append(request.headers.get("Idempotency-Key", ""))
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return httpx.Response(503, text="Service Unavailable")
+            return httpx.Response(200, json={"id": "A1", "name": "ok"})
+
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
+
+        client = MipitiClient()
+        await client.add_asset("tm-001", name="x")
+        await client.close()
+        assert attempts["n"] == 2
+        assert captured_keys[0] == captured_keys[1]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_retry_on_4xx(self, mock_env: None, monkeypatch) -> None:
+        """4xx response is NOT retried — fails immediately."""
+        async def _no_sleep(_): pass
+        monkeypatch.setattr("mipiti_mcp.client.asyncio.sleep", _no_sleep)
+
+        attempts = {"n": 0}
+
+        def _bad_request(request: httpx.Request) -> httpx.Response:
+            attempts["n"] += 1
+            return httpx.Response(400, json={"detail": "bad input"})
+
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_bad_request)
+
+        client = MipitiClient()
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.add_asset("tm-001", name="x")
+        await client.close()
+        assert attempts["n"] == 1  # no retry
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_retries_exhausted_raises(self, mock_env: None, monkeypatch) -> None:
+        """Persistent ConnectError exhausts retries and raises."""
+        async def _no_sleep(_): pass
+        monkeypatch.setattr("mipiti_mcp.client.asyncio.sleep", _no_sleep)
+
+        attempts = {"n": 0}
+
+        def _always_fail(request: httpx.Request) -> httpx.Response:
+            attempts["n"] += 1
+            raise httpx.ConnectError("permanent")
+
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_always_fail)
+
+        client = MipitiClient()
+        with pytest.raises(httpx.ConnectError, match="permanent"):
+            await client.add_asset("tm-001", name="x")
+        await client.close()
+        # Initial attempt + 3 retries = 4 total attempts
+        assert attempts["n"] == 4

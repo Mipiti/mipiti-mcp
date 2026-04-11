@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import uuid
 from typing import Any, Awaitable, Callable
 
 import httpx
 from httpx_sse import aconnect_sse
+
+# Transient error retry policy for mutating requests. Each retry reuses the
+# same Idempotency-Key so the server's idempotency cache deduplicates them
+# safely (Stripe-style pattern).
+_RETRY_BACKOFFS = (0.5, 1.0, 2.0)
+_TRANSIENT_STATUS_CODES = frozenset({502, 503, 504})
+_TRANSIENT_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.WriteError,
+    httpx.PoolTimeout,
+)
 
 from .types import (
     ChatResponse,
@@ -95,23 +110,87 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def _request_with_idempotency(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        params: Any = None,
+    ) -> httpx.Response:
+        """Send a mutating HTTP request with an Idempotency-Key header and
+        automatic retry on transient errors.
+
+        A fresh UUID is generated once per logical call. All retry attempts
+        within this call reuse the same key so the server-side idempotency
+        cache safely deduplicates them. Retries fire on connect errors, read
+        errors, write errors, pool timeouts, and 502/503/504 status codes,
+        with backoff intervals 0.5s / 1s / 2s.
+
+        The `json` keyword matches httpx's own API so this helper feels like
+        the thin wrapper that it is.
+        """
+        idem_key = str(uuid.uuid4())
+        headers = {"Idempotency-Key": idem_key}
+        client = self._get_client()
+        last_exc: Exception | None = None
+        for attempt in range(len(_RETRY_BACKOFFS) + 1):
+            try:
+                if method == "POST":
+                    resp = await client.post(path, json=json, params=params, headers=headers)
+                elif method == "PATCH":
+                    resp = await client.patch(path, json=json, params=params, headers=headers)
+                elif method == "PUT":
+                    resp = await client.put(path, json=json, params=params, headers=headers)
+                elif method == "DELETE":
+                    resp = await client.delete(path, params=params, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported method for idempotent retry: {method}")
+            except _TRANSIENT_EXCEPTIONS as exc:
+                last_exc = exc
+                if attempt >= len(_RETRY_BACKOFFS):
+                    raise
+                await asyncio.sleep(_RETRY_BACKOFFS[attempt])
+                continue
+            # Retry transient server errors
+            if resp.status_code in _TRANSIENT_STATUS_CODES and attempt < len(_RETRY_BACKOFFS):
+                await asyncio.sleep(_RETRY_BACKOFFS[attempt])
+                continue
+            return resp
+        # Unreachable: either we returned, raised, or exhausted retries above
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Idempotent request retry exhausted without resolution")
+
     async def _post(self, path: str, body: dict | None = None, **kwargs: Any) -> Any:
-        resp = await self._get_client().post(path, json=body, **kwargs)
+        params = kwargs.pop("params", None)
+        if kwargs:
+            raise TypeError(f"Unexpected kwargs for _post: {list(kwargs)}")
+        resp = await self._request_with_idempotency("POST", path, json=body, params=params)
         resp.raise_for_status()
         return resp.json()
 
     async def _patch(self, path: str, body: dict | None = None, **kwargs: Any) -> Any:
-        resp = await self._get_client().patch(path, json=body, **kwargs)
+        params = kwargs.pop("params", None)
+        if kwargs:
+            raise TypeError(f"Unexpected kwargs for _patch: {list(kwargs)}")
+        resp = await self._request_with_idempotency("PATCH", path, json=body, params=params)
         resp.raise_for_status()
         return resp.json()
 
     async def _put(self, path: str, body: dict, **kwargs: Any) -> Any:
-        resp = await self._get_client().put(path, json=body, **kwargs)
+        params = kwargs.pop("params", None)
+        if kwargs:
+            raise TypeError(f"Unexpected kwargs for _put: {list(kwargs)}")
+        resp = await self._request_with_idempotency("PUT", path, json=body, params=params)
         resp.raise_for_status()
         return resp.json()
 
     async def _delete(self, path: str, **kwargs: Any) -> Any:
-        resp = await self._get_client().delete(path, **kwargs)
+        params = kwargs.pop("params", None)
+        if kwargs:
+            raise TypeError(f"Unexpected kwargs for _delete: {list(kwargs)}")
+        resp = await self._request_with_idempotency("DELETE", path, params=params)
         resp.raise_for_status()
         if resp.status_code == 204:
             return None
@@ -132,12 +211,19 @@ class MipitiClient:
         if model_id:
             body["model_id"] = model_id
 
+        # Generate a fresh Idempotency-Key for this stream request. The
+        # streaming endpoint handles caching directly (the global middleware
+        # excludes /api/model/stream). On retry within the cache TTL, the
+        # server replays the captured SSE bytes verbatim.
+        idem_key = str(uuid.uuid4())
+
         client = self._get_client()
         result_data: dict[str, Any] | None = None
         chat_data: dict[str, Any] | None = None
 
         async with aconnect_sse(
             client, "POST", "/api/model/stream", json=body,
+            headers={"Idempotency-Key": idem_key},
         ) as event_source:
             async for sse in event_source.aiter_sse():
                 event_type = sse.event
@@ -311,7 +397,8 @@ class MipitiClient:
             body["description"] = description
         if codebase_findings:
             body["codebase_findings"] = codebase_findings
-        resp = await self._get_client().patch(
+        resp = await self._request_with_idempotency(
+            "PATCH",
             f"/api/models/{model_id}/controls/{control_id}/refine",
             json=body,
         )
@@ -343,7 +430,8 @@ class MipitiClient:
             "defense_in_depth": defense_in_depth,
             "justification": justification,
         }
-        resp = await self._get_client().put(
+        resp = await self._request_with_idempotency(
+            "PUT",
             f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups",
             json=body,
         )
@@ -353,7 +441,8 @@ class MipitiClient:
     async def link_assumption(
         self, model_id: str, assumption_id: str, target_model_id: str,
     ) -> dict:
-        resp = await self._get_client().post(
+        resp = await self._request_with_idempotency(
+            "POST",
             f"/api/models/{model_id}/assumptions/{assumption_id}/link",
             json={"target_model_id": target_model_id},
         )
