@@ -78,7 +78,7 @@ external service settings.
 
 **Key tools:**
 - `get_controls` — lists controls with current status. Use `summary_only=True` \
-for a compact response (id, description, status, assertion_count only).
+for a compact response (id, description, status, assertion_count, assumed_by).
 - `get_control_objectives` — lists COs with which controls cover each one. \
 Includes `boundary_reachable` and `boundary_unreachable_reason` per CO. \
 Useful for understanding scope before linking assumptions or regenerating.
@@ -763,8 +763,8 @@ async def get_controls(
         offset: Skip first N (for pagination).
         limit: Max to return (0=all).
         include_deleted: Include soft-deleted controls.
-        summary_only: If True, returns only id, description, status, and
-            assertion_count per control (much smaller response).
+        summary_only: If True, returns only id, description, status,
+            assertion_count, and assumed_by per control (much smaller response).
     """
     try:
         data = await _get_client().get_controls(
