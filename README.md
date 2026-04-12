@@ -84,13 +84,13 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (63)
+## Tools (69)
 
 ### Threat Modeling
 
 | Tool | Description |
 |------|-------------|
-| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Returns a `job_id` — poll with `get_operation_status`. |
+| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Progress reported automatically via MCP protocol — the tool blocks until complete. |
 | `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. |
 | `query_threat_model` | Ask a question about an existing threat model. |
 | `get_threat_model` | Get the full details of a specific threat model (trust boundaries, assets, attackers, assumptions). Use `include_cos=True` to include control objectives. |
@@ -125,6 +125,7 @@ uvx mipiti-mcp
 | `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. |
 | `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
 | `check_control_gaps` | AI-powered gap analysis across all controls. |
+| `get_mitigation_groups` / `set_mitigation_groups` | Inspect and modify how controls are grouped into mitigation paths for a CO (AND within groups, OR across groups). Platform AI-evaluates whether proposed changes preserve CO coverage. |
 
 ### Assumptions and Attestation
 
@@ -169,7 +170,13 @@ uvx mipiti-mcp
 | `get_compliance_report` | Coverage report for a selected framework. |
 | `auto_map_controls` | AI-powered semantic mapping of controls to framework requirements. |
 | `map_control_to_requirement` | Manual control-to-requirement mapping. |
-| `suggest_compliance_remediation` / `apply_compliance_remediation` | AI-suggested controls for uncovered requirements. |
+| `auto_remediate` | LLM-powered gap closure — proposes new assets, attackers, and controls for uncovered framework requirements. |
+
+### Components
+
+| Tool | Description |
+|------|-------------|
+| `add_component` / `edit_component` / `remove_component` | Components bridge trust boundaries (security architecture) to repositories (code organization). `Component(id, name, repo_url, path, trust_boundary_ids)` scopes controls to the codebase that implements them. Used for multi-repo systems and per-repo threat models. |
 
 ### Systems and Workspaces
 
@@ -178,6 +185,8 @@ uvx mipiti-mcp
 | `list_workspaces` | List available workspaces. |
 | `list_systems` / `get_system` / `create_system` | Manage systems (groups of related models). |
 | `add_model_to_system` | Add a model to a system. |
+| `get_system_dependencies` | Cross-model dependency graph with satisfaction status for assumptions linked to other models. |
+| `link_dependency` | Link a cross-model assumption to a target model — dual-path satisfaction (controls OR manual attestation). |
 | `select_system_compliance_frameworks` / `get_system_compliance_report` | System-level compliance aggregation. |
 
 ### Setup and Operations
@@ -186,7 +195,6 @@ uvx mipiti-mcp
 |------|-------------|
 | `get_setup_status` | Check which onboarding steps are done. |
 | `complete_setup_step` | Mark an onboarding step as done (mcp_configured, mipiti_verify_installed, ci_secret_added, ci_pipeline_added). |
-| `get_operation_status` | Poll background operations. Response includes adaptive `poll_after_seconds`. |
 
 ## Development
 
