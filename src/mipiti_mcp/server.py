@@ -487,13 +487,36 @@ def _dump(obj: Any) -> dict:
 
 
 def _api_error(exc: Exception) -> ToolError:
-    """Convert an httpx error into a ToolError with a clean message."""
+    """Convert an httpx error into a ToolError with a clean message.
+
+    Special-cases the backend's DUPLICATE_NATURAL_KEY 409 (Tier 3 uniqueness
+    constraint) so the LLM agent gets a structured "this already exists"
+    message with the existing entity's id, instead of a generic API error
+    blob it would have to parse itself.
+    """
     import httpx
     if isinstance(exc, httpx.HTTPStatusError):
         try:
-            detail = exc.response.json().get("detail", str(exc))
+            payload = exc.response.json()
+            detail = payload.get("detail", str(exc))
         except Exception:
             detail = exc.response.text or str(exc)
+            payload = {}
+
+        # Structured DUPLICATE_NATURAL_KEY response from the Tier 3 constraint
+        if (
+            exc.response.status_code == 409
+            and isinstance(detail, dict)
+            and detail.get("error") == "DUPLICATE_NATURAL_KEY"
+        ):
+            entity_type = detail.get("entity_type", "entity")
+            existing_id = detail.get("existing_id") or "(unknown id)"
+            message = detail.get("message") or f"A {entity_type} with this key already exists."
+            return ToolError(
+                f"{message} The existing {entity_type} has id={existing_id}. "
+                "Use the existing entity instead, or rename/differentiate the new one."
+            )
+
         return ToolError(f"API error ({exc.response.status_code}): {detail}")
     return ToolError(str(exc))
 
