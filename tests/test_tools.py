@@ -641,6 +641,66 @@ class TestAwaitBackendJob:
             with pytest.raises(ToolError, match="timed out"):
                 await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
 
+    @pytest.mark.asyncio
+    async def test_client_disconnect_aborts_polling(self) -> None:
+        """Client disconnects mid-poll — ToolError raised, no further polling."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_disconnect"}))
+        mock.get_operation = AsyncMock(return_value={"status": "running", "poll_after_seconds": 0})
+        ctx = _mock_ctx()
+
+        fake_request = AsyncMock()
+        fake_request.is_disconnected = AsyncMock(return_value=True)
+
+        with _patch_client(mock), patch(
+            "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+        ):
+            with pytest.raises(ToolError, match="Client disconnected"):
+                await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        # Verify we did NOT keep polling — at most one get_operation call (the disconnect
+        # check happens at the top of the loop, before the operation poll).
+        assert mock.get_operation.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_stdio_no_http_request_polls_normally(self) -> None:
+        """stdio transport — no HTTP request — polling proceeds normally without disconnect check."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_stdio"}))
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {"mappings_created": 3, "controls_mapped": 2, "controls_total": 5},
+        })
+        ctx = _mock_ctx()
+
+        with _patch_client(mock), patch(
+            "fastmcp.server.dependencies.get_http_request",
+            side_effect=RuntimeError("No active HTTP request found."),
+        ):
+            result = await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        assert result["mappings_created"] == 3
+        mock.get_operation.assert_awaited_once_with("job_stdio")
+
+    @pytest.mark.asyncio
+    async def test_is_disconnected_raises_treated_as_connected(self) -> None:
+        """is_disconnected() raises an exception — treat as still-connected (no false positive)."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_robust"}))
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {"mappings_created": 1, "controls_mapped": 1, "controls_total": 1},
+        })
+        ctx = _mock_ctx()
+
+        fake_request = AsyncMock()
+        fake_request.is_disconnected = AsyncMock(side_effect=RuntimeError("transport in unusual state"))
+
+        with _patch_client(mock), patch(
+            "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+        ):
+            result = await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        assert result["controls_total"] == 1
+        mock.get_operation.assert_awaited_once_with("job_robust")
+
 
 # ------------------------------------------------------------------
 # Workspaces & Systems

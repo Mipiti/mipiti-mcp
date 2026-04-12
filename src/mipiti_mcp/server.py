@@ -427,9 +427,37 @@ def _get_client() -> MipitiClient:
 
 
 async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, timeout: float = 600) -> dict:
-    """Poll a backend job until completion, reporting progress via MCP protocol."""
+    """Poll a backend job until completion, reporting progress via MCP protocol.
+
+    Detects client disconnect (when running over Streamable HTTP transport) and
+    aborts polling early so we don't keep doing work for a dead client. The
+    backend job itself is intentionally NOT cancelled — it continues running so
+    that a retry with the same Idempotency-Key can pick up the cached result.
+    """
     deadline = time.monotonic() + timeout
+
+    # Resolve the underlying ASGI request once (HTTP transport only). For stdio
+    # there is no HTTP request and disconnect detection does not apply.
+    http_request = None
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        http_request = get_http_request()
+    except Exception:
+        http_request = None
+
     while True:
+        if http_request is not None:
+            try:
+                if await http_request.is_disconnected():
+                    raise ToolError("Client disconnected before job completed. Retry the tool to check status.")
+            except ToolError:
+                raise
+            except Exception:
+                # is_disconnected() can raise on some transport states; treat
+                # as still-connected to avoid false positives that would abort
+                # legitimate long-running jobs.
+                pass
+
         data = await client.get_operation(job_id)
         status = data.get("status")
         if status == "completed":
@@ -459,13 +487,36 @@ def _dump(obj: Any) -> dict:
 
 
 def _api_error(exc: Exception) -> ToolError:
-    """Convert an httpx error into a ToolError with a clean message."""
+    """Convert an httpx error into a ToolError with a clean message.
+
+    Special-cases the backend's DUPLICATE_NATURAL_KEY 409 (Tier 3 uniqueness
+    constraint) so the LLM agent gets a structured "this already exists"
+    message with the existing entity's id, instead of a generic API error
+    blob it would have to parse itself.
+    """
     import httpx
     if isinstance(exc, httpx.HTTPStatusError):
         try:
-            detail = exc.response.json().get("detail", str(exc))
+            payload = exc.response.json()
+            detail = payload.get("detail", str(exc))
         except Exception:
             detail = exc.response.text or str(exc)
+            payload = {}
+
+        # Structured DUPLICATE_NATURAL_KEY response from the Tier 3 constraint
+        if (
+            exc.response.status_code == 409
+            and isinstance(detail, dict)
+            and detail.get("error") == "DUPLICATE_NATURAL_KEY"
+        ):
+            entity_type = detail.get("entity_type", "entity")
+            existing_id = detail.get("existing_id") or "(unknown id)"
+            message = detail.get("message") or f"A {entity_type} with this key already exists."
+            return ToolError(
+                f"{message} The existing {entity_type} has id={existing_id}. "
+                "Use the existing entity instead, or rename/differentiate the new one."
+            )
+
         return ToolError(f"API error ({exc.response.status_code}): {detail}")
     return ToolError(str(exc))
 
