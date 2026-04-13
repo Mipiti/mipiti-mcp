@@ -94,7 +94,7 @@ uvx mipiti-mcp
 | `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. |
 | `query_threat_model` | Ask a question about an existing threat model. |
 | `get_threat_model` | Get the full details of a specific threat model (trust boundaries, assets, attackers, assumptions). Use `include_cos=True` to include control objectives. |
-| `list_threat_models` | List all saved threat models with IDs, titles, versions, and creation dates. |
+| `list_threat_models` | List all saved threat models with IDs, titles, versions, and creation dates. Supports `source` filter and `include_assessment_summary=True` to inline per-model posture counts in one call (avoids N+1 looping `assess_model`). |
 | `rename_threat_model` | Rename a model (metadata only, no new version). |
 | `delete_threat_model` | Permanently delete a model and all its data. |
 | `export_threat_model` | Export as PDF, HTML, or CSV. |

@@ -213,6 +213,8 @@ class TestListThreatModels:
             result = await list_threat_models(server_version="0")
         assert result["count"] == 2
         assert result["items"][0]["id"] == "tm-001"
+        # Default: lean response, no assessment_summary field
+        assert "assessment_summary" not in result["items"][0]
 
     @pytest.mark.asyncio
     async def test_empty(self) -> None:
@@ -220,6 +222,54 @@ class TestListThreatModels:
         with _patch_client(mock):
             result = await list_threat_models(server_version="0")
         assert result["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_source_filter_forwarded(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_threat_models(server_version="0", source="mcp")
+        mock.list_models.assert_awaited_once_with(source="mcp", include="")
+
+    @pytest.mark.asyncio
+    async def test_include_assessment_summary_forwards_include_param(self) -> None:
+        """When the caller requests posture, the tool must pass include=
+        to the backend so the list response inlines the summary."""
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_threat_models(
+                server_version="0", include_assessment_summary=True,
+            )
+        mock.list_models.assert_awaited_once_with(
+            source="", include="assessment_summary",
+        )
+
+    @pytest.mark.asyncio
+    async def test_include_assessment_summary_surfaces_in_items(self) -> None:
+        """When the backend returns an inlined assessment, the tool copies
+        it onto each item as `assessment_summary`."""
+        # Build a ModelSummary with the inlined assessment via extra="allow".
+        tm_with_asmt = ModelSummary.model_validate({
+            "id": "tm-001",
+            "title": "Login API",
+            "feature_description": "...",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "version": 1,
+            "assessment": {
+                "summary": {"mitigated": 9, "at_risk": 3, "unassessed": 0},
+                "message": "13 controls not implemented, blocking 3 COs.",
+            },
+        })
+        mock = _mock_client(list_models=AsyncMock(return_value=[tm_with_asmt]))
+        with _patch_client(mock):
+            result = await list_threat_models(
+                server_version="0", include_assessment_summary=True,
+            )
+        assert result["count"] == 1
+        item = result["items"][0]
+        assert item["id"] == "tm-001"
+        assert "assessment_summary" in item
+        assert item["assessment_summary"]["summary"]["at_risk"] == 3
+        assert "13 controls" in item["assessment_summary"]["message"]
 
 
 class TestRenameThreatModel:
