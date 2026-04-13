@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "5"
+_SERVER_VERSION = "6"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
