@@ -29,6 +29,8 @@ from mipiti_mcp.server import (
     delete_assertion,
     delete_control,
     delete_threat_model,
+    get_control_assumption_groups,
+    set_control_assumption_groups,
     edit_asset,
     edit_attacker,
     export_threat_model,
@@ -132,6 +134,17 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "create_system": {"id": "sys-2", "name": "New"},
         "add_model_to_system": {"added": True},
         "refine_control": {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}},
+        "get_control_assumption_groups": {
+            "control_id": "CTRL-01",
+            "control_description": "Test control",
+            "groups": {"1": [{"id": "AS1", "description": "AWS KMS", "active": True, "missing": False}]},
+            "unmapped": [],
+        },
+        "set_control_assumption_groups": {
+            "control_id": "CTRL-01",
+            "assumption_groups": {"1": ["AS1"]},
+            "justification": "AWS KMS handles this control.",
+        },
     }
 
     for name, default_val in defaults.items():
@@ -878,3 +891,117 @@ class TestGetScanPrompt:
         assert "prompt" in result
 
 
+
+
+# ------------------------------------------------------------------
+# Control Assumption Groups
+# ------------------------------------------------------------------
+
+
+class TestGetControlAssumptionGroups:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_control_assumption_groups(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+            )
+        assert result["control_id"] == "CTRL-01"
+        assert "1" in result["groups"]
+        assert result["groups"]["1"][0]["id"] == "AS1"
+
+
+class TestSetControlAssumptionGroups:
+    @pytest.mark.asyncio
+    async def test_single_group_single_member(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await set_control_assumption_groups(
+                server_version="0",
+                model_id="tm-001",
+                control_id="CTRL-01",
+                groups='{"1": ["AS1"]}',
+                justification="AWS KMS handles this control.",
+            )
+        assert result["assumption_groups"] == {"1": ["AS1"]}
+
+    @pytest.mark.asyncio
+    async def test_compound_and_multi_group(self) -> None:
+        mock = _mock_client()
+        # Match the exact input — the mock returns whatever the fixture returns,
+        # so we only need to verify the tool accepts the structure and forwards it.
+        mock.set_control_assumption_groups = AsyncMock(return_value={
+            "control_id": "CTRL-01",
+            "assumption_groups": {"1": ["AS1", "AS2"], "2": ["AS3"]},
+            "justification": "Either KMS+review or HSM.",
+        })
+        with _patch_client(mock):
+            result = await set_control_assumption_groups(
+                server_version="0",
+                model_id="tm-001",
+                control_id="CTRL-01",
+                groups='{"1": ["AS1", "AS2"], "2": ["AS3"]}',
+                justification="Either KMS+review or HSM.",
+            )
+        assert result["assumption_groups"] == {"1": ["AS1", "AS2"], "2": ["AS3"]}
+        # Confirm the parsed dict was forwarded to the client (not the raw string)
+        mock.set_control_assumption_groups.assert_awaited_once()
+        call_args = mock.set_control_assumption_groups.call_args
+        assert call_args.args[2] == {"1": ["AS1", "AS2"], "2": ["AS3"]}
+
+    @pytest.mark.asyncio
+    async def test_empty_groups_clears(self) -> None:
+        mock = _mock_client()
+        mock.set_control_assumption_groups = AsyncMock(return_value={
+            "control_id": "CTRL-01",
+            "assumption_groups": {},
+            "justification": "",
+        })
+        with _patch_client(mock):
+            # Empty groups: justification length check is bypassed.
+            result = await set_control_assumption_groups(
+                server_version="0",
+                model_id="tm-001",
+                control_id="CTRL-01",
+                groups="{}",
+            )
+        assert result["assumption_groups"] == {}
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_rejected(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="valid JSON"):
+                await set_control_assumption_groups(
+                    server_version="0",
+                    model_id="tm-001",
+                    control_id="CTRL-01",
+                    groups="not-json",
+                    justification="long enough justification",
+                )
+
+    @pytest.mark.asyncio
+    async def test_groups_not_object_rejected(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="JSON object"):
+                await set_control_assumption_groups(
+                    server_version="0",
+                    model_id="tm-001",
+                    control_id="CTRL-01",
+                    groups='["AS1"]',
+                    justification="long enough justification",
+                )
+
+    @pytest.mark.asyncio
+    async def test_short_justification_rejected_when_setting(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="justification"):
+                await set_control_assumption_groups(
+                    server_version="0",
+                    model_id="tm-001",
+                    control_id="CTRL-01",
+                    groups='{"1": ["AS1"]}',
+                    justification="too short",
+                )

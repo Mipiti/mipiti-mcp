@@ -270,12 +270,17 @@ via `submit_attestation`.
 a current (non-expired) attestation mitigates those COs. The assessment \
 reports `mitigated_by: "assumption"` — this is a resolved state, not a gap.
 
-**Control-level assumed_by**: For COs that span trust boundaries, individual \
-controls within a CO can be marked as externally handled:
-- `assume_control` — mark a control as handled by an assumption. Counts as \
-active for group completeness when the assumption is active and attested.
-- `unassume_control` — clear the externally-handled status; control reverts \
-to not_implemented.
+**Control-level assumption groups**: For COs that span trust boundaries, \
+individual controls can be marked as externally handled by assumptions. \
+Assumption groups express alternative sets of external claims: within a \
+group all assumptions must be active+attested (AND), any complete group \
+suffices (OR).
+- `get_control_assumption_groups` / `set_control_assumption_groups` — \
+inspect and set the full group structure. Use for compound cases \
+("AWS KMS + quarterly review" or "HSM + FIPS certification") or \
+multiple independent paths.
+- `assume_control` / `unassume_control` — shorthand for the common \
+single-assumption, single-group case (writes to group 1).
 
 **Violation workflow**: When an assumption is violated or attestation \
 expires, affected COs become at-risk. Four remediation paths:
@@ -2322,6 +2327,94 @@ async def unassume_control(server_version: str, model_id: str, control_id: str) 
     try:
         client = _get_client()
         return await client._delete(f"/api/models/{model_id}/controls/{control_id}/assume")
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_control_assumption_groups(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+) -> dict:
+    """Get the current assumption group structure for a control.
+
+    Assumption groups define alternative sets of external claims that can
+    satisfy a control:
+    - Within a group: AND — all assumptions must be active and attested
+    - Across groups: OR — any complete group is sufficient to mark the
+      control as externally handled
+
+    Returns:
+    - groups: numbered groups with member assumption details
+      (id, description, status, attestation_status)
+    - unmapped: active model assumptions not assigned to any group
+
+    Use cases:
+    - Before set_control_assumption_groups to see current structure
+    - When reviewing why a control is / isn't externally handled
+    - When an assumption's attestation expires and you need to trace impact
+
+    The legacy assume_control / unassume_control tools remain as shorthand
+    for the common single-assumption, single-group case. They operate on
+    group 1.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control (e.g., "CTRL-03").
+    """
+    try:
+        return _dump(await _get_client().get_control_assumption_groups(model_id, control_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def set_control_assumption_groups(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    groups: str,
+    justification: str = "",
+) -> dict:
+    """Declaratively set the assumption group structure for a control.
+
+    Replaces all assumption group assignments for this control. Each group
+    is a set of assumption IDs that together externally handle the control;
+    any one group being fully active+attested is sufficient.
+
+    - Within a group: AND — all referenced assumptions must be active and
+      attested for the group to count as complete
+    - Across groups: OR — any one complete group marks the control as
+      externally handled for mitigation purposes
+
+    To clear all assumption groups (revert to "not externally handled"),
+    pass an empty JSON object: `{}`.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control (e.g., "CTRL-03").
+        groups: JSON object mapping group numbers to assumption ID lists.
+            Example: '{"1": ["AS1", "AS2"], "2": ["AS3"]}'
+            Empty object `{}` clears all groups.
+        justification: Why this group structure is appropriate (min 10 chars
+            when groups is non-empty; optional when clearing).
+    """
+    import json as _json
+    try:
+        parsed_groups = _json.loads(groups)
+    except _json.JSONDecodeError:
+        raise ToolError("groups must be valid JSON: {\"1\": [\"AS1\"], ...}")
+    if not isinstance(parsed_groups, dict):
+        raise ToolError("groups must be a JSON object")
+
+    if parsed_groups and len(justification.strip()) < 10:
+        raise ToolError("justification must be at least 10 characters when setting groups.")
+
+    try:
+        return _dump(await _get_client().set_control_assumption_groups(
+            model_id, control_id, parsed_groups, justification.strip(),
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
