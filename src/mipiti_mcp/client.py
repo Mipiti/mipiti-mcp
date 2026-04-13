@@ -438,6 +438,34 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_control_assumption_groups(
+        self, model_id: str, control_id: str,
+    ) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/controls/{control_id}/assumption-groups",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def set_control_assumption_groups(
+        self,
+        model_id: str,
+        control_id: str,
+        groups: dict,
+        justification: str,
+    ) -> dict:
+        body = {
+            "groups": groups,
+            "justification": justification,
+        }
+        resp = await self._request_with_idempotency(
+            "PUT",
+            f"/api/models/{model_id}/controls/{control_id}/assumption-groups",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def link_assumption(
         self, model_id: str, assumption_id: str, target_model_id: str,
     ) -> dict:

@@ -84,7 +84,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (69)
+## Tools (71)
 
 ### Threat Modeling
 
@@ -138,8 +138,10 @@ uvx mipiti-mcp
 | `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
 | `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. |
 | `list_attestations` | Attestation history for an assumption. |
-| `assume_control` | Mark a control as externally handled by an assumption. Counts as active for mitigation group completeness when attested. |
-| `unassume_control` | Clear externally-handled status; control reverts to not_implemented. |
+| `assume_control` | Shorthand: mark a control as externally handled by a single assumption (writes to group 1). Counts as active for mitigation group completeness when attested. |
+| `unassume_control` | Shorthand: clear externally-handled status; control reverts to not_implemented. Removes all assumption groups. |
+| `get_control_assumption_groups` | Inspect the current assumption group structure on a control. Groups express alternative sets of external claims (within = AND, across = OR). |
+| `set_control_assumption_groups` | Declaratively set the assumption group structure. Use for compound cases (e.g. "AWS KMS + quarterly review") or multiple independent paths. |
 | `convert_assumption_to_controls` | Generate controls for assumption-covered COs and retire the assumption linkage. |
 
 ### Assertions and Evidence
