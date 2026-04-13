@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "6"
+_SERVER_VERSION = "7"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -637,22 +637,45 @@ async def query_threat_model(
 
 
 @mcp.tool()
-async def list_threat_models(server_version: str) -> dict:
+async def list_threat_models(
+    server_version: str,
+    source: str = "",
+    include_assessment_summary: bool = False,
+) -> dict:
     """List all saved threat models.
 
     Returns a summary of each model including ID, title, creation date,
     and version number. Use the model ID with other tools.
+
+    Args:
+        source: Filter by source system. One of "web", "mcp", "jira", "api".
+            Omit to list all models regardless of source.
+        include_assessment_summary: If True, include an `assessment_summary`
+            object with each model (counts of mitigated / at_risk /
+            unassessed COs plus a human-readable `message`). Useful for
+            aggregate posture queries across the workspace in a single
+            call — e.g. "which of my models are at risk?" — instead of
+            calling `assess_model` once per model (N+1 at the agent layer).
+            Adds ~100 bytes per model to the response.
     """
     try:
-        models = await _get_client().list_models()
+        include = "assessment_summary" if include_assessment_summary else ""
+        models = await _get_client().list_models(source=source, include=include)
         items = []
         for m in models:
-            items.append({
+            entry: dict = {
                 "id": m.id,
                 "title": m.title or m.feature_description[:80],
                 "version": m.version,
                 "created_at": m.created_at,
-            })
+            }
+            if include_assessment_summary:
+                # Pydantic `extra=allow` lets us read the inline enrichment
+                # off the ModelSummary instance directly.
+                extra_asmt = getattr(m, "assessment", None)
+                if extra_asmt is not None:
+                    entry["assessment_summary"] = extra_asmt
+            items.append(entry)
         return {"items": items, "count": len(items)}
     except Exception as exc:
         raise _api_error(exc) from exc

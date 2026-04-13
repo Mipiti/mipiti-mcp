@@ -294,10 +294,14 @@ class MipitiClient:
         )
         return ChatResponse.model_validate(data)
 
-    async def list_models(self, source: str = "") -> list[ModelSummary]:
-        params = {}
+    async def list_models(
+        self, source: str = "", include: str = "",
+    ) -> list[ModelSummary]:
+        params: dict[str, Any] = {}
         if source:
             params["source"] = source
+        if include:
+            params["include"] = include
         data = await self._get("/api/models", params=params)
         return [ModelSummary.model_validate(m) for m in data]
 
