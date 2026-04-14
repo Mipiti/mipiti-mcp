@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "7"
+_SERVER_VERSION = "8"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -130,7 +130,13 @@ owner cannot implement (e.g., "restrict CI runner egress", "vendor maintains \
 PCI DSS certification") — it belongs outside your trust boundary. Use \
 `assume_control` to link it to an existing assumption, or create an \
 assumption first with `add_assumption`. Do NOT submit codebase assertions \
-for controls outside your boundary.
+for controls outside your boundary. The platform runs an AI relevance gate \
+on every assumption-to-control linkage; if the assumption's description \
+doesn't cover what the control requires, the call raises and there is no \
+override. If rejected, either pick an assumption that covers the control or \
+edit the assumption's description to make coverage explicit. For compound \
+("AS1 AND AS2") or multi-path ("AS1 OR AS2") cases, use \
+`set_control_assumption_groups` instead of `assume_control`.
 
 2. **Controls already satisfied by existing code** (no code changes): \
 use `get_controls` to list controls. For each, search the codebase for \
@@ -2318,8 +2324,17 @@ async def assume_control(
 ) -> dict:
     """Mark a control as externally handled by an assumption.
 
-    The control counts as active for mitigation group completeness
-    when the referenced assumption is active and attested.
+    Writes the assumption to group 1 as the sole member. The control counts
+    as active for mitigation group completeness when the referenced
+    assumption is active and attested.
+
+    AI relevance gate: the platform evaluates whether the assumption
+    plausibly covers the control before saving. If the evaluator rejects,
+    this tool raises with the rejection reasoning — there is NO override.
+    Resolve by either picking an assumption whose description covers the
+    control's responsibility, or by refining the chosen assumption's
+    description to make coverage explicit. For compound (AND) or
+    multi-path (OR) cases, use set_control_assumption_groups instead.
 
     Args:
         model_id: ID of the threat model.
@@ -2414,6 +2429,29 @@ async def set_control_assumption_groups(
     To clear all assumption groups (revert to "not externally handled"),
     pass an empty JSON object: `{}`.
 
+    AI relevance gate (per group, no override):
+      Each non-empty proposed group is evaluated independently. The behavior
+      depends on how many groups pass:
+
+      - All groups accepted → 200 success, structure persisted as submitted.
+      - Some groups accepted (partial): the accepted groups ARE persisted
+        (runtime OR-semantics activate immediately), the rejected groups
+        are NOT saved, the call raises with HTTP 422 detailing both
+        persisted_groups and rejected_groups (with per-group reasoning).
+        Resubmit only the rejected groups with assumptions that cover the
+        control, or sharpen those assumptions' descriptions.
+      - All groups rejected: existing groups on this control are
+        re-evaluated through the same gate. Relevant existing groups are
+        preserved; irrelevant existing groups are dropped (assumptions
+        themselves remain in the model — only this control's linkage is
+        removed). The call raises with HTTP 422 detailing what was
+        persisted, what was rejected, and what existing was dropped.
+      - Empty submission ({}): clears all groups, no evaluation.
+
+    There is no force-override. To get a group accepted, choose assumptions
+    whose descriptions actually cover the control or refine an assumption's
+    description so coverage is explicit.
+
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control (e.g., "CTRL-03").
@@ -2449,9 +2487,11 @@ async def set_control_assumption_groups(
 async def restore_assumption(server_version: str, model_id: str, assumption_id: str) -> dict:
     """Restore a soft-deleted assumption. Creates a new model version.
 
-    The assumption returns to active status. Controls with assumed_by
-    pointing to this assumption automatically reconnect. Re-attestation
-    is required before the assumption mitigates COs.
+    The assumption returns to active status. Controls whose assumption_groups
+    referenced this assumption keep their existing group structure intact
+    (members were never removed by soft-delete — only the assumption's own
+    status changed). Re-attestation is required before the assumption
+    mitigates COs.
 
     Args:
         model_id: ID of the threat model.
@@ -2479,6 +2519,12 @@ async def convert_assumption_to_controls(
     then retires the assumption's CO linkage. Use when an assumption is
     no longer valid and the system owner needs to implement controls
     instead.
+
+    Side effect on control-level linkage: this assumption is also removed
+    from every assumption_groups entry on every control that referenced it.
+    Any group left empty by the removal is dropped, and any control that
+    no longer has at least one complete group reverts to not_implemented.
+    Underlying assumptions are not deleted — only the linkages.
 
     Args:
         model_id: ID of the threat model.
