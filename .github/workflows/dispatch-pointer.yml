@@ -1,8 +1,17 @@
 name: Dispatch Pointer Update
 
+# Fires only when a release tag lands on this repo. One pointer-update
+# PR per release, instead of one per commit.
+#
+# Rationale: parent repo should track mipiti-mcp's latest *released*
+# version (what users install via `pip install mipiti-mcp`), not every
+# intermediate commit. release-pipeline.yml in parent creates the tag
+# after bumping pyproject.toml — the tag push is the canonical signal
+# that a release has landed.
+
 on:
   push:
-    branches: [main]
+    tags: ['v*']
 
 jobs:
   dispatch-submodule-update:
