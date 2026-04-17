@@ -1,10 +1,16 @@
 name: CI
 
+# PR-only trigger. Every merge to main comes via a PR that passed this
+# same CI (required status check + up-to-date branch), so re-running on
+# main tests an identical tree. Markdown-only PRs skip too — tests
+# have no README dependency.
+
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'CHANGELOG.md'
 
 jobs:
   test:
