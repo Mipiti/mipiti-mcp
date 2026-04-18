@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "8"
+_SERVER_VERSION = "9"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -86,6 +86,17 @@ Useful for understanding scope before linking assumptions or regenerating.
 assertion types and required params. Always verify locally first: \
 `mipiti-verify verify <type> -p key=value --project-root .` \
 Read the target file and confirm a reviewer would agree with the claim.
+- **Assertion design: prefer decomposition over breadth.** Tier 2 \
+(semantic LLM check) evaluates each assertion with only its own \
+check-type evidence. A single broad claim like "X calls Y to do \
+A and B using C" will pass Tier 1 but fail Tier 2 — the mechanical \
+evidence (e.g., a function_calls result) doesn't surface facts \
+A, B, C. Split into multiple atomic assertions — one for each \
+narrow aspect — each with a check type that directly shows the \
+relevant code (`pattern_matches` on the specific line, \
+`function_exists` for the named function, etc.). Submit them as \
+a group on the same control. Sufficiency combines them; \
+individually each is trivially provable.
 - `list_assertions` / `delete_assertion` — list active assertions for a control; \
 delete stale or incorrect ones before resubmitting.
 - `update_control_status` — mark implemented or not_implemented. Requires \
