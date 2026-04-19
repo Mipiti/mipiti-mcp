@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "9"
+_SERVER_VERSION = "10"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -63,9 +63,18 @@ surface exists, `absent` means it is not applicable.
 default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
 - `list_threat_models` — browse existing models.
-- `rename_threat_model` — rename a model (metadata only, no new version).
+- `rename_threat_model` — rename a model (metadata only, no new version). \
+Model titles must be unique within a workspace (case-insensitive); pick a \
+distinct name on the first try to avoid a 409 retry.
 - `delete_threat_model` — permanently delete a model and all its data.
 - `export_threat_model` — download as PDF, HTML, or CSV.
+- `export_threat_model_archive` — download the self-contained JSON audit \
+archive (every version, controls, assertions with CI verdicts, findings, \
+attestations, sufficiency signatures). Independently verifiable without \
+origin-instance access.
+- `import_threat_model_archive` — restore an audit archive into a \
+workspace. Assigns a fresh model_id every time; title collisions \
+auto-suffix `(imported YYYY-MM-DD)`.
 
 ## Controls and assertions
 
@@ -773,6 +782,64 @@ async def export_threat_model(server_version: str, model_id: str, format: Litera
             "download_url": f"{client.api_url}/api/models/{model_id}/export?format={format}",
             "message": "Include your API key as the X-API-Key header when downloading.",
         }
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def export_threat_model_archive(server_version: str, model_id: str) -> dict:
+    """Export the self-contained JSON audit archive for a threat model.
+
+    The archive carries every version, controls, assertions (with CI Tier
+    1/Tier 2 verdicts and attested flags), findings, risk acceptances,
+    assumption overrides, attestations, and instance sufficiency
+    signatures. Independently verifiable — CI OIDC JWTs verify against
+    the issuer's public JWKS, workspace signatures against the
+    workspace's published key, and sufficiency signatures against the
+    origin instance's key (via the target's trusted_signers table).
+
+    Args:
+        model_id: ID of the threat model to export.
+
+    Returns:
+        {"envelope": <full archive dict>} — pass this envelope to
+        `import_threat_model_archive` on any instance to restore.
+    """
+    try:
+        envelope = await _get_client().export_model_full(model_id)
+        return {"envelope": envelope}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def import_threat_model_archive(
+    server_version: str,
+    envelope: dict,
+    workspace_id: str,
+) -> dict:
+    """Import a JSON audit archive (from `export_threat_model_archive`)
+    into the target workspace.
+
+    A fresh model_id is assigned every time, so the same envelope can be
+    imported any number of times without collisions. Title collisions in
+    the target workspace auto-suffix `(imported YYYY-MM-DD)`. The caller
+    must have write access to the target workspace.
+
+    Args:
+        envelope: The full archive dict returned by
+            `export_threat_model_archive`.
+        workspace_id: Target workspace to import into.
+
+    Returns:
+        {"model_id": "<new id>"}.
+    """
+    if not isinstance(envelope, dict):
+        raise ToolError("envelope must be a dict returned by export_threat_model_archive.")
+    if not workspace_id:
+        raise ToolError("workspace_id is required.")
+    try:
+        return await _get_client().import_model_full(envelope, workspace_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 

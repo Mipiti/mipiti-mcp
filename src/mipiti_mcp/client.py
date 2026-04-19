@@ -326,6 +326,21 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.content
 
+    async def export_model_full(self, model_id: str) -> dict:
+        """Return the self-contained JSON audit archive envelope for a model."""
+        return await self._get(f"/api/models/{model_id}/export/full")
+
+    async def import_model_full(self, envelope: dict, workspace_id: str) -> dict:
+        """Import an audit archive envelope into the target workspace.
+
+        Returns {"model_id": "<new id>"}. The caller must have write access
+        to the target workspace; title collisions auto-suffix on the server.
+        """
+        return await self._post(
+            "/api/models/import",
+            {"envelope": envelope, "workspace_id": workspace_id},
+        )
+
     # ------------------------------------------------------------------
     # Controls
     # ------------------------------------------------------------------
