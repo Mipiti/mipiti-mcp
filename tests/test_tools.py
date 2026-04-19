@@ -34,7 +34,9 @@ from mipiti_mcp.server import (
     edit_asset,
     edit_attacker,
     export_threat_model,
+    export_threat_model_archive,
     generate_threat_model,
+    import_threat_model_archive,
     get_compliance_report,
     get_control_objectives,
     get_controls,
@@ -290,6 +292,52 @@ class TestDeleteThreatModel:
             result = await delete_threat_model(server_version="0", model_id="tm-001")
         assert result["deleted"] is True
         mock.delete_model.assert_awaited_once()
+
+
+class TestExportThreatModelArchive:
+    @pytest.mark.asyncio
+    async def test_returns_envelope(self) -> None:
+        mock = _mock_client()
+        envelope = {
+            "format_version": 1,
+            "title": "Checkout",
+            "versions": [{"version": 1, "data": {}, "created_at": "2026-04-20T00:00:00Z"}],
+        }
+        mock.export_model_full = AsyncMock(return_value=envelope)
+        with _patch_client(mock):
+            result = await export_threat_model_archive(server_version="0", model_id="tm-001")
+        assert result["envelope"] == envelope
+        mock.export_model_full.assert_awaited_once_with("tm-001")
+
+
+class TestImportThreatModelArchive:
+    @pytest.mark.asyncio
+    async def test_imports_and_returns_new_id(self) -> None:
+        mock = _mock_client()
+        mock.import_model_full = AsyncMock(return_value={"model_id": "tm-new"})
+        envelope = {"format_version": 1, "versions": [{"version": 1, "data": {}}]}
+        with _patch_client(mock):
+            result = await import_threat_model_archive(
+                server_version="0", envelope=envelope, workspace_id="ws-1",
+            )
+        assert result["model_id"] == "tm-new"
+        mock.import_model_full.assert_awaited_once_with(envelope, "ws-1")
+
+    @pytest.mark.asyncio
+    async def test_requires_envelope_dict(self) -> None:
+        with _patch_client():
+            with pytest.raises(ToolError):
+                await import_threat_model_archive(
+                    server_version="0", envelope="not a dict", workspace_id="ws-1",  # type: ignore[arg-type]
+                )
+
+    @pytest.mark.asyncio
+    async def test_requires_workspace_id(self) -> None:
+        with _patch_client():
+            with pytest.raises(ToolError):
+                await import_threat_model_archive(
+                    server_version="0", envelope={"format_version": 1}, workspace_id="",
+                )
 
 
 class TestGetThreatModel:

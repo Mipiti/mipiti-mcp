@@ -95,9 +95,11 @@ uvx mipiti-mcp
 | `query_threat_model` | Ask a question about an existing threat model. |
 | `get_threat_model` | Get the full details of a specific threat model (trust boundaries, assets, attackers, assumptions). Use `include_cos=True` to include control objectives. |
 | `list_threat_models` | List all saved threat models with IDs, titles, versions, and creation dates. Supports `source` filter and `include_assessment_summary=True` to inline per-model posture counts in one call (avoids N+1 looping `assess_model`). |
-| `rename_threat_model` | Rename a model (metadata only, no new version). |
+| `rename_threat_model` | Rename a model (metadata only, no new version). Titles must be unique within a workspace (case-insensitive). |
 | `delete_threat_model` | Permanently delete a model and all its data. |
 | `export_threat_model` | Export as PDF, HTML, or CSV. |
+| `export_threat_model_archive` | Export the self-contained JSON audit archive (every version, controls, assertions with CI verdicts, findings, attestations, sufficiency signatures). Independently verifiable. |
+| `import_threat_model_archive` | Restore an audit archive into a target workspace. Fresh `model_id` per import; title collisions auto-suffix. |
 
 ### Entity CRUD
 
