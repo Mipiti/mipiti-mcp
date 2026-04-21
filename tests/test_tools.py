@@ -66,6 +66,9 @@ from mipiti_mcp.server import (
     submit_assertions,
     submit_findings,
     refine_control,
+    remap_control,
+    restore_asset,
+    restore_attacker,
     update_control_status,
     update_finding,
 )
@@ -136,6 +139,13 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "create_system": {"id": "sys-2", "name": "New"},
         "add_model_to_system": {"added": True},
         "refine_control": {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}},
+        "remap_control": {
+            "control": {"id": "CTRL-01", "control_objective_ids": ["CO1", "CO3"]},
+            "model_id": "tm-001", "model_version": 2,
+            "change_reason": "Restore mappings after v1->v2 renumber",
+        },
+        "restore_asset": {"id": "A1", "deleted": False},
+        "restore_attacker": {"id": "T1", "deleted": False},
         "get_control_assumption_groups": {
             "control_id": "CTRL-01",
             "control_description": "Test control",
@@ -488,6 +498,62 @@ class TestRefineControl:
     async def test_short_justification(self) -> None:
         with pytest.raises(ToolError, match="justification must be at least 10"):
             await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="New desc.", justification="Short")
+
+
+class TestRemapControl:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await remap_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                co_ids="CO1, CO3",
+                change_reason="Restore mappings after v1->v2 renumber",
+            )
+        assert "control" in result
+        mock.remap_control.assert_awaited_once()
+        args = mock.remap_control.await_args
+        assert args.args[2] == ["CO1", "CO3"]
+
+    @pytest.mark.asyncio
+    async def test_empty_co_ids_rejected(self) -> None:
+        with pytest.raises(ToolError, match="at least one CO ID"):
+            await remap_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                co_ids="",
+                change_reason="Any valid change reason here.",
+            )
+
+    @pytest.mark.asyncio
+    async def test_short_change_reason_rejected(self) -> None:
+        with pytest.raises(ToolError, match="at least 10"):
+            await remap_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                co_ids="CO1",
+                change_reason="short",
+            )
+
+
+class TestRestoreAssetAttacker:
+    @pytest.mark.asyncio
+    async def test_restore_asset(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await restore_asset(
+                server_version="0", model_id="tm-001", asset_id="A1",
+            )
+        assert result["deleted"] is False
+        mock.restore_asset.assert_awaited_once_with("tm-001", "A1")
+
+    @pytest.mark.asyncio
+    async def test_restore_attacker(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await restore_attacker(
+                server_version="0", model_id="tm-001", attacker_id="T1",
+            )
+        assert result["deleted"] is False
+        mock.restore_attacker.assert_awaited_once_with("tm-001", "T1")
 
 
 class TestAddEvidence:

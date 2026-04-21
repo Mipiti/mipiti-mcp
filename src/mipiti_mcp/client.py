@@ -347,6 +347,7 @@ class MipitiClient:
 
     async def get_controls(
         self, model_id: str, include_deleted: bool = False,
+        include_orphaned: bool = False,
         control_id: str = "", status: str = "", co_id: str = "",
         component_id: str = "",
         offset: int = 0, limit: int = 0, summary_only: bool = False,
@@ -354,6 +355,8 @@ class MipitiClient:
         params: dict[str, Any] = {}
         if include_deleted:
             params["include_deleted"] = "true"
+        if include_orphaned:
+            params["include_orphaned"] = "true"
         if summary_only:
             params["summary_only"] = "true"
         if control_id:
@@ -426,6 +429,47 @@ class MipitiClient:
             return resp.json()
         resp.raise_for_status()
         return resp.json()
+
+    async def remap_control(
+        self,
+        model_id: str,
+        control_id: str,
+        co_ids: list[str],
+        change_reason: str,
+    ) -> dict:
+        """Mechanical (non-AI-gated) remap of a control's CO mappings.
+
+        Distinct from refine_control (AI-gated description edit).
+        Rejects target co_ids that are tombstoned (removed=True) or
+        do not exist on the model.
+        """
+        body: dict[str, Any] = {
+            "co_ids": list(co_ids),
+            "change_reason": change_reason,
+        }
+        resp = await self._request_with_idempotency(
+            "PATCH",
+            f"/api/models/{model_id}/controls/{control_id}/co-mapping",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def restore_asset(self, model_id: str, asset_id: str) -> ThreatModel:
+        """Un-soft-delete an asset. Tombstoned COs for that asset's
+        pairs are revived at save-time with their original IDs."""
+        data = await self._post(
+            f"/api/models/{model_id}/assets/{asset_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
+
+    async def restore_attacker(self, model_id: str, attacker_id: str) -> ThreatModel:
+        """Un-soft-delete an attacker. Tombstoned COs for that
+        attacker's pairs are revived with their original IDs."""
+        data = await self._post(
+            f"/api/models/{model_id}/attackers/{attacker_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
 
     async def get_mitigation_groups(
         self, model_id: str, co_id: str,

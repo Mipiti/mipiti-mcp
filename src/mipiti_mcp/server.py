@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "10"
+_SERVER_VERSION = "11"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -859,12 +859,19 @@ async def get_controls(
     offset: int = 0,
     limit: int = 0,
     include_deleted: bool = False,
+    include_orphaned: bool = False,
     summary_only: bool = False,
 ) -> dict:
     """Get implementation controls for a threat model.
 
     Returns controls that should be implemented to satisfy control objectives.
     If controls haven't been generated yet, auto-generates them.
+
+    By default excludes ORPHANED controls — controls whose every mapped
+    CO is tombstoned (its asset/attacker pair was removed in a later
+    version). Pass include_orphaned=True to see them. Each returned
+    control carries a boolean `orphaned` field so callers can render
+    the distinction.
 
     Args:
         model_id: ID of the threat model.
@@ -875,6 +882,8 @@ async def get_controls(
         offset: Skip first N (for pagination).
         limit: Max to return (0=all).
         include_deleted: Include soft-deleted controls.
+        include_orphaned: Include controls mapped only to tombstoned
+            COs (default False).
         summary_only: If True, returns only id, description, status,
             assertion_count, and assumed_by per control (much smaller response).
     """
@@ -882,6 +891,7 @@ async def get_controls(
         data = await _get_client().get_controls(
             model_id,
             include_deleted=include_deleted,
+            include_orphaned=include_orphaned,
             control_id=control_id or "",
             status=status or "",
             co_id=co_id or "",
@@ -1015,6 +1025,48 @@ async def refine_control(
             model_id, control_id,
             description.strip(), justification.strip(),
             codebase_findings=codebase_findings.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def remap_control(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    co_ids: str,
+    change_reason: str,
+) -> dict:
+    """Mechanical, non-AI-gated remap of a control's CO mappings.
+
+    Distinct from `refine_control` (AI-gated description edit) and
+    `set_mitigation_groups` (AI-gated CO-centric group authoring).
+    Use `remap_control` when the operator already knows the correct
+    co_ids and just needs to persist the mapping change — e.g.,
+    restoring mappings after an asset/attacker edit left the control
+    with stale or orphaned CO references. No LLM evaluation runs.
+
+    Rejects target co_ids that do not exist on the model or are
+    tombstoned (the pair was removed in a later version) — map to
+    live COs only.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control to remap (e.g., "CTRL-03").
+        co_ids: Comma-separated list of target CO IDs (e.g.,
+            "CO1,CO2,CO3"). Must include at least one CO.
+        change_reason: Why this remapping is appropriate (min 10
+            chars). Captured in the control's version history.
+    """
+    parsed = [c.strip() for c in co_ids.split(",") if c.strip()]
+    if not parsed:
+        raise ToolError("co_ids must contain at least one CO ID.")
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().remap_control(
+            model_id, control_id, parsed, change_reason.strip(),
         ))
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -1346,6 +1398,16 @@ async def edit_asset(
 ) -> dict:
     """Edit an existing asset. Creates a new version. Only provided fields changed.
 
+    AI-gated on identity-bearing fields (name, description,
+    security_properties). The LLM classifies the edit as `preserve`
+    (typo/wording/property-tightening) or `replace` (a different asset
+    under the same ID). Replacements are rejected with a structured
+    response — `{accepted: False, classification, reason, per_field,
+    suggestion}` — and the operator should soft-delete the current
+    asset and add a new one instead. Non-identity edits (impact,
+    notes) are never gated. Editing a soft-deleted asset is rejected;
+    restore it first.
+
     Args:
         model_id: ID of the threat model.
         asset_id: ID of the asset (e.g., "A1").
@@ -1374,14 +1436,34 @@ async def edit_asset(
 
 @mcp.tool()
 async def remove_asset(server_version: str, model_id: str, asset_id: str) -> dict:
-    """Remove an asset from a threat model. Creates a new version.
+    """Soft-delete an asset. Creates a new version.
+
+    The asset's ID is preserved forever — never reused. Its linked
+    (asset × attacker) CO pairs are tombstoned, which orphans any
+    controls mapped to them. Use `restore_asset` to un-delete and
+    revive the tombstones (orphaned controls become active again).
 
     Args:
         model_id: ID of the threat model.
-        asset_id: ID of the asset to remove.
+        asset_id: ID of the asset to soft-delete.
     """
     try:
         return _dump(await _get_client().remove_asset(model_id, asset_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def restore_asset(server_version: str, model_id: str, asset_id: str) -> dict:
+    """Un-soft-delete an asset. Revives its tombstoned COs with
+    their original IDs, un-orphaning any linked controls.
+
+    Args:
+        model_id: ID of the threat model.
+        asset_id: ID of the asset to restore.
+    """
+    try:
+        return _dump(await _get_client().restore_asset(model_id, asset_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1433,6 +1515,14 @@ async def edit_attacker(
 ) -> dict:
     """Edit an existing attacker. Creates a new version. Only provided fields changed.
 
+    AI-gated on identity-bearing fields (capability, archetype,
+    position). A rewrite that changes the archetype (e.g.,
+    Unauthenticated -> Supply chain) is classified as a replacement
+    and rejected — soft-delete the attacker and add a new one instead.
+    Non-identity edits (likelihood, trust_boundary_ids) are never
+    gated. Editing a soft-deleted attacker is rejected; restore it
+    first.
+
     Args:
         model_id: ID of the threat model.
         attacker_id: ID of the attacker (e.g., "T1").
@@ -1461,14 +1551,33 @@ async def edit_attacker(
 
 @mcp.tool()
 async def remove_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
-    """Remove an attacker from a threat model. Creates a new version.
+    """Soft-delete an attacker. Creates a new version.
+
+    Same lifecycle as remove_asset: ID preserved, linked COs
+    tombstoned, orphaned controls derived at read time. Use
+    `restore_attacker` to un-delete.
 
     Args:
         model_id: ID of the threat model.
-        attacker_id: ID of the attacker to remove.
+        attacker_id: ID of the attacker to soft-delete.
     """
     try:
         return _dump(await _get_client().remove_attacker(model_id, attacker_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def restore_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
+    """Un-soft-delete an attacker. Revives tombstoned COs; un-orphans
+    any linked controls.
+
+    Args:
+        model_id: ID of the threat model.
+        attacker_id: ID of the attacker to restore.
+    """
+    try:
+        return _dump(await _get_client().restore_attacker(model_id, attacker_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
