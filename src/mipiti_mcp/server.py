@@ -570,25 +570,67 @@ async def generate_threat_model(
 ) -> dict:
     """Generate a complete threat model from a feature description.
 
-    Analyzes the feature using the Security Properties (Confidentiality, Integrity,
-    Availability, Usage) methodology with capability-defined attackers.
-    Produces trust boundaries, asset inventory, attacker inventory,
-    control objective matrix, and assumptions.
+    Analyzes the feature using the Security Properties (Confidentiality,
+    Integrity, Availability, Usage) methodology with capability-defined
+    attackers. Produces trust boundaries, asset inventory, attacker
+    inventory, control objective matrix, and assumptions.
 
     Runs a multi-step AI pipeline. Progress is reported automatically.
+
+    **Similar-model short-circuit:** if the backend finds an existing
+    model in the workspace whose feature description substantially
+    overlaps with the new one, it does NOT generate a duplicate. This
+    tool returns ``{"similar_models": [{"id", "title", "reason"}, ...],
+    "suggestion": "..."}`` with the candidate IDs instead. The agent
+    should then either:
+
+    - Call ``refine_threat_model`` on one of the candidates to extend
+      the existing model (usually the right answer — avoids duplicate
+      modeling of the same system and preserves control/assertion
+      history).
+    - Retry this tool with ``force=True`` to bypass the check and
+      create a genuinely new model anyway (e.g., when the similarity
+      is superficial and the operator confirmed the new model is
+      distinct).
 
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
-        force: Skip similar model detection.
+        force: Skip the similar-model detection and always create a
+            new model. Default False — the check fires unless the
+            operator / agent has explicit reason to bypass it.
+
+    Return shape (normal generation):
+        ``{"model_id", "version", "title", "asset_count",
+           "attacker_count", "control_objective_count"}``
+
+    Return shape (similar-model short-circuit):
+        ``{"similar_models": [{"id", "title", "reason"}, ...],
+           "suggestion": "..."}``
     """
     async def on_progress(progress, total, message):
         await ctx.report_progress(progress, total, message=message)
     try:
         result = await _get_client().generate_threat_model(
-            feature_description, on_progress=on_progress,
+            feature_description,
+            force_generate=force,
+            on_progress=on_progress,
         )
         await ctx.report_progress(1, 1, message="Complete")
+        # Similar-model short-circuit: client returned a plain dict
+        # with a `similar_models` key, not a GenerateResult.
+        if isinstance(result, dict) and "similar_models" in result:
+            return {
+                "similar_models": list(result.get("similar_models") or []),
+                "suggestion": (
+                    "Feature description overlaps existing model(s) in the "
+                    "workspace. Either call refine_threat_model(model_id=<candidate>, "
+                    "instruction=\"...\") to extend the existing one — usually the "
+                    "right answer, as it preserves controls and history — or retry "
+                    "generate_threat_model with force=True to create a new model "
+                    "anyway."
+                ),
+            }
         tm = result.threat_model
         return {
             "model_id": tm.id,

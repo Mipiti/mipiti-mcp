@@ -203,6 +203,46 @@ class TestGenerateThreatModel:
         assert result["asset_count"] == 2
         mock.generate_threat_model.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_similar_models_short_circuit(self) -> None:
+        """Backend returns similar_models instead of generating. Tool
+        must pass the candidate IDs through with a suggestion, not
+        raise a tool error."""
+        mock = _mock_client(generate_threat_model=AsyncMock(return_value={
+            "similar_models": [
+                {"id": "tm-existing", "title": "Login Page",
+                 "reason": "Same auth surface."},
+            ],
+        }))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await generate_threat_model(
+                server_version="0",
+                feature_description="User login",
+                ctx=ctx,
+            )
+        assert "similar_models" in result
+        assert result["similar_models"][0]["id"] == "tm-existing"
+        assert "refine_threat_model" in result["suggestion"]
+        assert "force=True" in result["suggestion"]
+
+    @pytest.mark.asyncio
+    async def test_force_is_forwarded_to_client(self) -> None:
+        """The `force` tool arg must reach the client as
+        ``force_generate=True`` — otherwise retry-with-force has no
+        effect and the agent stays stuck on the similar-models loop."""
+        mock = _mock_client()
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await generate_threat_model(
+                server_version="0",
+                feature_description="User login",
+                ctx=ctx,
+                force=True,
+            )
+        call_kwargs = mock.generate_threat_model.await_args.kwargs
+        assert call_kwargs.get("force_generate") is True
+
 
 class TestRefineThreatModel:
     @pytest.mark.asyncio

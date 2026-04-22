@@ -204,12 +204,25 @@ class MipitiClient:
         self,
         messages: list[dict[str, str]],
         model_id: str | None = None,
+        force_generate: bool = False,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """POST /api/model/stream, consume SSE events, return final payload."""
+        """POST /api/model/stream, consume SSE events, return final payload.
+
+        Return shape is one of:
+        - ``{"result": ...}``-shaped dict (normal generate/refine path)
+        - ``{"chat_response": ...}``-shaped dict (query/general path)
+        - ``{"similar_models": [...]}`` when the backend short-circuits
+          generation because the feature description matches existing
+          models in the workspace. Caller can retry with
+          ``force_generate=True`` or pick a candidate to refine
+          instead.
+        """
         body: dict[str, Any] = {"messages": messages}
         if model_id:
             body["model_id"] = model_id
+        if force_generate:
+            body["force_generate"] = True
 
         # Generate a fresh Idempotency-Key for this stream request. The
         # streaming endpoint handles caching directly (the global middleware
@@ -220,6 +233,7 @@ class MipitiClient:
         client = self._get_client()
         result_data: dict[str, Any] | None = None
         chat_data: dict[str, Any] | None = None
+        similar_data: dict[str, Any] | None = None
 
         async with aconnect_sse(
             client, "POST", "/api/model/stream", json=body,
@@ -249,12 +263,23 @@ class MipitiClient:
                     result_data = json.loads(sse.data)
                 elif event_type == "chat_response":
                     chat_data = json.loads(sse.data)
+                elif event_type == "similar_models":
+                    # Backend short-circuited: the feature description
+                    # overlaps existing model(s) in the workspace.
+                    # Caller retries with force_generate=True or
+                    # refines a candidate. Stream closes after this
+                    # event — there is no subsequent `result`.
+                    similar_data = json.loads(sse.data)
                 elif event_type == "error":
                     data = json.loads(sse.data)
                     raise RuntimeError(data.get("message", "Unknown error"))
 
         if chat_data:
             return chat_data
+        if similar_data:
+            # Normalize: tool callers look for this key.
+            models = similar_data.get("models") or []
+            return {"similar_models": list(models)}
         if result_data:
             return result_data
         raise RuntimeError("Stream ended without a result or response event")
@@ -266,12 +291,22 @@ class MipitiClient:
     async def generate_threat_model(
         self,
         feature_description: str,
+        force_generate: bool = False,
         on_progress: ProgressCallback | None = None,
-    ) -> GenerateResult:
+    ) -> GenerateResult | dict:
+        """Returns a ``GenerateResult`` on normal generation, OR a raw
+        ``{"similar_models": [{id, title, reason}, ...]}`` dict when
+        the backend short-circuited because similar models already
+        exist in the workspace. Pass ``force_generate=True`` to skip
+        the similarity check and force a new generation.
+        """
         data = await self._stream_model(
             [{"role": "user", "content": feature_description}],
+            force_generate=force_generate,
             on_progress=on_progress,
         )
+        if isinstance(data, dict) and "similar_models" in data:
+            return data
         return GenerateResult.model_validate(data)
 
     async def refine_threat_model(
