@@ -1890,6 +1890,19 @@ async def auto_remediate(
     (2) exclude requirements for non-applicable taxonomy primitives,
     (3) suggest and apply new assets/attackers for remaining gaps.
 
+    Under Path B, phase (3) routes every proposal whose name matches a
+    soft-deleted asset/attacker through the same restore-candidate LLM
+    gate ``add_asset`` uses, so reanimating a previously removed entity
+    reinstates its stable ID and every CO tombstone + control tied to
+    it (rather than spawning a duplicate fresh ID). The response
+    distinguishes ``assets_added`` / ``attackers_added`` (genuinely new)
+    from ``assets_restored`` / ``attackers_restored`` (revived soft-
+    deletes) and lists ``restored_asset_ids`` / ``restored_attacker_ids``.
+    Proposals the gate classified as ``similar`` (or that fail-closed
+    on an unavailable / malformed gate response) appear under
+    ``skipped`` with a per-entry reason — the operator decides whether
+    to restore manually or rephrase.
+
     Converges automatically: stops when fully covered or when no further
     progress can be made.
 
