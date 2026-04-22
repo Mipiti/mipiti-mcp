@@ -277,6 +277,18 @@ class RemediationSuggestions(_Base):
 class RemediationApplyResult(_Base):
     assets_added: int = 0
     attackers_added: int = 0
+    # Under Path B, remediation can also reanimate soft-deleted entities
+    # whose identity matches a proposal (via the restore-candidate LLM
+    # gate). Callers that report "what changed" to the operator should
+    # include restored counts alongside added counts.
+    assets_restored: int = 0
+    attackers_restored: int = 0
+    restored_asset_ids: list[str] = []
+    restored_attacker_ids: list[str] = []
+    # Per-proposal skip reasons — populated for ``similar`` verdicts and
+    # fail-closed LLM failures. Each entry: {"kind": "asset"|"attacker",
+    # "name"|"capability": "...", "reason": "..."}.
+    skipped: list[dict] = []
     exclusions_created: int = 0
     controls_generated: int = 0
     mappings_created: int = 0
