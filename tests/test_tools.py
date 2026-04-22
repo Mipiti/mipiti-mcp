@@ -212,7 +212,86 @@ class TestRefineThreatModel:
         with _patch_client(mock):
             result = await refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx)
         assert result["model_id"] == "tm-001"
+        # Live-count keys are present and agree with mock shape.
+        assert "live_asset_count" in result
+        assert "live_attacker_count" in result
+        assert "live_control_objective_count" in result
+        # Semantic-rejections array surfaced (empty on happy path).
+        assert result["semantic_rejections"] == []
         mock.refine_threat_model.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_semantic_rejections_surfaced(self) -> None:
+        """When the refine-path guard reverted an identity-bearing
+        rewrite, the tool must pass the rejection array through so
+        the agent can surface what refine chose not to apply."""
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        rejected = GenerateResult(
+            threat_model=ThreatModel(id="tm-001", title="t"),
+            model_id="tm-001",
+            version=3,
+            semantic_rejections=[
+                {
+                    "kind": "asset", "id": "A-04",
+                    "classification": "replace",
+                    "reason": "Rename from OIDC Token to CI Attestation Bundle is a different asset.",
+                    "per_field": {"name": "OIDC Token -> CI Attestation Bundle"},
+                },
+            ],
+        )
+        mock = _mock_client(refine_threat_model=AsyncMock(return_value=rejected))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await refine_threat_model(
+                server_version="0", model_id="tm-001",
+                instruction="Rename A-04", ctx=ctx,
+            )
+        rejections = result["semantic_rejections"]
+        assert len(rejections) == 1
+        assert rejections[0]["kind"] == "asset"
+        assert rejections[0]["id"] == "A-04"
+        assert rejections[0]["classification"] == "replace"
+
+    @pytest.mark.asyncio
+    async def test_live_counts_exclude_soft_deleted(self) -> None:
+        """live_asset_count / live_attacker_count / live_control_
+        objective_count must exclude soft-deleted / tombstoned entries
+        so agents don't surface stale totals."""
+        from mipiti_mcp.types import (
+            GenerateResult, ThreatModel, Asset, Attacker, ControlObjective,
+        )
+        tm = ThreatModel(
+            id="tm-001",
+            title="t",
+            assets=[
+                Asset(id="A1", name="Live"),
+                Asset(id="A2", name="Dead", deleted=True),
+            ],
+            attackers=[
+                Attacker(id="T1", capability="Live"),
+                Attacker(id="T2", capability="Dead", deleted=True),
+            ],
+            control_objectives=[
+                ControlObjective(id="CO1", asset_id="A1", attacker_id="T1", statement="s"),
+                ControlObjective(id="CO2", asset_id="A2", attacker_id="T1",
+                                 statement="", removed=True),
+            ],
+        )
+        mock = _mock_client(refine_threat_model=AsyncMock(
+            return_value=GenerateResult(threat_model=tm, model_id="tm-001", version=2),
+        ))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await refine_threat_model(
+                server_version="0", model_id="tm-001",
+                instruction="..", ctx=ctx,
+            )
+        assert result["asset_count"] == 2
+        assert result["live_asset_count"] == 1
+        assert result["attacker_count"] == 2
+        assert result["live_attacker_count"] == 1
+        assert result["control_objective_count"] == 2
+        assert result["live_control_objective_count"] == 1
 
 
 class TestQueryThreatModel:

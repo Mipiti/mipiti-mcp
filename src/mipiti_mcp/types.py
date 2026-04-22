@@ -45,6 +45,13 @@ class Asset(_Base):
     security_properties: list[SecurityProperty] = []
     impact: str = "M"
     notes: str = ""
+    # Soft-delete lifecycle. A deleted asset keeps its ID forever
+    # (never reused); its linked (asset × attacker) control objectives
+    # tombstone, and controls mapped to those COs surface as orphaned.
+    # Restore via POST /assets/{id}/restore (MCP: restore_asset tool).
+    deleted: bool = False
+    deleted_at: str = ""
+    deleted_by: str = ""
 
 
 class Attacker(_Base):
@@ -53,6 +60,10 @@ class Attacker(_Base):
     position: str = ""
     archetype: str = ""
     likelihood: str = "M"
+    # Same soft-delete lifecycle as Asset.
+    deleted: bool = False
+    deleted_at: str = ""
+    deleted_by: str = ""
 
 
 class TrustBoundary(_Base):
@@ -69,6 +80,14 @@ class ControlObjective(_Base):
     attacker_id: str
     statement: str
     risk_tier: str = "medium"
+    # Tombstone: a CO whose (asset, attacker) pair was removed in a
+    # later version. The CO ID stays allocated forever (never reused)
+    # so controls referring to it surface as "orphaned" rather than
+    # silently rebinding to a different pair. Filter removed=True out
+    # of live-CO views (coverage math, LLM prompts, etc.).
+    removed: bool = False
+    removed_at: str = ""
+    removed_in_version: int = 0
 
 
 class Assumption(_Base):
@@ -97,6 +116,11 @@ class Control(_Base):
     framework_refs: list[str] = []
     is_verified: bool = False
     verification_status: str = "pending"
+    # Derived at read time: True when every mapped CO is tombstoned.
+    # Orphaned controls are hidden from the default get_controls
+    # listing — pass include_orphaned=True to see them. Remap to
+    # live COs via remap_control, or soft-delete explicitly.
+    orphaned: bool = False
 
 
 class ThreatModel(_Base):
@@ -132,6 +156,17 @@ class GenerateResult(_Base):
     version: int = 1
     markdown: str = ""
     csv: str = ""
+    # Refine-path semantic guard surfaces entries here when the LLM
+    # proposed a rewrite that would have semantically replaced an
+    # existing asset/attacker under its stable ID. Each entry:
+    #   {"kind": "asset"|"attacker", "id": "A-N"|"T-N",
+    #    "classification": "replace"|"ambiguous"|"unavailable",
+    #    "reason": "...", "per_field": {...}}
+    # The corresponding entity's identity fields in ``threat_model``
+    # were reverted to pre-refine values, so the LLM's proposed
+    # rewrite did not apply. Agents surfacing a refine result to the
+    # operator should check this array and present each rejection.
+    semantic_rejections: list[dict[str, Any]] = []
 
 
 class ChatResponse(_Base):

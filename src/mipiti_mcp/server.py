@@ -611,13 +611,47 @@ async def refine_threat_model(
 ) -> dict:
     """Refine an existing threat model based on an instruction.
 
-    Updates the model's assets, attackers, trust boundaries, and control
-    objectives based on the instruction. Creates a new version.
-    Progress is reported automatically.
+    Updates the model's assets, attackers, trust boundaries, and
+    control objectives based on the instruction. Creates a new
+    version. Progress is reported automatically.
+
+    Refine CANNOT silently replace an entity's identity under a
+    stable ID or silently drop an entity. Behavior:
+
+    - **Preserved entities** where the LLM proposed an identity-
+      bearing rewrite (name / description / security_properties on
+      assets; capability / archetype / position on attackers) run
+      through a semantic-preservation guard. Rewrites classified as
+      ``replace`` or ``ambiguous`` (or ``unavailable`` if the gate
+      LLM is down) have their identity fields REVERTED to the
+      pre-refine values. Each rejection shows up as an entry in the
+      ``semantic_rejections`` array in this tool's return value —
+      surface these to the operator.
+    - **Entities the LLM drops** from the refined output are re-
+      appended to the model unchanged. The only sanctioned removal
+      path is ``remove_asset`` / ``remove_attacker`` (soft-delete).
+    - **CO IDs are stable** across refinements; pairs (asset,
+      attacker) that disappear come back as tombstones with
+      ``removed=True`` (not renumbered). Controls that only mapped
+      to tombstoned COs become orphaned at read time.
 
     Args:
         model_id: ID of the threat model to refine.
         instruction: What to change, e.g. "Add CSRF attack vectors".
+
+    Return shape:
+        {
+          model_id, version, title,
+          asset_count, live_asset_count,
+          attacker_count, live_attacker_count,
+          control_objective_count, live_control_objective_count,
+          semantic_rejections: [{kind, id, classification, reason, per_field}, ...],
+        }
+
+    ``*_count`` includes soft-deleted / tombstoned entries;
+    ``live_*_count`` excludes them. Agents summarizing the result
+    should typically quote the live counts unless specifically
+    looking at history.
     """
     async def on_progress(progress, total, message):
         await ctx.report_progress(progress, total, message=message)
@@ -627,13 +661,22 @@ async def refine_threat_model(
         )
         await ctx.report_progress(1, 1, message="Complete")
         tm = result.threat_model
+        live_assets = [a for a in tm.assets if not getattr(a, "deleted", False)]
+        live_attackers = [t for t in tm.attackers if not getattr(t, "deleted", False)]
+        live_cos = [c for c in tm.control_objectives if not getattr(c, "removed", False)]
         return {
             "model_id": tm.id,
             "version": tm.version,
             "title": tm.title,
             "asset_count": len(tm.assets),
+            "live_asset_count": len(live_assets),
             "attacker_count": len(tm.attackers),
+            "live_attacker_count": len(live_attackers),
             "control_objective_count": len(tm.control_objectives),
+            "live_control_objective_count": len(live_cos),
+            "semantic_rejections": list(
+                getattr(result, "semantic_rejections", []) or []
+            ),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -747,6 +790,18 @@ async def get_threat_model(
 
     Returns the full threat model including trust boundaries, assets,
     attackers, control objectives, and assumptions.
+
+    **Important for agents reading model state:**
+
+    - Assets and attackers may carry ``deleted: true`` (soft-deleted).
+      Exclude these when showing "what's in the model now"; include
+      them only when discussing history or offering restore. Restore
+      an entity via ``restore_asset`` / ``restore_attacker``.
+    - Control objectives may carry ``removed: true`` (tombstone — the
+      (asset, attacker) pair was removed in a later version). Exclude
+      these from coverage math and LLM prompts; they exist to keep
+      CO IDs stable so controls referencing them can be detected as
+      "orphaned" rather than silently rebinding.
 
     Args:
         model_id: ID of the threat model.
