@@ -1470,9 +1470,14 @@ async def add_asset(
     - **Auto-restore** — LLM classified the proposal as the same
       entity as one soft-deleted asset. That asset is un-deleted (CO
       tombstones revive with their original IDs; orphaned controls
-      reactivate). Response carries ``auto_restored: True`` and
-      ``restored_asset_id: "A-N"`` — check these before assuming a
-      new asset was created.
+      reactivate). Response carries ``auto_restored: True``,
+      ``restored_asset_id: "A-N"``, and a ``discarded_fields`` list
+      enumerating any proposed values that differed from the
+      archived asset (with each entry's ``identity_bearing`` flag).
+      Agents can reapply non-identity discards (e.g., impact, notes)
+      via ``edit_asset``; identity-bearing discards (name,
+      description, security_properties) require explicit operator
+      intent and will hit the semantic guard.
     - **Similar-verdict rejection** — LLM couldn't confidently say
       whether the proposal was the same as a soft-deleted one.
       Response is ``{"accepted": False, "classification": "similar",
@@ -1483,7 +1488,9 @@ async def add_asset(
       name/description.
 
     Fails with a tool error on HTTP 503 when the LLM evaluator is
-    unavailable — that's a transient outage, retry.
+    unreachable (transient outage — retry with backoff), or 502
+    when the evaluator returned a malformed response (retry same
+    prompt — fresh attempt may parse cleanly).
 
     Args:
         model_id: ID of the threat model.
@@ -1538,7 +1545,8 @@ async def edit_asset(
 
     Editing a soft-deleted asset is rejected outright — restore it
     first via ``restore_asset``. Fails with a tool error on HTTP 503
-    when the semantic-preservation evaluator is unavailable.
+    when the semantic-preservation evaluator is unreachable, or 502
+    when the evaluator returns malformed output.
 
     Args:
         model_id: ID of the threat model.
@@ -1617,16 +1625,19 @@ async def add_attacker(
 
     - **Normal create**: response ``{"model": <ThreatModel>, ...}``,
       fresh sequential ID.
-    - **Auto-restore**: response carries ``auto_restored: True`` and
-      ``restored_attacker_id: "T-N"`` — the soft-deleted attacker is
-      un-deleted and its CO tombstones revive.
+    - **Auto-restore**: response carries ``auto_restored: True``,
+      ``restored_attacker_id: "T-N"``, and a ``discarded_fields``
+      list. Non-identity attacker fields (likelihood,
+      trust_boundary_ids) can be re-applied via ``edit_attacker``;
+      identity-bearing fields (capability, archetype, position)
+      require operator confirmation via the semantic-guarded edit.
     - **Similar-verdict rejection**: ``{"accepted": False,
       "classification": "similar", "candidate_restore_id": "T-N",
       ...}`` — nothing saved; either ``restore_attacker(id)`` or
       rephrase.
 
-    Fails with a tool error on HTTP 503 when the LLM evaluator is
-    unavailable.
+    Fails with a tool error on HTTP 503 when the evaluator is
+    unreachable or 502 when it returns malformed output.
 
     Args:
         model_id: ID of the threat model.
@@ -1677,7 +1688,7 @@ async def edit_attacker(
     Non-identity edits (likelihood, trust_boundary_ids) skip the
     gate. Editing a soft-deleted attacker is rejected — restore
     first. Fails with a tool error on HTTP 503 when the evaluator
-    is unavailable.
+    is unreachable or 502 when it returns malformed output.
 
     Args:
         model_id: ID of the threat model.

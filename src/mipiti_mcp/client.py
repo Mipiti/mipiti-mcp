@@ -673,17 +673,20 @@ class MipitiClient:
 
         1. Normal create:
            ``{"model": ThreatModel, "controls_carried": N, ...}``
-        2. Auto-restore (LLM classified the proposed asset as
-           ``same`` as a soft-deleted one):
+        2. Auto-restore (LLM classified as ``same``):
            ``{"model": ThreatModel, "auto_restored": True,
-              "restored_asset_id": "A-N", "reason": "...", ...}``
-        3. Similar-verdict rejection (LLM classified as ``similar``):
+              "restored_asset_id": "A-N", "reason": "...",
+              "discarded_fields": [{"field", "proposed_value",
+              "preserved_value", "reason", "identity_bearing"}, ...]}``
+        3. Similar-verdict rejection:
            ``{"accepted": False, "classification": "similar",
               "candidate_restore_id": "A-N", "reason": "...",
-              "suggestion": "..."}`` — nothing was saved.
+              "suggestion": "..."}``
 
-        HTTP 503 (LLM evaluator unavailable) raises via httpx and is
-        caught by the tool wrapper as a retryable tool error.
+        HTTP 503 (evaluator unreachable) and 502 (evaluator returned
+        malformed output) both raise via httpx and are caught by the
+        tool wrapper as tool errors. The two are semantically
+        distinct: 503 means retry-with-backoff; 502 means retry-now.
         """
         return await self._post(f"/api/models/{model_id}/assets", kwargs)
 
@@ -695,9 +698,9 @@ class MipitiClient:
         2. Semantic-preservation rejection:
            ``{"accepted": False, "classification": "replace"|"ambiguous",
               "reason": "...", "per_field": {...}, "suggestion": "..."}``
-           — nothing was saved.
 
-        HTTP 503 on LLM outage, raised via httpx.
+        HTTP 503 (evaluator unreachable) or 502 (evaluator returned
+        malformed output) raise via httpx as distinct signals.
         """
         return await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
 

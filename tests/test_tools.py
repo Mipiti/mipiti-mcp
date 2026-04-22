@@ -112,17 +112,17 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         # Realistic API envelope shape: the backend returns a dict
         # with `model` + carry-forward metadata, not a raw entity.
         "add_asset": {"model": {"id": "tm-001", "assets": [{"id": "A3"}]},
-                      "controls_carried": 0, "controls_dropped": 0},
+                      "controls_carried": 0, "controls_orphaned": 0},
         "edit_asset": {"model": {"id": "tm-001", "assets": [{"id": "A1"}]},
-                       "controls_carried": 0, "controls_dropped": 0},
+                       "controls_carried": 0, "controls_orphaned": 0},
         "remove_asset": {"model": {"id": "tm-001", "assets": []},
-                         "controls_carried": 0, "controls_dropped": 0},
+                         "controls_carried": 0, "controls_orphaned": 0},
         "add_attacker": {"model": {"id": "tm-001", "attackers": [{"id": "T2"}]},
-                         "controls_carried": 0, "controls_dropped": 0},
+                         "controls_carried": 0, "controls_orphaned": 0},
         "edit_attacker": {"model": {"id": "tm-001", "attackers": [{"id": "T1"}]},
-                          "controls_carried": 0, "controls_dropped": 0},
+                          "controls_carried": 0, "controls_orphaned": 0},
         "remove_attacker": {"model": {"id": "tm-001", "attackers": []},
-                            "controls_carried": 0, "controls_dropped": 0},
+                            "controls_carried": 0, "controls_orphaned": 0},
         "assess_model": {"mitigated": 1, "at_risk": 0},
         "get_review_queue": {"items": []},
         "list_compliance_frameworks": {"frameworks": [{"id": "owasp-asvs"}]},
@@ -792,21 +792,51 @@ class TestAddAsset:
     async def test_auto_restore_response_surfaced(self) -> None:
         """When the backend classifies the proposed asset as the same
         entity as a soft-deleted one, it auto-restores and returns
-        `auto_restored: True` + `restored_asset_id`. The MCP tool
-        must pass those fields through so the agent knows the call
-        wasn't a fresh create."""
+        `auto_restored: True`, `restored_asset_id`, and
+        `discarded_fields`. The MCP tool must pass all of those
+        through so the agent knows the call wasn't a fresh create
+        AND can reapply non-identity proposed values if appropriate."""
         mock = _mock_client(add_asset=AsyncMock(return_value={
             "model": {"id": "tm-001", "assets": [{"id": "A-04"}]},
             "controls_carried": 2,
-            "controls_dropped": 0,
+            "controls_orphaned": 0,
             "auto_restored": True,
             "restored_asset_id": "A-04",
             "reason": "Proposed asset matched soft-deleted A-04; restored it.",
+            "discarded_fields": [
+                {"field": "impact", "proposed_value": "H",
+                 "preserved_value": "M", "identity_bearing": False,
+                 "reason": "Restored asset keeps archived rating."},
+            ],
         }))
         with _patch_client(mock):
-            result = await add_asset(server_version="0", model_id="tm-001", name="OIDC Token")
+            result = await add_asset(
+                server_version="0", model_id="tm-001",
+                name="OIDC Token", impact="H",
+            )
         assert result["auto_restored"] is True
         assert result["restored_asset_id"] == "A-04"
+        # Agent needs the discarded fields to decide whether to reapply.
+        assert len(result["discarded_fields"]) == 1
+        assert result["discarded_fields"][0]["field"] == "impact"
+        assert result["discarded_fields"][0]["identity_bearing"] is False
+
+    @pytest.mark.asyncio
+    async def test_add_asset_invalid_response_raises_502(self) -> None:
+        """Distinct from 503 (evaluator down), 502 means the evaluator
+        responded but output was malformed. Agent's retry profile
+        differs: retry-same-prompt for 502, retry-with-backoff for 503."""
+        import httpx
+        err = httpx.HTTPStatusError(
+            "502 Bad Gateway",
+            request=httpx.Request("POST", "http://test"),
+            response=httpx.Response(502, json={
+                "detail": "Asset restore-candidate evaluator returned malformed output.",
+            }),
+        )
+        mock = _mock_client(add_asset=AsyncMock(side_effect=err))
+        with _patch_client(mock), pytest.raises(ToolError):
+            await add_asset(server_version="0", model_id="tm-001", name="X")
 
     @pytest.mark.asyncio
     async def test_similar_verdict_rejected_with_suggestion(self) -> None:
@@ -914,7 +944,7 @@ class TestAddAttacker:
         mock = _mock_client(add_attacker=AsyncMock(return_value={
             "model": {"id": "tm-001", "attackers": [{"id": "T-03"}]},
             "controls_carried": 1,
-            "controls_dropped": 0,
+            "controls_orphaned": 0,
             "auto_restored": True,
             "restored_attacker_id": "T-03",
             "reason": "Matched soft-deleted T-03.",
