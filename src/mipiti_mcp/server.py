@@ -1364,6 +1364,30 @@ async def add_asset(
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
+    LLM-gated against a re-add of a previously soft-deleted asset on
+    the same model. Three possible outcomes:
+
+    - **Normal create** — no soft-deleted assets match. Response has
+      ``{"model": <ThreatModel>, "controls_carried": N, ...}`` as
+      usual; the new asset is in ``model.assets`` with a fresh ID.
+    - **Auto-restore** — LLM classified the proposal as the same
+      entity as one soft-deleted asset. That asset is un-deleted (CO
+      tombstones revive with their original IDs; orphaned controls
+      reactivate). Response carries ``auto_restored: True`` and
+      ``restored_asset_id: "A-N"`` — check these before assuming a
+      new asset was created.
+    - **Similar-verdict rejection** — LLM couldn't confidently say
+      whether the proposal was the same as a soft-deleted one.
+      Response is ``{"accepted": False, "classification": "similar",
+      "candidate_restore_id": "A-N", "reason": "...",
+      "suggestion": "..."}`` and NOTHING was saved. Either call
+      ``restore_asset(candidate_restore_id)`` if the match was the
+      operator's intent, or re-submit with a more distinctive
+      name/description.
+
+    Fails with a tool error on HTTP 503 when the LLM evaluator is
+    unavailable — that's a transient outage, retry.
+
     Args:
         model_id: ID of the threat model.
         name: Asset name (required).
@@ -1398,15 +1422,26 @@ async def edit_asset(
 ) -> dict:
     """Edit an existing asset. Creates a new version. Only provided fields changed.
 
-    AI-gated on identity-bearing fields (name, description,
-    security_properties). The LLM classifies the edit as `preserve`
-    (typo/wording/property-tightening) or `replace` (a different asset
-    under the same ID). Replacements are rejected with a structured
-    response — `{accepted: False, classification, reason, per_field,
-    suggestion}` — and the operator should soft-delete the current
-    asset and add a new one instead. Non-identity edits (impact,
-    notes) are never gated. Editing a soft-deleted asset is rejected;
-    restore it first.
+    LLM-gated on identity-bearing fields (name, description,
+    security_properties). Non-identity edits (impact, notes) skip the
+    gate. Two possible outcomes when identity fields change:
+
+    - **Accepted edit** — LLM classified as ``preserve`` (typo,
+      wording, property-tightening). Response is the normal
+      ``{"model": <ThreatModel>, ...}`` envelope; the edit is
+      persisted.
+    - **Rejected edit** — LLM classified as ``replace`` (different
+      asset under same ID) or ``ambiguous``. Response is
+      ``{"accepted": False, "classification": "replace"|"ambiguous",
+      "reason": "...", "per_field": {...}, "suggestion": "..."}`` —
+      NOTHING was saved. The correct action is to soft-delete the
+      current asset (``remove_asset``) and add a new one under a new
+      ID (``add_asset`` with the replacement semantics), OR narrow
+      the edit to a wording-only change.
+
+    Editing a soft-deleted asset is rejected outright — restore it
+    first via ``restore_asset``. Fails with a tool error on HTTP 503
+    when the semantic-preservation evaluator is unavailable.
 
     Args:
         model_id: ID of the threat model.
@@ -1480,6 +1515,22 @@ async def add_attacker(
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
 
+    LLM-gated against a re-add of a previously soft-deleted attacker
+    — mirror of ``add_asset``. Three outcomes:
+
+    - **Normal create**: response ``{"model": <ThreatModel>, ...}``,
+      fresh sequential ID.
+    - **Auto-restore**: response carries ``auto_restored: True`` and
+      ``restored_attacker_id: "T-N"`` — the soft-deleted attacker is
+      un-deleted and its CO tombstones revive.
+    - **Similar-verdict rejection**: ``{"accepted": False,
+      "classification": "similar", "candidate_restore_id": "T-N",
+      ...}`` — nothing saved; either ``restore_attacker(id)`` or
+      rephrase.
+
+    Fails with a tool error on HTTP 503 when the LLM evaluator is
+    unavailable.
+
     Args:
         model_id: ID of the threat model.
         capability: Attacker capability description (required).
@@ -1515,13 +1566,21 @@ async def edit_attacker(
 ) -> dict:
     """Edit an existing attacker. Creates a new version. Only provided fields changed.
 
-    AI-gated on identity-bearing fields (capability, archetype,
-    position). A rewrite that changes the archetype (e.g.,
-    Unauthenticated -> Supply chain) is classified as a replacement
-    and rejected — soft-delete the attacker and add a new one instead.
-    Non-identity edits (likelihood, trust_boundary_ids) are never
-    gated. Editing a soft-deleted attacker is rejected; restore it
-    first.
+    LLM-gated on identity-bearing fields (capability, archetype,
+    position) — mirror of ``edit_asset``. Two outcomes:
+
+    - **Accepted edit**: normal envelope response.
+    - **Rejected edit**: ``{"accepted": False, "classification":
+      "replace"|"ambiguous", "reason": "...", "per_field": {...},
+      "suggestion": "..."}`` — nothing saved. Changing archetype
+      (e.g., Unauthenticated -> Supply chain) is a classic
+      replacement rejection; soft-delete the current attacker and
+      add a new one instead.
+
+    Non-identity edits (likelihood, trust_boundary_ids) skip the
+    gate. Editing a soft-deleted attacker is rejected — restore
+    first. Fails with a tool error on HTTP 503 when the evaluator
+    is unavailable.
 
     Args:
         model_id: ID of the threat model.

@@ -633,29 +633,61 @@ class MipitiClient:
     # Assets & Attackers
     # ------------------------------------------------------------------
 
-    async def add_asset(self, model_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._post(f"/api/models/{model_id}/assets", kwargs)
-        return ThreatModel.model_validate(data)
+    async def add_asset(self, model_id: str, **kwargs: Any) -> dict:
+        """POST /assets returns one of three response shapes:
 
-    async def edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
-        return ThreatModel.model_validate(data)
+        1. Normal create:
+           ``{"model": ThreatModel, "controls_carried": N, ...}``
+        2. Auto-restore (LLM classified the proposed asset as
+           ``same`` as a soft-deleted one):
+           ``{"model": ThreatModel, "auto_restored": True,
+              "restored_asset_id": "A-N", "reason": "...", ...}``
+        3. Similar-verdict rejection (LLM classified as ``similar``):
+           ``{"accepted": False, "classification": "similar",
+              "candidate_restore_id": "A-N", "reason": "...",
+              "suggestion": "..."}`` — nothing was saved.
 
-    async def remove_asset(self, model_id: str, asset_id: str) -> ThreatModel:
-        data = await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
-        return ThreatModel.model_validate(data)
+        HTTP 503 (LLM evaluator unavailable) raises via httpx and is
+        caught by the tool wrapper as a retryable tool error.
+        """
+        return await self._post(f"/api/models/{model_id}/assets", kwargs)
 
-    async def add_attacker(self, model_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._post(f"/api/models/{model_id}/attackers", kwargs)
-        return ThreatModel.model_validate(data)
+    async def edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
+        """PUT /assets/{id} returns one of two response shapes:
 
-    async def edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._put(f"/api/models/{model_id}/attackers/{attacker_id}", kwargs)
-        return ThreatModel.model_validate(data)
+        1. Accepted edit (or non-identity edit skipped the AI gate):
+           ``{"model": ThreatModel, "controls_carried": N, ...}``
+        2. Semantic-preservation rejection:
+           ``{"accepted": False, "classification": "replace"|"ambiguous",
+              "reason": "...", "per_field": {...}, "suggestion": "..."}``
+           — nothing was saved.
 
-    async def remove_attacker(self, model_id: str, attacker_id: str) -> ThreatModel:
-        data = await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
-        return ThreatModel.model_validate(data)
+        HTTP 503 on LLM outage, raised via httpx.
+        """
+        return await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
+
+    async def remove_asset(self, model_id: str, asset_id: str) -> dict:
+        """DELETE /assets/{id} soft-deletes. Returns the
+        ``{"model": ThreatModel, ...}`` envelope; the asset stays in
+        ``model.assets`` with ``deleted=True``.
+        """
+        return await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
+
+    async def add_attacker(self, model_id: str, **kwargs: Any) -> dict:
+        """POST /attackers — same three-shape response as add_asset
+        (normal create / auto-restore / similar-rejection) plus 503 on
+        LLM outage."""
+        return await self._post(f"/api/models/{model_id}/attackers", kwargs)
+
+    async def edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
+        """PUT /attackers/{id} — same two-shape response as edit_asset
+        (accepted edit / semantic rejection) plus 503 on LLM outage."""
+        return await self._put(f"/api/models/{model_id}/attackers/{attacker_id}", kwargs)
+
+    async def remove_attacker(self, model_id: str, attacker_id: str) -> dict:
+        """DELETE /attackers/{id} soft-deletes. Returns the envelope
+        with the attacker now marked ``deleted=True`` in the model."""
+        return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
 
     # ------------------------------------------------------------------
     # Assurance
