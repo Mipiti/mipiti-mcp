@@ -334,6 +334,60 @@ class TestRefineThreatModel:
         assert result["live_control_objective_count"] == 1
 
 
+class TestProgressChannelClosed:
+    """Streaming tools must tolerate the MCP progress channel closing
+    mid-call. A ClosedResourceError from ctx.report_progress means the
+    client is no longer listening, but the upstream work has already
+    completed and persisted — the tool must still return its result
+    instead of raising.
+    """
+
+    @pytest.mark.asyncio
+    async def test_generate_returns_result_when_channel_closed(self) -> None:
+        from anyio import ClosedResourceError
+
+        async def _client_call(_desc, force_generate=False, on_progress=None):
+            if on_progress is not None:
+                await on_progress(1.0, 5.0, "Working")
+            _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
+            return GenerateResult(threat_model=_tm, model_id="tm-001", version=1)
+
+        mock = _mock_client(generate_threat_model=AsyncMock(side_effect=_client_call))
+        ctx = AsyncMock()
+        ctx.report_progress = AsyncMock(side_effect=ClosedResourceError())
+        ctx.info = AsyncMock()
+        with _patch_client(mock):
+            result = await generate_threat_model(
+                server_version="0",
+                feature_description="Test feature",
+                ctx=ctx,
+            )
+        assert result["model_id"] == "tm-001"
+
+    @pytest.mark.asyncio
+    async def test_refine_returns_result_when_channel_broken(self) -> None:
+        from anyio import BrokenResourceError
+
+        async def _client_call(_model_id, _instruction, on_progress=None):
+            if on_progress is not None:
+                await on_progress(2.0, 5.0, "Refining")
+            _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
+            return GenerateResult(threat_model=_tm, model_id="tm-001", version=2)
+
+        mock = _mock_client(refine_threat_model=AsyncMock(side_effect=_client_call))
+        ctx = AsyncMock()
+        ctx.report_progress = AsyncMock(side_effect=BrokenResourceError())
+        ctx.info = AsyncMock()
+        with _patch_client(mock):
+            result = await refine_threat_model(
+                server_version="0",
+                model_id="tm-001",
+                instruction="Add CSRF",
+                ctx=ctx,
+            )
+        assert result["model_id"] == "tm-001"
+
+
 class TestQueryThreatModel:
     @pytest.mark.asyncio
     async def test_success(self) -> None:

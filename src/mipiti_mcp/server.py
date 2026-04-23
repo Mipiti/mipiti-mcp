@@ -10,6 +10,7 @@ import json
 import time
 from typing import Any, Literal, Optional
 
+from anyio import BrokenResourceError, ClosedResourceError
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
@@ -499,9 +500,30 @@ async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, ti
             raise ToolError(f"Operation timed out after {timeout}s")
         progress = data.get("progress", "")
         if progress:
-            await ctx.report_progress(0, 1, message=str(progress))
+            await _safe_report_progress(ctx, 0, 1, str(progress))
         wait = data.get("poll_after_seconds", 3)
         await asyncio.sleep(wait)
+
+
+async def _safe_report_progress(
+    ctx: Context, progress: float, total: float, message: str,
+) -> None:
+    """Forward a progress notification, suppressing closed-channel errors.
+
+    The MCP transport channel can close mid-tool — client disconnect,
+    idle timeout, cancellation. Once that happens, every subsequent
+    ``ctx.report_progress`` raises ``ClosedResourceError`` /
+    ``BrokenResourceError`` from the underlying anyio memory stream.
+    Without this guard the exception propagates up through the SSE
+    consumer and aborts the surrounding tool, even though the upstream
+    work has already completed and persisted server-side. Tool results
+    must not depend on whether the client is still listening for
+    progress notifications.
+    """
+    try:
+        await ctx.report_progress(progress, total, message=message)
+    except (ClosedResourceError, BrokenResourceError):
+        pass
 
 
 def _dump(obj: Any) -> dict:
@@ -618,7 +640,7 @@ async def generate_threat_model(
     async def on_progress(progress, total, message):
         last_progress_total[0] = progress
         last_progress_total[1] = total
-        await ctx.report_progress(progress, total, message=message)
+        await _safe_report_progress(ctx, progress, total, message)
     try:
         result = await _get_client().generate_threat_model(
             feature_description,
@@ -630,8 +652,8 @@ async def generate_threat_model(
         # the Complete notification — any arbitrary (progress, total) here
         # would violate the monotonic / constant-total invariant.
         if last_progress_total[1] > 0:
-            await ctx.report_progress(
-                last_progress_total[1], last_progress_total[1], message="Complete",
+            await _safe_report_progress(
+                ctx, last_progress_total[1], last_progress_total[1], "Complete",
             )
         # Similar-model short-circuit: client returned a plain dict
         # with a `similar_models` key, not a GenerateResult.
@@ -717,14 +739,14 @@ async def refine_threat_model(
     async def on_progress(progress, total, message):
         last_progress_total[0] = progress
         last_progress_total[1] = total
-        await ctx.report_progress(progress, total, message=message)
+        await _safe_report_progress(ctx, progress, total, message)
     try:
         result = await _get_client().refine_threat_model(
             model_id, instruction, on_progress=on_progress,
         )
         if last_progress_total[1] > 0:
-            await ctx.report_progress(
-                last_progress_total[1], last_progress_total[1], message="Complete",
+            await _safe_report_progress(
+                ctx, last_progress_total[1], last_progress_total[1], "Complete",
             )
         tm = result.threat_model
         live_assets = [a for a in tm.assets if not getattr(a, "deleted", False)]
