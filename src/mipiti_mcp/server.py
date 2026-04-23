@@ -1890,9 +1890,9 @@ async def auto_remediate(
     (2) exclude requirements for non-applicable taxonomy primitives,
     (3) suggest and apply new assets/attackers for remaining gaps.
 
-    Under Path B, phase (3) routes every proposal whose name matches a
-    soft-deleted asset/attacker through the same restore-candidate LLM
-    gate ``add_asset`` uses, so reanimating a previously removed entity
+    Phase (3) routes every proposal whose name matches a soft-deleted
+    asset/attacker through the same restore-candidate LLM gate
+    ``add_asset`` uses, so reanimating a previously removed entity
     reinstates its stable ID and every CO tombstone + control tied to
     it (rather than spawning a duplicate fresh ID). The response
     distinguishes ``assets_added`` / ``attackers_added`` (genuinely new)

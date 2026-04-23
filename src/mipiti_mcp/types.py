@@ -277,9 +277,9 @@ class RemediationSuggestions(_Base):
 class RemediationApplyResult(_Base):
     assets_added: int = 0
     attackers_added: int = 0
-    # Under Path B, remediation can also reanimate soft-deleted entities
-    # whose identity matches a proposal (via the restore-candidate LLM
-    # gate). Callers that report "what changed" to the operator should
+    # Remediation can also reanimate soft-deleted entities whose
+    # identity matches a proposal (via the restore-candidate LLM gate).
+    # Callers that report "what changed" to the operator should
     # include restored counts alongside added counts.
     assets_restored: int = 0
     attackers_restored: int = 0
