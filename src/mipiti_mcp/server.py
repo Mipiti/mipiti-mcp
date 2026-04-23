@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "11"
+_SERVER_VERSION = "12"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -608,7 +608,16 @@ async def generate_threat_model(
         ``{"similar_models": [{"id", "title", "reason"}, ...],
            "suggestion": "..."}``
     """
+    # Track the last (progress, total) seen from the upstream stream so the
+    # final "Complete" notification emits (total, total) and preserves the
+    # MCP spec invariants: progress monotonically non-decreasing, and `total`
+    # constant across a single progressToken sequence. Clients are allowed
+    # to drop progressToken sequences that violate either invariant.
+    last_progress_total: list[float] = [0.0, 0.0]  # [last_progress, last_total]
+
     async def on_progress(progress, total, message):
+        last_progress_total[0] = progress
+        last_progress_total[1] = total
         await ctx.report_progress(progress, total, message=message)
     try:
         result = await _get_client().generate_threat_model(
@@ -616,7 +625,14 @@ async def generate_threat_model(
             force_generate=force,
             on_progress=on_progress,
         )
-        await ctx.report_progress(1, 1, message="Complete")
+        # Emit a final 100% notification aligned with the sequence's total.
+        # If on_progress was never called (stream had no step events), skip
+        # the Complete notification — any arbitrary (progress, total) here
+        # would violate the monotonic / constant-total invariant.
+        if last_progress_total[1] > 0:
+            await ctx.report_progress(
+                last_progress_total[1], last_progress_total[1], message="Complete",
+            )
         # Similar-model short-circuit: client returned a plain dict
         # with a `similar_models` key, not a GenerateResult.
         if isinstance(result, dict) and "similar_models" in result:
@@ -695,13 +711,21 @@ async def refine_threat_model(
     should typically quote the live counts unless specifically
     looking at history.
     """
+    # See generate_threat_model for rationale on the last-total tracker.
+    last_progress_total: list[float] = [0.0, 0.0]
+
     async def on_progress(progress, total, message):
+        last_progress_total[0] = progress
+        last_progress_total[1] = total
         await ctx.report_progress(progress, total, message=message)
     try:
         result = await _get_client().refine_threat_model(
             model_id, instruction, on_progress=on_progress,
         )
-        await ctx.report_progress(1, 1, message="Complete")
+        if last_progress_total[1] > 0:
+            await ctx.report_progress(
+                last_progress_total[1], last_progress_total[1], message="Complete",
+            )
         tm = result.threat_model
         live_assets = [a for a in tm.assets if not getattr(a, "deleted", False)]
         live_attackers = [t for t in tm.attackers if not getattr(t, "deleted", False)]
