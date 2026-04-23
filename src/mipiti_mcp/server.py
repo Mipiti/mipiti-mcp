@@ -20,7 +20,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "10"
+_SERVER_VERSION = "11"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -570,25 +570,67 @@ async def generate_threat_model(
 ) -> dict:
     """Generate a complete threat model from a feature description.
 
-    Analyzes the feature using the Security Properties (Confidentiality, Integrity,
-    Availability, Usage) methodology with capability-defined attackers.
-    Produces trust boundaries, asset inventory, attacker inventory,
-    control objective matrix, and assumptions.
+    Analyzes the feature using the Security Properties (Confidentiality,
+    Integrity, Availability, Usage) methodology with capability-defined
+    attackers. Produces trust boundaries, asset inventory, attacker
+    inventory, control objective matrix, and assumptions.
 
     Runs a multi-step AI pipeline. Progress is reported automatically.
+
+    **Similar-model short-circuit:** if the backend finds an existing
+    model in the workspace whose feature description substantially
+    overlaps with the new one, it does NOT generate a duplicate. This
+    tool returns ``{"similar_models": [{"id", "title", "reason"}, ...],
+    "suggestion": "..."}`` with the candidate IDs instead. The agent
+    should then either:
+
+    - Call ``refine_threat_model`` on one of the candidates to extend
+      the existing model (usually the right answer — avoids duplicate
+      modeling of the same system and preserves control/assertion
+      history).
+    - Retry this tool with ``force=True`` to bypass the check and
+      create a genuinely new model anyway (e.g., when the similarity
+      is superficial and the operator confirmed the new model is
+      distinct).
 
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
-        force: Skip similar model detection.
+        force: Skip the similar-model detection and always create a
+            new model. Default False — the check fires unless the
+            operator / agent has explicit reason to bypass it.
+
+    Return shape (normal generation):
+        ``{"model_id", "version", "title", "asset_count",
+           "attacker_count", "control_objective_count"}``
+
+    Return shape (similar-model short-circuit):
+        ``{"similar_models": [{"id", "title", "reason"}, ...],
+           "suggestion": "..."}``
     """
     async def on_progress(progress, total, message):
         await ctx.report_progress(progress, total, message=message)
     try:
         result = await _get_client().generate_threat_model(
-            feature_description, on_progress=on_progress,
+            feature_description,
+            force_generate=force,
+            on_progress=on_progress,
         )
         await ctx.report_progress(1, 1, message="Complete")
+        # Similar-model short-circuit: client returned a plain dict
+        # with a `similar_models` key, not a GenerateResult.
+        if isinstance(result, dict) and "similar_models" in result:
+            return {
+                "similar_models": list(result.get("similar_models") or []),
+                "suggestion": (
+                    "Feature description overlaps existing model(s) in the "
+                    "workspace. Either call refine_threat_model(model_id=<candidate>, "
+                    "instruction=\"...\") to extend the existing one — usually the "
+                    "right answer, as it preserves controls and history — or retry "
+                    "generate_threat_model with force=True to create a new model "
+                    "anyway."
+                ),
+            }
         tm = result.threat_model
         return {
             "model_id": tm.id,
@@ -611,13 +653,47 @@ async def refine_threat_model(
 ) -> dict:
     """Refine an existing threat model based on an instruction.
 
-    Updates the model's assets, attackers, trust boundaries, and control
-    objectives based on the instruction. Creates a new version.
-    Progress is reported automatically.
+    Updates the model's assets, attackers, trust boundaries, and
+    control objectives based on the instruction. Creates a new
+    version. Progress is reported automatically.
+
+    Refine CANNOT silently replace an entity's identity under a
+    stable ID or silently drop an entity. Behavior:
+
+    - **Preserved entities** where the LLM proposed an identity-
+      bearing rewrite (name / description / security_properties on
+      assets; capability / archetype / position on attackers) run
+      through a semantic-preservation guard. Rewrites classified as
+      ``replace`` or ``ambiguous`` (or ``unavailable`` if the gate
+      LLM is down) have their identity fields REVERTED to the
+      pre-refine values. Each rejection shows up as an entry in the
+      ``semantic_rejections`` array in this tool's return value —
+      surface these to the operator.
+    - **Entities the LLM drops** from the refined output are re-
+      appended to the model unchanged. The only sanctioned removal
+      path is ``remove_asset`` / ``remove_attacker`` (soft-delete).
+    - **CO IDs are stable** across refinements; pairs (asset,
+      attacker) that disappear come back as tombstones with
+      ``removed=True`` (not renumbered). Controls that only mapped
+      to tombstoned COs become orphaned at read time.
 
     Args:
         model_id: ID of the threat model to refine.
         instruction: What to change, e.g. "Add CSRF attack vectors".
+
+    Return shape:
+        {
+          model_id, version, title,
+          asset_count, live_asset_count,
+          attacker_count, live_attacker_count,
+          control_objective_count, live_control_objective_count,
+          semantic_rejections: [{kind, id, classification, reason, per_field}, ...],
+        }
+
+    ``*_count`` includes soft-deleted / tombstoned entries;
+    ``live_*_count`` excludes them. Agents summarizing the result
+    should typically quote the live counts unless specifically
+    looking at history.
     """
     async def on_progress(progress, total, message):
         await ctx.report_progress(progress, total, message=message)
@@ -627,13 +703,22 @@ async def refine_threat_model(
         )
         await ctx.report_progress(1, 1, message="Complete")
         tm = result.threat_model
+        live_assets = [a for a in tm.assets if not getattr(a, "deleted", False)]
+        live_attackers = [t for t in tm.attackers if not getattr(t, "deleted", False)]
+        live_cos = [c for c in tm.control_objectives if not getattr(c, "removed", False)]
         return {
             "model_id": tm.id,
             "version": tm.version,
             "title": tm.title,
             "asset_count": len(tm.assets),
+            "live_asset_count": len(live_assets),
             "attacker_count": len(tm.attackers),
+            "live_attacker_count": len(live_attackers),
             "control_objective_count": len(tm.control_objectives),
+            "live_control_objective_count": len(live_cos),
+            "semantic_rejections": list(
+                getattr(result, "semantic_rejections", []) or []
+            ),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -748,6 +833,18 @@ async def get_threat_model(
     Returns the full threat model including trust boundaries, assets,
     attackers, control objectives, and assumptions.
 
+    **Important for agents reading model state:**
+
+    - Assets and attackers may carry ``deleted: true`` (soft-deleted).
+      Exclude these when showing "what's in the model now"; include
+      them only when discussing history or offering restore. Restore
+      an entity via ``restore_asset`` / ``restore_attacker``.
+    - Control objectives may carry ``removed: true`` (tombstone — the
+      (asset, attacker) pair was removed in a later version). Exclude
+      these from coverage math and LLM prompts; they exist to keep
+      CO IDs stable so controls referencing them can be detected as
+      "orphaned" rather than silently rebinding.
+
     Args:
         model_id: ID of the threat model.
         version: Optional specific version number. Defaults to latest.
@@ -859,12 +956,19 @@ async def get_controls(
     offset: int = 0,
     limit: int = 0,
     include_deleted: bool = False,
+    include_orphaned: bool = False,
     summary_only: bool = False,
 ) -> dict:
     """Get implementation controls for a threat model.
 
     Returns controls that should be implemented to satisfy control objectives.
     If controls haven't been generated yet, auto-generates them.
+
+    By default excludes ORPHANED controls — controls whose every mapped
+    CO is tombstoned (its asset/attacker pair was removed in a later
+    version). Pass include_orphaned=True to see them. Each returned
+    control carries a boolean `orphaned` field so callers can render
+    the distinction.
 
     Args:
         model_id: ID of the threat model.
@@ -875,6 +979,8 @@ async def get_controls(
         offset: Skip first N (for pagination).
         limit: Max to return (0=all).
         include_deleted: Include soft-deleted controls.
+        include_orphaned: Include controls mapped only to tombstoned
+            COs (default False).
         summary_only: If True, returns only id, description, status,
             assertion_count, and assumed_by per control (much smaller response).
     """
@@ -882,6 +988,7 @@ async def get_controls(
         data = await _get_client().get_controls(
             model_id,
             include_deleted=include_deleted,
+            include_orphaned=include_orphaned,
             control_id=control_id or "",
             status=status or "",
             co_id=co_id or "",
@@ -1015,6 +1122,48 @@ async def refine_control(
             model_id, control_id,
             description.strip(), justification.strip(),
             codebase_findings=codebase_findings.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def remap_control(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    co_ids: str,
+    change_reason: str,
+) -> dict:
+    """Mechanical, non-AI-gated remap of a control's CO mappings.
+
+    Distinct from `refine_control` (AI-gated description edit) and
+    `set_mitigation_groups` (AI-gated CO-centric group authoring).
+    Use `remap_control` when the operator already knows the correct
+    co_ids and just needs to persist the mapping change — e.g.,
+    restoring mappings after an asset/attacker edit left the control
+    with stale or orphaned CO references. No LLM evaluation runs.
+
+    Rejects target co_ids that do not exist on the model or are
+    tombstoned (the pair was removed in a later version) — map to
+    live COs only.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control to remap (e.g., "CTRL-03").
+        co_ids: Comma-separated list of target CO IDs (e.g.,
+            "CO1,CO2,CO3"). Must include at least one CO.
+        change_reason: Why this remapping is appropriate (min 10
+            chars). Captured in the control's version history.
+    """
+    parsed = [c.strip() for c in co_ids.split(",") if c.strip()]
+    if not parsed:
+        raise ToolError("co_ids must contain at least one CO ID.")
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().remap_control(
+            model_id, control_id, parsed, change_reason.strip(),
         ))
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -1312,6 +1461,37 @@ async def add_asset(
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
+    LLM-gated against a re-add of a previously soft-deleted asset on
+    the same model. Three possible outcomes:
+
+    - **Normal create** — no soft-deleted assets match. Response has
+      ``{"model": <ThreatModel>, "controls_carried": N, ...}`` as
+      usual; the new asset is in ``model.assets`` with a fresh ID.
+    - **Auto-restore** — LLM classified the proposal as the same
+      entity as one soft-deleted asset. That asset is un-deleted (CO
+      tombstones revive with their original IDs; orphaned controls
+      reactivate). Response carries ``auto_restored: True``,
+      ``restored_asset_id: "A-N"``, and a ``discarded_fields`` list
+      enumerating any proposed values that differed from the
+      archived asset (with each entry's ``identity_bearing`` flag).
+      Agents can reapply non-identity discards (e.g., impact, notes)
+      via ``edit_asset``; identity-bearing discards (name,
+      description, security_properties) require explicit operator
+      intent and will hit the semantic guard.
+    - **Similar-verdict rejection** — LLM couldn't confidently say
+      whether the proposal was the same as a soft-deleted one.
+      Response is ``{"accepted": False, "classification": "similar",
+      "candidate_restore_id": "A-N", "reason": "...",
+      "suggestion": "..."}`` and NOTHING was saved. Either call
+      ``restore_asset(candidate_restore_id)`` if the match was the
+      operator's intent, or re-submit with a more distinctive
+      name/description.
+
+    Fails with a tool error on HTTP 503 when the LLM evaluator is
+    unreachable (transient outage — retry with backoff), or 502
+    when the evaluator returned a malformed response (retry same
+    prompt — fresh attempt may parse cleanly).
+
     Args:
         model_id: ID of the threat model.
         name: Asset name (required).
@@ -1346,6 +1526,28 @@ async def edit_asset(
 ) -> dict:
     """Edit an existing asset. Creates a new version. Only provided fields changed.
 
+    LLM-gated on identity-bearing fields (name, description,
+    security_properties). Non-identity edits (impact, notes) skip the
+    gate. Two possible outcomes when identity fields change:
+
+    - **Accepted edit** — LLM classified as ``preserve`` (typo,
+      wording, property-tightening). Response is the normal
+      ``{"model": <ThreatModel>, ...}`` envelope; the edit is
+      persisted.
+    - **Rejected edit** — LLM classified as ``replace`` (different
+      asset under same ID) or ``ambiguous``. Response is
+      ``{"accepted": False, "classification": "replace"|"ambiguous",
+      "reason": "...", "per_field": {...}, "suggestion": "..."}`` —
+      NOTHING was saved. The correct action is to soft-delete the
+      current asset (``remove_asset``) and add a new one under a new
+      ID (``add_asset`` with the replacement semantics), OR narrow
+      the edit to a wording-only change.
+
+    Editing a soft-deleted asset is rejected outright — restore it
+    first via ``restore_asset``. Fails with a tool error on HTTP 503
+    when the semantic-preservation evaluator is unreachable, or 502
+    when the evaluator returns malformed output.
+
     Args:
         model_id: ID of the threat model.
         asset_id: ID of the asset (e.g., "A1").
@@ -1374,14 +1576,34 @@ async def edit_asset(
 
 @mcp.tool()
 async def remove_asset(server_version: str, model_id: str, asset_id: str) -> dict:
-    """Remove an asset from a threat model. Creates a new version.
+    """Soft-delete an asset. Creates a new version.
+
+    The asset's ID is preserved forever — never reused. Its linked
+    (asset × attacker) CO pairs are tombstoned, which orphans any
+    controls mapped to them. Use `restore_asset` to un-delete and
+    revive the tombstones (orphaned controls become active again).
 
     Args:
         model_id: ID of the threat model.
-        asset_id: ID of the asset to remove.
+        asset_id: ID of the asset to soft-delete.
     """
     try:
         return _dump(await _get_client().remove_asset(model_id, asset_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def restore_asset(server_version: str, model_id: str, asset_id: str) -> dict:
+    """Un-soft-delete an asset. Revives its tombstoned COs with
+    their original IDs, un-orphaning any linked controls.
+
+    Args:
+        model_id: ID of the threat model.
+        asset_id: ID of the asset to restore.
+    """
+    try:
+        return _dump(await _get_client().restore_asset(model_id, asset_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1397,6 +1619,25 @@ async def add_attacker(
     trust_boundary_ids: Optional[str] = None,
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
+
+    LLM-gated against a re-add of a previously soft-deleted attacker
+    — mirror of ``add_asset``. Three outcomes:
+
+    - **Normal create**: response ``{"model": <ThreatModel>, ...}``,
+      fresh sequential ID.
+    - **Auto-restore**: response carries ``auto_restored: True``,
+      ``restored_attacker_id: "T-N"``, and a ``discarded_fields``
+      list. Non-identity attacker fields (likelihood,
+      trust_boundary_ids) can be re-applied via ``edit_attacker``;
+      identity-bearing fields (capability, archetype, position)
+      require operator confirmation via the semantic-guarded edit.
+    - **Similar-verdict rejection**: ``{"accepted": False,
+      "classification": "similar", "candidate_restore_id": "T-N",
+      ...}`` — nothing saved; either ``restore_attacker(id)`` or
+      rephrase.
+
+    Fails with a tool error on HTTP 503 when the evaluator is
+    unreachable or 502 when it returns malformed output.
 
     Args:
         model_id: ID of the threat model.
@@ -1433,6 +1674,22 @@ async def edit_attacker(
 ) -> dict:
     """Edit an existing attacker. Creates a new version. Only provided fields changed.
 
+    LLM-gated on identity-bearing fields (capability, archetype,
+    position) — mirror of ``edit_asset``. Two outcomes:
+
+    - **Accepted edit**: normal envelope response.
+    - **Rejected edit**: ``{"accepted": False, "classification":
+      "replace"|"ambiguous", "reason": "...", "per_field": {...},
+      "suggestion": "..."}`` — nothing saved. Changing archetype
+      (e.g., Unauthenticated -> Supply chain) is a classic
+      replacement rejection; soft-delete the current attacker and
+      add a new one instead.
+
+    Non-identity edits (likelihood, trust_boundary_ids) skip the
+    gate. Editing a soft-deleted attacker is rejected — restore
+    first. Fails with a tool error on HTTP 503 when the evaluator
+    is unreachable or 502 when it returns malformed output.
+
     Args:
         model_id: ID of the threat model.
         attacker_id: ID of the attacker (e.g., "T1").
@@ -1461,14 +1718,33 @@ async def edit_attacker(
 
 @mcp.tool()
 async def remove_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
-    """Remove an attacker from a threat model. Creates a new version.
+    """Soft-delete an attacker. Creates a new version.
+
+    Same lifecycle as remove_asset: ID preserved, linked COs
+    tombstoned, orphaned controls derived at read time. Use
+    `restore_attacker` to un-delete.
 
     Args:
         model_id: ID of the threat model.
-        attacker_id: ID of the attacker to remove.
+        attacker_id: ID of the attacker to soft-delete.
     """
     try:
         return _dump(await _get_client().remove_attacker(model_id, attacker_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def restore_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
+    """Un-soft-delete an attacker. Revives tombstoned COs; un-orphans
+    any linked controls.
+
+    Args:
+        model_id: ID of the threat model.
+        attacker_id: ID of the attacker to restore.
+    """
+    try:
+        return _dump(await _get_client().restore_attacker(model_id, attacker_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1613,6 +1889,19 @@ async def auto_remediate(
     Three-phase loop: (1) auto-map existing controls to unmapped requirements,
     (2) exclude requirements for non-applicable taxonomy primitives,
     (3) suggest and apply new assets/attackers for remaining gaps.
+
+    Phase (3) routes every proposal whose name matches a soft-deleted
+    asset/attacker through the same restore-candidate LLM gate
+    ``add_asset`` uses, so reanimating a previously removed entity
+    reinstates its stable ID and every CO tombstone + control tied to
+    it (rather than spawning a duplicate fresh ID). The response
+    distinguishes ``assets_added`` / ``attackers_added`` (genuinely new)
+    from ``assets_restored`` / ``attackers_restored`` (revived soft-
+    deletes) and lists ``restored_asset_ids`` / ``restored_attacker_ids``.
+    Proposals the gate classified as ``similar`` (or that fail-closed
+    on an unavailable / malformed gate response) appear under
+    ``skipped`` with a per-entry reason — the operator decides whether
+    to restore manually or rephrase.
 
     Converges automatically: stops when fully covered or when no further
     progress can be made.

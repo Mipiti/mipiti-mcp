@@ -204,12 +204,25 @@ class MipitiClient:
         self,
         messages: list[dict[str, str]],
         model_id: str | None = None,
+        force_generate: bool = False,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """POST /api/model/stream, consume SSE events, return final payload."""
+        """POST /api/model/stream, consume SSE events, return final payload.
+
+        Return shape is one of:
+        - ``{"result": ...}``-shaped dict (normal generate/refine path)
+        - ``{"chat_response": ...}``-shaped dict (query/general path)
+        - ``{"similar_models": [...]}`` when the backend short-circuits
+          generation because the feature description matches existing
+          models in the workspace. Caller can retry with
+          ``force_generate=True`` or pick a candidate to refine
+          instead.
+        """
         body: dict[str, Any] = {"messages": messages}
         if model_id:
             body["model_id"] = model_id
+        if force_generate:
+            body["force_generate"] = True
 
         # Generate a fresh Idempotency-Key for this stream request. The
         # streaming endpoint handles caching directly (the global middleware
@@ -220,6 +233,7 @@ class MipitiClient:
         client = self._get_client()
         result_data: dict[str, Any] | None = None
         chat_data: dict[str, Any] | None = None
+        similar_data: dict[str, Any] | None = None
 
         async with aconnect_sse(
             client, "POST", "/api/model/stream", json=body,
@@ -249,12 +263,23 @@ class MipitiClient:
                     result_data = json.loads(sse.data)
                 elif event_type == "chat_response":
                     chat_data = json.loads(sse.data)
+                elif event_type == "similar_models":
+                    # Backend short-circuited: the feature description
+                    # overlaps existing model(s) in the workspace.
+                    # Caller retries with force_generate=True or
+                    # refines a candidate. Stream closes after this
+                    # event — there is no subsequent `result`.
+                    similar_data = json.loads(sse.data)
                 elif event_type == "error":
                     data = json.loads(sse.data)
                     raise RuntimeError(data.get("message", "Unknown error"))
 
         if chat_data:
             return chat_data
+        if similar_data:
+            # Normalize: tool callers look for this key.
+            models = similar_data.get("models") or []
+            return {"similar_models": list(models)}
         if result_data:
             return result_data
         raise RuntimeError("Stream ended without a result or response event")
@@ -266,12 +291,22 @@ class MipitiClient:
     async def generate_threat_model(
         self,
         feature_description: str,
+        force_generate: bool = False,
         on_progress: ProgressCallback | None = None,
-    ) -> GenerateResult:
+    ) -> GenerateResult | dict:
+        """Returns a ``GenerateResult`` on normal generation, OR a raw
+        ``{"similar_models": [{id, title, reason}, ...]}`` dict when
+        the backend short-circuited because similar models already
+        exist in the workspace. Pass ``force_generate=True`` to skip
+        the similarity check and force a new generation.
+        """
         data = await self._stream_model(
             [{"role": "user", "content": feature_description}],
+            force_generate=force_generate,
             on_progress=on_progress,
         )
+        if isinstance(data, dict) and "similar_models" in data:
+            return data
         return GenerateResult.model_validate(data)
 
     async def refine_threat_model(
@@ -347,6 +382,7 @@ class MipitiClient:
 
     async def get_controls(
         self, model_id: str, include_deleted: bool = False,
+        include_orphaned: bool = False,
         control_id: str = "", status: str = "", co_id: str = "",
         component_id: str = "",
         offset: int = 0, limit: int = 0, summary_only: bool = False,
@@ -354,6 +390,8 @@ class MipitiClient:
         params: dict[str, Any] = {}
         if include_deleted:
             params["include_deleted"] = "true"
+        if include_orphaned:
+            params["include_orphaned"] = "true"
         if summary_only:
             params["summary_only"] = "true"
         if control_id:
@@ -426,6 +464,47 @@ class MipitiClient:
             return resp.json()
         resp.raise_for_status()
         return resp.json()
+
+    async def remap_control(
+        self,
+        model_id: str,
+        control_id: str,
+        co_ids: list[str],
+        change_reason: str,
+    ) -> dict:
+        """Mechanical (non-AI-gated) remap of a control's CO mappings.
+
+        Distinct from refine_control (AI-gated description edit).
+        Rejects target co_ids that are tombstoned (removed=True) or
+        do not exist on the model.
+        """
+        body: dict[str, Any] = {
+            "co_ids": list(co_ids),
+            "change_reason": change_reason,
+        }
+        resp = await self._request_with_idempotency(
+            "PATCH",
+            f"/api/models/{model_id}/controls/{control_id}/co-mapping",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def restore_asset(self, model_id: str, asset_id: str) -> ThreatModel:
+        """Un-soft-delete an asset. Tombstoned COs for that asset's
+        pairs are revived at save-time with their original IDs."""
+        data = await self._post(
+            f"/api/models/{model_id}/assets/{asset_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
+
+    async def restore_attacker(self, model_id: str, attacker_id: str) -> ThreatModel:
+        """Un-soft-delete an attacker. Tombstoned COs for that
+        attacker's pairs are revived with their original IDs."""
+        data = await self._post(
+            f"/api/models/{model_id}/attackers/{attacker_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
 
     async def get_mitigation_groups(
         self, model_id: str, co_id: str,
@@ -589,29 +668,64 @@ class MipitiClient:
     # Assets & Attackers
     # ------------------------------------------------------------------
 
-    async def add_asset(self, model_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._post(f"/api/models/{model_id}/assets", kwargs)
-        return ThreatModel.model_validate(data)
+    async def add_asset(self, model_id: str, **kwargs: Any) -> dict:
+        """POST /assets returns one of three response shapes:
 
-    async def edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
-        return ThreatModel.model_validate(data)
+        1. Normal create:
+           ``{"model": ThreatModel, "controls_carried": N, ...}``
+        2. Auto-restore (LLM classified as ``same``):
+           ``{"model": ThreatModel, "auto_restored": True,
+              "restored_asset_id": "A-N", "reason": "...",
+              "discarded_fields": [{"field", "proposed_value",
+              "preserved_value", "reason", "identity_bearing"}, ...]}``
+        3. Similar-verdict rejection:
+           ``{"accepted": False, "classification": "similar",
+              "candidate_restore_id": "A-N", "reason": "...",
+              "suggestion": "..."}``
 
-    async def remove_asset(self, model_id: str, asset_id: str) -> ThreatModel:
-        data = await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
-        return ThreatModel.model_validate(data)
+        HTTP 503 (evaluator unreachable) and 502 (evaluator returned
+        malformed output) both raise via httpx and are caught by the
+        tool wrapper as tool errors. The two are semantically
+        distinct: 503 means retry-with-backoff; 502 means retry-now.
+        """
+        return await self._post(f"/api/models/{model_id}/assets", kwargs)
 
-    async def add_attacker(self, model_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._post(f"/api/models/{model_id}/attackers", kwargs)
-        return ThreatModel.model_validate(data)
+    async def edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
+        """PUT /assets/{id} returns one of two response shapes:
 
-    async def edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> ThreatModel:
-        data = await self._put(f"/api/models/{model_id}/attackers/{attacker_id}", kwargs)
-        return ThreatModel.model_validate(data)
+        1. Accepted edit (or non-identity edit skipped the AI gate):
+           ``{"model": ThreatModel, "controls_carried": N, ...}``
+        2. Semantic-preservation rejection:
+           ``{"accepted": False, "classification": "replace"|"ambiguous",
+              "reason": "...", "per_field": {...}, "suggestion": "..."}``
 
-    async def remove_attacker(self, model_id: str, attacker_id: str) -> ThreatModel:
-        data = await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
-        return ThreatModel.model_validate(data)
+        HTTP 503 (evaluator unreachable) or 502 (evaluator returned
+        malformed output) raise via httpx as distinct signals.
+        """
+        return await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
+
+    async def remove_asset(self, model_id: str, asset_id: str) -> dict:
+        """DELETE /assets/{id} soft-deletes. Returns the
+        ``{"model": ThreatModel, ...}`` envelope; the asset stays in
+        ``model.assets`` with ``deleted=True``.
+        """
+        return await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
+
+    async def add_attacker(self, model_id: str, **kwargs: Any) -> dict:
+        """POST /attackers — same three-shape response as add_asset
+        (normal create / auto-restore / similar-rejection) plus 503 on
+        LLM outage."""
+        return await self._post(f"/api/models/{model_id}/attackers", kwargs)
+
+    async def edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
+        """PUT /attackers/{id} — same two-shape response as edit_asset
+        (accepted edit / semantic rejection) plus 503 on LLM outage."""
+        return await self._put(f"/api/models/{model_id}/attackers/{attacker_id}", kwargs)
+
+    async def remove_attacker(self, model_id: str, attacker_id: str) -> dict:
+        """DELETE /attackers/{id} soft-deletes. Returns the envelope
+        with the attacker now marked ``deleted=True`` in the model."""
+        return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
 
     # ------------------------------------------------------------------
     # Assurance

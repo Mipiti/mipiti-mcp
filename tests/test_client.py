@@ -168,12 +168,21 @@ async def test_remove_evidence(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_add_asset(mock_env: None) -> None:
+    # API returns a wrapper envelope: {"model": ..., "controls_carried": ...}.
+    # Rejection / auto-restore responses are covered in the tool-level
+    # tests in test_tools.py; here we just exercise the client's
+    # happy-path pass-through.
     respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(
-        return_value=httpx.Response(200, json={"id": "A3", "name": "Session Store"})
+        return_value=httpx.Response(200, json={
+            "model": {"id": "tm-001", "assets": [{"id": "A3", "name": "Session Store"}]},
+            "controls_carried": 0,
+            "controls_dropped": 0,
+        })
     )
     client = MipitiClient()
     result = await client.add_asset("tm-001", name="Session Store")
-    assert result.id == "A3"
+    assert result["model"]["assets"][0]["id"] == "A3"
+    assert result["controls_carried"] == 0
     await client.close()
 
 
@@ -602,7 +611,10 @@ class TestTransientRetry:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise httpx.ConnectError("network blip")
-            return httpx.Response(200, json={"id": "A1", "name": "after retry"})
+            return httpx.Response(200, json={
+                "model": {"id": "tm-001", "assets": [{"id": "A1", "name": "after retry"}]},
+                "controls_carried": 0, "controls_dropped": 0,
+            })
 
         respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
 
@@ -610,7 +622,7 @@ class TestTransientRetry:
         result = await client.add_asset("tm-001", name="x")
         await client.close()
 
-        assert result.name == "after retry"
+        assert result["model"]["assets"][0]["name"] == "after retry"
         assert attempts["n"] == 2
         # Both attempts must use the SAME key so the server cache deduplicates
         assert len(captured_keys) == 2

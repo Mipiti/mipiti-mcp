@@ -66,6 +66,9 @@ from mipiti_mcp.server import (
     submit_assertions,
     submit_findings,
     refine_control,
+    remap_control,
+    restore_asset,
+    restore_attacker,
     update_control_status,
     update_finding,
 )
@@ -106,12 +109,20 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "check_control_gaps": {"job_id": "job_gaps"},
         "get_scan_prompt": {"prompt": "Scan for..."},
         "get_control_objectives": {"model_id": "tm-001", "total": 1},
-        "add_asset": {"id": "A3", "name": "New"},
-        "edit_asset": {"id": "A1", "name": "Updated"},
-        "remove_asset": {"deleted": True},
-        "add_attacker": {"id": "T2", "capability": "New"},
-        "edit_attacker": {"id": "T1", "capability": "Updated"},
-        "remove_attacker": {"deleted": True},
+        # Realistic API envelope shape: the backend returns a dict
+        # with `model` + carry-forward metadata, not a raw entity.
+        "add_asset": {"model": {"id": "tm-001", "assets": [{"id": "A3"}]},
+                      "controls_carried": 0, "controls_orphaned": 0},
+        "edit_asset": {"model": {"id": "tm-001", "assets": [{"id": "A1"}]},
+                       "controls_carried": 0, "controls_orphaned": 0},
+        "remove_asset": {"model": {"id": "tm-001", "assets": []},
+                         "controls_carried": 0, "controls_orphaned": 0},
+        "add_attacker": {"model": {"id": "tm-001", "attackers": [{"id": "T2"}]},
+                         "controls_carried": 0, "controls_orphaned": 0},
+        "edit_attacker": {"model": {"id": "tm-001", "attackers": [{"id": "T1"}]},
+                          "controls_carried": 0, "controls_orphaned": 0},
+        "remove_attacker": {"model": {"id": "tm-001", "attackers": []},
+                            "controls_carried": 0, "controls_orphaned": 0},
         "assess_model": {"mitigated": 1, "at_risk": 0},
         "get_review_queue": {"items": []},
         "list_compliance_frameworks": {"frameworks": [{"id": "owasp-asvs"}]},
@@ -136,6 +147,13 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "create_system": {"id": "sys-2", "name": "New"},
         "add_model_to_system": {"added": True},
         "refine_control": {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}},
+        "remap_control": {
+            "control": {"id": "CTRL-01", "control_objective_ids": ["CO1", "CO3"]},
+            "model_id": "tm-001", "model_version": 2,
+            "change_reason": "Restore mappings after v1->v2 renumber",
+        },
+        "restore_asset": {"id": "A1", "deleted": False},
+        "restore_attacker": {"id": "T1", "deleted": False},
         "get_control_assumption_groups": {
             "control_id": "CTRL-01",
             "control_description": "Test control",
@@ -185,6 +203,46 @@ class TestGenerateThreatModel:
         assert result["asset_count"] == 2
         mock.generate_threat_model.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_similar_models_short_circuit(self) -> None:
+        """Backend returns similar_models instead of generating. Tool
+        must pass the candidate IDs through with a suggestion, not
+        raise a tool error."""
+        mock = _mock_client(generate_threat_model=AsyncMock(return_value={
+            "similar_models": [
+                {"id": "tm-existing", "title": "Login Page",
+                 "reason": "Same auth surface."},
+            ],
+        }))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await generate_threat_model(
+                server_version="0",
+                feature_description="User login",
+                ctx=ctx,
+            )
+        assert "similar_models" in result
+        assert result["similar_models"][0]["id"] == "tm-existing"
+        assert "refine_threat_model" in result["suggestion"]
+        assert "force=True" in result["suggestion"]
+
+    @pytest.mark.asyncio
+    async def test_force_is_forwarded_to_client(self) -> None:
+        """The `force` tool arg must reach the client as
+        ``force_generate=True`` — otherwise retry-with-force has no
+        effect and the agent stays stuck on the similar-models loop."""
+        mock = _mock_client()
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await generate_threat_model(
+                server_version="0",
+                feature_description="User login",
+                ctx=ctx,
+                force=True,
+            )
+        call_kwargs = mock.generate_threat_model.await_args.kwargs
+        assert call_kwargs.get("force_generate") is True
+
 
 class TestRefineThreatModel:
     @pytest.mark.asyncio
@@ -194,7 +252,86 @@ class TestRefineThreatModel:
         with _patch_client(mock):
             result = await refine_threat_model(server_version="0", model_id="tm-001", instruction="Add CSRF", ctx=ctx)
         assert result["model_id"] == "tm-001"
+        # Live-count keys are present and agree with mock shape.
+        assert "live_asset_count" in result
+        assert "live_attacker_count" in result
+        assert "live_control_objective_count" in result
+        # Semantic-rejections array surfaced (empty on happy path).
+        assert result["semantic_rejections"] == []
         mock.refine_threat_model.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_semantic_rejections_surfaced(self) -> None:
+        """When the refine-path guard reverted an identity-bearing
+        rewrite, the tool must pass the rejection array through so
+        the agent can surface what refine chose not to apply."""
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        rejected = GenerateResult(
+            threat_model=ThreatModel(id="tm-001", title="t"),
+            model_id="tm-001",
+            version=3,
+            semantic_rejections=[
+                {
+                    "kind": "asset", "id": "A-04",
+                    "classification": "replace",
+                    "reason": "Rename from OIDC Token to CI Attestation Bundle is a different asset.",
+                    "per_field": {"name": "OIDC Token -> CI Attestation Bundle"},
+                },
+            ],
+        )
+        mock = _mock_client(refine_threat_model=AsyncMock(return_value=rejected))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await refine_threat_model(
+                server_version="0", model_id="tm-001",
+                instruction="Rename A-04", ctx=ctx,
+            )
+        rejections = result["semantic_rejections"]
+        assert len(rejections) == 1
+        assert rejections[0]["kind"] == "asset"
+        assert rejections[0]["id"] == "A-04"
+        assert rejections[0]["classification"] == "replace"
+
+    @pytest.mark.asyncio
+    async def test_live_counts_exclude_soft_deleted(self) -> None:
+        """live_asset_count / live_attacker_count / live_control_
+        objective_count must exclude soft-deleted / tombstoned entries
+        so agents don't surface stale totals."""
+        from mipiti_mcp.types import (
+            GenerateResult, ThreatModel, Asset, Attacker, ControlObjective,
+        )
+        tm = ThreatModel(
+            id="tm-001",
+            title="t",
+            assets=[
+                Asset(id="A1", name="Live"),
+                Asset(id="A2", name="Dead", deleted=True),
+            ],
+            attackers=[
+                Attacker(id="T1", capability="Live"),
+                Attacker(id="T2", capability="Dead", deleted=True),
+            ],
+            control_objectives=[
+                ControlObjective(id="CO1", asset_id="A1", attacker_id="T1", statement="s"),
+                ControlObjective(id="CO2", asset_id="A2", attacker_id="T1",
+                                 statement="", removed=True),
+            ],
+        )
+        mock = _mock_client(refine_threat_model=AsyncMock(
+            return_value=GenerateResult(threat_model=tm, model_id="tm-001", version=2),
+        ))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await refine_threat_model(
+                server_version="0", model_id="tm-001",
+                instruction="..", ctx=ctx,
+            )
+        assert result["asset_count"] == 2
+        assert result["live_asset_count"] == 1
+        assert result["attacker_count"] == 2
+        assert result["live_attacker_count"] == 1
+        assert result["control_objective_count"] == 2
+        assert result["live_control_objective_count"] == 1
 
 
 class TestQueryThreatModel:
@@ -490,6 +627,62 @@ class TestRefineControl:
             await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="New desc.", justification="Short")
 
 
+class TestRemapControl:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await remap_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                co_ids="CO1, CO3",
+                change_reason="Restore mappings after v1->v2 renumber",
+            )
+        assert "control" in result
+        mock.remap_control.assert_awaited_once()
+        args = mock.remap_control.await_args
+        assert args.args[2] == ["CO1", "CO3"]
+
+    @pytest.mark.asyncio
+    async def test_empty_co_ids_rejected(self) -> None:
+        with pytest.raises(ToolError, match="at least one CO ID"):
+            await remap_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                co_ids="",
+                change_reason="Any valid change reason here.",
+            )
+
+    @pytest.mark.asyncio
+    async def test_short_change_reason_rejected(self) -> None:
+        with pytest.raises(ToolError, match="at least 10"):
+            await remap_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                co_ids="CO1",
+                change_reason="short",
+            )
+
+
+class TestRestoreAssetAttacker:
+    @pytest.mark.asyncio
+    async def test_restore_asset(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await restore_asset(
+                server_version="0", model_id="tm-001", asset_id="A1",
+            )
+        assert result["deleted"] is False
+        mock.restore_asset.assert_awaited_once_with("tm-001", "A1")
+
+    @pytest.mark.asyncio
+    async def test_restore_attacker(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await restore_attacker(
+                server_version="0", model_id="tm-001", attacker_id="T1",
+            )
+        assert result["deleted"] is False
+        mock.restore_attacker.assert_awaited_once_with("tm-001", "T1")
+
+
 class TestAddEvidence:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
@@ -587,11 +780,98 @@ class TestGetReviewQueue:
 class TestAddAsset:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
+        """Normal create: API returns {"model": ..., "controls_carried": ...}."""
         mock = _mock_client()
         with _patch_client(mock):
             result = await add_asset(server_version="0", model_id="tm-001", name="Session Store")
-        assert result["id"] == "A3"
+        assert "model" in result
+        assert result["controls_carried"] == 0
         mock.add_asset.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_restore_response_surfaced(self) -> None:
+        """When the backend classifies the proposed asset as the same
+        entity as a soft-deleted one, it auto-restores and returns
+        `auto_restored: True`, `restored_asset_id`, and
+        `discarded_fields`. The MCP tool must pass all of those
+        through so the agent knows the call wasn't a fresh create
+        AND can reapply non-identity proposed values if appropriate."""
+        mock = _mock_client(add_asset=AsyncMock(return_value={
+            "model": {"id": "tm-001", "assets": [{"id": "A-04"}]},
+            "controls_carried": 2,
+            "controls_orphaned": 0,
+            "auto_restored": True,
+            "restored_asset_id": "A-04",
+            "reason": "Proposed asset matched soft-deleted A-04; restored it.",
+            "discarded_fields": [
+                {"field": "impact", "proposed_value": "H",
+                 "preserved_value": "M", "identity_bearing": False,
+                 "reason": "Restored asset keeps archived rating."},
+            ],
+        }))
+        with _patch_client(mock):
+            result = await add_asset(
+                server_version="0", model_id="tm-001",
+                name="OIDC Token", impact="H",
+            )
+        assert result["auto_restored"] is True
+        assert result["restored_asset_id"] == "A-04"
+        # Agent needs the discarded fields to decide whether to reapply.
+        assert len(result["discarded_fields"]) == 1
+        assert result["discarded_fields"][0]["field"] == "impact"
+        assert result["discarded_fields"][0]["identity_bearing"] is False
+
+    @pytest.mark.asyncio
+    async def test_add_asset_invalid_response_raises_502(self) -> None:
+        """Distinct from 503 (evaluator down), 502 means the evaluator
+        responded but output was malformed. Agent's retry profile
+        differs: retry-same-prompt for 502, retry-with-backoff for 503."""
+        import httpx
+        err = httpx.HTTPStatusError(
+            "502 Bad Gateway",
+            request=httpx.Request("POST", "http://test"),
+            response=httpx.Response(502, json={
+                "detail": "Asset restore-candidate evaluator returned malformed output.",
+            }),
+        )
+        mock = _mock_client(add_asset=AsyncMock(side_effect=err))
+        with _patch_client(mock), pytest.raises(ToolError):
+            await add_asset(server_version="0", model_id="tm-001", name="X")
+
+    @pytest.mark.asyncio
+    async def test_similar_verdict_rejected_with_suggestion(self) -> None:
+        """When the LLM classifies as `similar` (might be the same but
+        not confident), backend returns {accepted: False, ...} at
+        HTTP 200. Tool passes the structured rejection through."""
+        mock = _mock_client(add_asset=AsyncMock(return_value={
+            "accepted": False,
+            "classification": "similar",
+            "candidate_restore_id": "A-04",
+            "reason": "Names match but descriptions diverge.",
+            "suggestion": "Call restore_asset, or re-submit with a distinctive description.",
+        }))
+        with _patch_client(mock):
+            result = await add_asset(server_version="0", model_id="tm-001", name="OIDC Token")
+        assert result["accepted"] is False
+        assert result["classification"] == "similar"
+        assert result["candidate_restore_id"] == "A-04"
+        assert "restore_asset" in result["suggestion"]
+
+    @pytest.mark.asyncio
+    async def test_llm_unavailable_raises_tool_error(self) -> None:
+        """503 from the backend (LLM evaluator down) surfaces as a
+        tool error that agents can retry."""
+        import httpx
+        err = httpx.HTTPStatusError(
+            "503 Service Unavailable",
+            request=httpx.Request("POST", "http://test"),
+            response=httpx.Response(503, json={
+                "detail": "Asset restore-candidate evaluator unavailable.",
+            }),
+        )
+        mock = _mock_client(add_asset=AsyncMock(side_effect=err))
+        with _patch_client(mock), pytest.raises(ToolError):
+            await add_asset(server_version="0", model_id="tm-001", name="OIDC Token")
 
 
 class TestEditAsset:
@@ -600,16 +880,55 @@ class TestEditAsset:
         mock = _mock_client()
         with _patch_client(mock):
             result = await edit_asset(server_version="0", model_id="tm-001", asset_id="A1", name="Updated")
-        assert result["name"] == "Updated"
+        assert "model" in result
+
+    @pytest.mark.asyncio
+    async def test_semantic_rejection_surfaced(self) -> None:
+        """When the LLM classifies the edit as `replace` or
+        `ambiguous`, backend returns HTTP 200 with a structured
+        rejection. Tool passes it through so the agent can act."""
+        mock = _mock_client(edit_asset=AsyncMock(return_value={
+            "accepted": False,
+            "classification": "replace",
+            "reason": "Rename changes semantic identity.",
+            "per_field": {"name": "Card Data -> Audit Log is a different asset"},
+            "suggestion": "Soft-delete + add new.",
+        }))
+        with _patch_client(mock):
+            result = await edit_asset(
+                server_version="0", model_id="tm-001", asset_id="A1",
+                name="Audit Log",
+            )
+        assert result["accepted"] is False
+        assert result["classification"] == "replace"
+        assert "per_field" in result
+
+    @pytest.mark.asyncio
+    async def test_llm_unavailable_raises_tool_error(self) -> None:
+        import httpx
+        err = httpx.HTTPStatusError(
+            "503 Service Unavailable",
+            request=httpx.Request("PUT", "http://test"),
+            response=httpx.Response(503, json={
+                "detail": "Asset semantic-preservation evaluator unavailable.",
+            }),
+        )
+        mock = _mock_client(edit_asset=AsyncMock(side_effect=err))
+        with _patch_client(mock), pytest.raises(ToolError):
+            await edit_asset(
+                server_version="0", model_id="tm-001", asset_id="A1",
+                name="Renamed",
+            )
 
 
 class TestRemoveAsset:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
+        """Soft-delete: asset stays in model with deleted=True."""
         mock = _mock_client()
         with _patch_client(mock):
             result = await remove_asset(server_version="0", model_id="tm-001", asset_id="A1")
-        assert result["deleted"] is True
+        assert "model" in result
 
 
 class TestAddAttacker:
@@ -618,7 +937,40 @@ class TestAddAttacker:
         mock = _mock_client()
         with _patch_client(mock):
             result = await add_attacker(server_version="0", model_id="tm-001", capability="Phishing")
-        assert result["id"] == "T2"
+        assert "model" in result
+
+    @pytest.mark.asyncio
+    async def test_auto_restore_response_surfaced(self) -> None:
+        mock = _mock_client(add_attacker=AsyncMock(return_value={
+            "model": {"id": "tm-001", "attackers": [{"id": "T-03"}]},
+            "controls_carried": 1,
+            "controls_orphaned": 0,
+            "auto_restored": True,
+            "restored_attacker_id": "T-03",
+            "reason": "Matched soft-deleted T-03.",
+        }))
+        with _patch_client(mock):
+            result = await add_attacker(
+                server_version="0", model_id="tm-001", capability="Supply chain",
+            )
+        assert result["auto_restored"] is True
+        assert result["restored_attacker_id"] == "T-03"
+
+    @pytest.mark.asyncio
+    async def test_similar_verdict_rejected(self) -> None:
+        mock = _mock_client(add_attacker=AsyncMock(return_value={
+            "accepted": False,
+            "classification": "similar",
+            "candidate_restore_id": "T-03",
+            "reason": "Capability close but archetype differs.",
+            "suggestion": "Call restore_attacker(T-03) or distinguish the new one.",
+        }))
+        with _patch_client(mock):
+            result = await add_attacker(
+                server_version="0", model_id="tm-001", capability="Supply chain",
+            )
+        assert result["accepted"] is False
+        assert result["classification"] == "similar"
 
 
 class TestEditAttacker:
@@ -627,7 +979,24 @@ class TestEditAttacker:
         mock = _mock_client()
         with _patch_client(mock):
             result = await edit_attacker(server_version="0", model_id="tm-001", attacker_id="T1", capability="Updated")
-        assert result["capability"] == "Updated"
+        assert "model" in result
+
+    @pytest.mark.asyncio
+    async def test_semantic_rejection_surfaced(self) -> None:
+        mock = _mock_client(edit_attacker=AsyncMock(return_value={
+            "accepted": False,
+            "classification": "replace",
+            "reason": "Archetype change is a different adversary.",
+            "per_field": {"archetype": "Unauthenticated -> Supply chain"},
+            "suggestion": "Soft-delete + add new.",
+        }))
+        with _patch_client(mock):
+            result = await edit_attacker(
+                server_version="0", model_id="tm-001", attacker_id="T1",
+                archetype="Supply chain",
+            )
+        assert result["accepted"] is False
+        assert result["classification"] == "replace"
 
 
 class TestRemoveAttacker:
@@ -636,7 +1005,7 @@ class TestRemoveAttacker:
         mock = _mock_client()
         with _patch_client(mock):
             result = await remove_attacker(server_version="0", model_id="tm-001", attacker_id="T1")
-        assert result["deleted"] is True
+        assert "model" in result
 
 
 # ------------------------------------------------------------------
