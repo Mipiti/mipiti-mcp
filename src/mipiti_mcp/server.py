@@ -477,6 +477,23 @@ async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, ti
     except Exception:
         http_request = None
 
+    # MCP spec invariants on a progressToken sequence:
+    #   - `progress` is strictly increasing
+    #   - `total`, if provided, is CONSTANT across the sequence
+    # Clients are allowed to drop sequences that violate either.
+    #
+    # The backend may advertise (progress_current, progress_total). When it
+    # does, we lock onto the first total we see and only emit when current
+    # strictly advances AND the total still matches. If the backend shifts
+    # phases (total changes) we SKIP the emission rather than violate the
+    # invariant — the client's bar stays where it was, which is a better UX
+    # than dropping the whole sequence. When numerics are absent, fall back
+    # to indeterminate mode: a locally-incrementing poll counter with
+    # total=None (clients render a spinner).
+    last_progress: float = 0.0
+    locked_total: float | None = None
+    poll_counter: int = 0
+
     while True:
         if http_request is not None:
             try:
@@ -498,15 +515,34 @@ async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, ti
             raise ToolError(data.get("error", "Background job failed"))
         if time.monotonic() > deadline:
             raise ToolError(f"Operation timed out after {timeout}s")
-        progress = data.get("progress", "")
-        if progress:
-            await _safe_report_progress(ctx, 0, 1, str(progress))
+
+        message = data.get("progress") or ""
+        cur = data.get("progress_current")
+        tot = data.get("progress_total")
+
+        if cur is not None and tot is not None and float(tot) > 0:
+            cur_f = float(cur)
+            tot_f = float(tot)
+            if locked_total is None:
+                locked_total = tot_f
+            # Only emit when total matches the locked value AND current strictly
+            # advances. Phase shifts (total changed) and duplicate polls are
+            # both silently skipped to preserve MCP invariants.
+            if tot_f == locked_total and cur_f > last_progress:
+                last_progress = cur_f
+                await _safe_report_progress(ctx, last_progress, locked_total, str(message))
+        elif message:
+            # Indeterminate mode: no numerics advertised, bump a local monotonic
+            # counter and omit `total` so clients render a spinner.
+            poll_counter += 1
+            await _safe_report_progress(ctx, poll_counter, None, str(message))
+
         wait = data.get("poll_after_seconds", 3)
         await asyncio.sleep(wait)
 
 
 async def _safe_report_progress(
-    ctx: Context, progress: float, total: float, message: str,
+    ctx: Context, progress: float, total: float | None, message: str,
 ) -> None:
     """Forward a progress notification, suppressing closed-channel errors.
 
