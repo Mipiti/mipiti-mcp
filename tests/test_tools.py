@@ -1235,6 +1235,146 @@ class TestAwaitBackendJob:
         assert result["controls_total"] == 1
         mock.get_operation.assert_awaited_once_with("job_robust")
 
+    # ----- Progress monotonicity & total-constancy (MCP invariants) -----
+    #
+    # These tests drive _await_backend_job through scripted get_operation
+    # responses and assert on captured ctx.report_progress calls. We don't
+    # mock _safe_report_progress — the guard-wrapper must stay in the path.
+
+    @staticmethod
+    def _script(responses: list[dict]) -> AsyncMock:
+        """Build a get_operation mock that yields a scripted response sequence
+        and then reports `completed` forever."""
+        final = {"status": "completed", "result": {"mappings_created": 0, "controls_mapped": 0, "controls_total": 0}}
+        it = iter(responses)
+
+        async def _next(_job_id: str) -> dict:
+            try:
+                return next(it)
+            except StopIteration:
+                return final
+
+        return AsyncMock(side_effect=_next)
+
+    @pytest.mark.asyncio
+    async def test_progress_numeric_happy_path(self) -> None:
+        """Backend advertises (cur, tot): (1,5) -> (2,5) -> (3,5).
+
+        Expect three emissions, current strictly increasing, total constant.
+        """
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_p1"}))
+        mock.get_operation = self._script([
+            {"status": "running", "progress": "step 1", "progress_current": 1, "progress_total": 5, "poll_after_seconds": 0},
+            {"status": "running", "progress": "step 2", "progress_current": 2, "progress_total": 5, "poll_after_seconds": 0},
+            {"status": "running", "progress": "step 3", "progress_current": 3, "progress_total": 5, "poll_after_seconds": 0},
+        ])
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        calls = ctx.report_progress.await_args_list
+        assert len(calls) == 3
+        # Signature: ctx.report_progress(progress, total, message=...)
+        assert [c.args[0] for c in calls] == [1.0, 2.0, 3.0]
+        assert [c.args[1] for c in calls] == [5.0, 5.0, 5.0]
+        assert [c.kwargs["message"] for c in calls] == ["step 1", "step 2", "step 3"]
+
+    @pytest.mark.asyncio
+    async def test_progress_duplicate_poll_skipped(self) -> None:
+        """Backend repeats (1,5): only one emission (second would violate strict increase)."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_p2"}))
+        mock.get_operation = self._script([
+            {"status": "running", "progress": "step 1", "progress_current": 1, "progress_total": 5, "poll_after_seconds": 0},
+            {"status": "running", "progress": "step 1", "progress_current": 1, "progress_total": 5, "poll_after_seconds": 0},
+        ])
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        calls = ctx.report_progress.await_args_list
+        assert len(calls) == 1
+        assert calls[0].args[:2] == (1.0, 5.0)
+
+    @pytest.mark.asyncio
+    async def test_progress_total_changes_midflight_skipped(self) -> None:
+        """Phase shift: (3,5) -> (1,10). Second emission is SKIPPED, locked total wins.
+
+        We don't fall back to indeterminate mode either — the bar freezes where
+        it was until numerics align with the locked total again.
+        """
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_p3"}))
+        mock.get_operation = self._script([
+            {"status": "running", "progress": "phase A", "progress_current": 3, "progress_total": 5, "poll_after_seconds": 0},
+            {"status": "running", "progress": "phase B", "progress_current": 1, "progress_total": 10, "poll_after_seconds": 0},
+        ])
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        calls = ctx.report_progress.await_args_list
+        assert len(calls) == 1
+        assert calls[0].args[:2] == (3.0, 5.0)
+
+    @pytest.mark.asyncio
+    async def test_progress_numerics_disappear_after_present(self) -> None:
+        """(2,5) first, then numerics disappear leaving only message.
+
+        Indeterminate-mode elif fires with incrementing poll_counter.
+        """
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_p4"}))
+        mock.get_operation = self._script([
+            {"status": "running", "progress": "step 2", "progress_current": 2, "progress_total": 5, "poll_after_seconds": 0},
+            {"status": "running", "progress": "still working", "poll_after_seconds": 0},
+            {"status": "running", "progress": "still working more", "poll_after_seconds": 0},
+        ])
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        calls = ctx.report_progress.await_args_list
+        assert len(calls) == 3
+        assert calls[0].args[:2] == (2.0, 5.0)
+        # Indeterminate: total=None, poll_counter increments 1, 2
+        assert calls[1].args == (1, None)
+        assert calls[2].args == (2, None)
+        assert calls[1].kwargs["message"] == "still working"
+        assert calls[2].kwargs["message"] == "still working more"
+
+    @pytest.mark.asyncio
+    async def test_progress_indeterminate_only(self) -> None:
+        """No numerics ever — only message strings. poll_counter 1, 2, 3 with total=None."""
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_p5"}))
+        mock.get_operation = self._script([
+            {"status": "running", "progress": "msg a", "poll_after_seconds": 0},
+            {"status": "running", "progress": "msg b", "poll_after_seconds": 0},
+            {"status": "running", "progress": "msg c", "poll_after_seconds": 0},
+        ])
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        calls = ctx.report_progress.await_args_list
+        assert len(calls) == 3
+        assert [c.args for c in calls] == [(1, None), (2, None), (3, None)]
+        assert [c.kwargs["message"] for c in calls] == ["msg a", "msg b", "msg c"]
+
+    @pytest.mark.asyncio
+    async def test_progress_empty_poll_no_emission(self) -> None:
+        """Poll with no numerics and no message: no emission that poll.
+
+        Preserves the pre-fix behavior of never emitting on empty payloads.
+        """
+        mock = _mock_client(auto_map_controls=AsyncMock(return_value={"job_id": "job_p6"}))
+        mock.get_operation = self._script([
+            {"status": "running", "poll_after_seconds": 0},
+            {"status": "running", "poll_after_seconds": 0},
+        ])
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await auto_map_controls(server_version="0", model_id="tm-001", framework_id="f1", ctx=ctx)
+
+        assert ctx.report_progress.await_count == 0
+
 
 # ------------------------------------------------------------------
 # Workspaces & Systems
