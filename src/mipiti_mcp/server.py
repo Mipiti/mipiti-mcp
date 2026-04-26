@@ -114,7 +114,12 @@ at least one assertion BEFORE marking implemented. Always submit \
 assertions first, then update status.
 - `get_verification_report` — shows which controls are verified, which \
 have sufficiency gaps, and which lack assertions entirely. Read \
-`sufficiency_details` for the specific aspects that still need proof.
+`sufficiency_details` for the specific aspects that still need proof. \
+Each `sufficiency` block also carries `misaligned_assertion_ids` \
+(off-topic assertions that should be rebound, superseded, or rewritten — \
+do not treat them as evidence) and `stale: true` (cached verdict no \
+longer matches current inputs; a background re-eval was triggered on \
+read — call again shortly for a refreshed verdict).
 - `get_sufficiency` — quick check: do assertions for a single control \
 collectively cover all aspects? Evaluated server-side at submission.
 - `get_mitigation_groups` — get the current group structure for a CO with \
@@ -129,7 +134,11 @@ restructuring alternative mitigation paths. Groups define: within group AND \
 (all required), across groups OR (any complete group mitigates). AI-gated: \
 rejected if the new structure doesn't satisfy the CO.
 - `refine_control` — modify a control's description if it doesn't match \
-the actual security requirement.
+the actual security requirement. **Side effect on accepted refinements**: \
+every assertion attached to the control is superseded — their claims \
+were authored against the prior description and may not be on-topic for \
+the new one. Response carries `superseded_assertions: <count>`. Re-submit \
+any assertion that still applies; superseded rows remain in history.
 - `delete_control` — soft-delete a control with justification. Blocked if \
 it is the only control covering a CO — add a replacement first.
 - `import_controls` — import existing controls from JSON or free text, \
@@ -1184,6 +1193,14 @@ async def refine_control(
     The AI evaluates whether the mitigation group still collectively
     satisfies all mapped control objectives. If rejected, returns
     {accepted: false, reason, per_co} with per-CO reasoning.
+
+    **Side effect on accepted refinements**: every assertion attached
+    to this control is superseded — their claims were authored against
+    the prior description and are not guaranteed to align with the new
+    one. The response includes ``superseded_assertions: <count>`` so
+    the caller knows how many. Re-submit any assertion that still
+    applies under the new description; superseded rows remain in
+    history with ``superseded_by="control_refined:..."``.
 
     Args:
         model_id: ID of the threat model.
@@ -2398,6 +2415,25 @@ async def get_verification_report(
 
     Returns tier1/tier2 pass/fail/pending counts, per-control verification
     status, and sufficiency details.
+
+    Each per-control ``sufficiency`` block carries:
+
+    - ``status``: ``"sufficient" | "insufficient" | "pending" | "stale"``.
+      ``"stale"`` means the cached verdict no longer reflects the current
+      control description or active assertion set; a background
+      re-evaluation has been triggered automatically on this read — call
+      this tool again shortly for a refreshed verdict.
+    - ``details``: human-readable LLM reasoning.
+    - ``misaligned_assertion_ids``: assertions whose stated subject is
+      off-topic for the control's current description (common after a
+      control has been refined or regenerated). Treat as a directive:
+      rebind to the right control, supersede via ``delete_assertion``,
+      or rewrite. Do NOT treat them as evidence. A non-empty list forces
+      the verdict to ``"insufficient"``.
+    - ``stale``: boolean shortcut for ``status == "stale"``, kept distinct
+      so an INSUFFICIENT verdict that's also stale (the prior insufficient
+      decision was computed under outdated inputs) can be flagged without
+      overloading ``status``.
 
     By default returns summary only (no per-assertion details). Set
     summary_only=False to include full assertion details and drift items.
