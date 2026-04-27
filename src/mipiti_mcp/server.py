@@ -1311,6 +1311,54 @@ async def assign_control_to_components(
 
 
 @mcp.tool()
+async def assign_asset_to_components(
+    server_version: str,
+    model_id: str,
+    asset_id: str,
+    component_ids: str,
+    change_reason: str,
+) -> dict:
+    """Replace an asset's component scope.
+
+    Mirror of ``assign_control_to_components`` for assets. Components
+    are the canonical bridge between security architecture (trust
+    boundaries) and code organization (repos). Linking assets to
+    components flows boundary context into reachability derivation
+    without giving Asset its own ``trust_boundary_ids``.
+
+    An asset's component scope can be:
+    - Unscoped (empty string): no explicit code-ownership binding.
+      Reach decisions fall back to LLM judgment of the asset's
+      description / security properties.
+    - Single-component: standard case for assets handled by one
+      deployable unit.
+    - Multi-component: a multi-instance asset that flows through
+      several components (e.g., a session token on client + cache
+      + DB — each component handles a distinct instance).
+
+    Mechanical, non-AI-gated. Validates only that every referenced
+    component exists on the model.
+
+    Args:
+        model_id: ID of the threat model.
+        asset_id: ID of the asset to scope (e.g., "A1").
+        component_ids: Comma-separated component IDs (e.g., "CMP1,CMP2").
+            Empty string = unscoped.
+        change_reason: Why this scope is appropriate (min 10 chars).
+            Captured in the model's version history.
+    """
+    parsed = [c.strip() for c in component_ids.split(",") if c.strip()] if component_ids else []
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().assign_asset_to_components(
+            model_id, asset_id, parsed, change_reason.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def model_coherence_report(
     server_version: str,
     model_id: str,
@@ -1638,16 +1686,25 @@ async def add_asset(
     description: str = "",
     security_properties: Optional[str] = None,
     notes: str = "",
+    component_ids: Optional[str] = None,
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
     The caller supplies identity-bearing fields (name, description,
-    security_properties, notes); the backend LLM-reasons the factor
-    decomposition (and composes the ``impact`` rating from it). The
-    same prompt the generation pipeline uses for LLM-produced assets
-    is reused here, so factors are calibrated consistently regardless
-    of who introduced the asset. Override any factor post-create via
-    ``edit_asset`` with a ``change_reason`` for the audit trail.
+    security_properties, notes) plus optional component scoping; the
+    backend LLM-reasons the factor decomposition (and composes the
+    ``impact`` rating from it). The same prompt the generation
+    pipeline uses for LLM-produced assets is reused here, so factors
+    are calibrated consistently regardless of who introduced the
+    asset. Override any factor post-create via ``edit_asset`` with a
+    ``change_reason`` for the audit trail.
+
+    ``component_ids`` (optional) links the asset to one or more
+    deployable units. Components are the canonical bridge between
+    security architecture (trust boundaries) and code organization
+    (repos); linking assets here flows boundary context into the
+    reachability graph. Multi-component is the right shape for
+    multi-instance assets (e.g., a session token on client + cache).
 
     LLM-gated against a re-add of a previously soft-deleted asset on
     the same model. Three possible outcomes:
@@ -1676,6 +1733,9 @@ async def add_asset(
         security_properties: Comma-separated properties, e.g. "C,I,A"
             (default: "C").
         notes: Optional notes.
+        component_ids: Comma-separated component IDs scoping the asset
+            (e.g., "CMP1,CMP2"). Empty / omitted = unscoped. Validated
+            against components declared on the model.
     """
     body: dict[str, Any] = {"name": name}
     if description:
@@ -1684,6 +1744,8 @@ async def add_asset(
         body["security_properties"] = [p.strip() for p in security_properties.split(",") if p.strip()]
     if notes:
         body["notes"] = notes
+    if component_ids is not None:
+        body["component_ids"] = [c.strip() for c in component_ids.split(",") if c.strip()]
     try:
         return _dump(await _get_client().add_asset(model_id, **body))
     except Exception as exc:

@@ -518,6 +518,36 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def assign_asset_to_components(
+        self,
+        model_id: str,
+        asset_id: str,
+        component_ids: list[str],
+        change_reason: str,
+    ) -> dict:
+        """Replace an asset's component scope with the supplied list.
+
+        Mirror of ``assign_control_to_components`` for assets. Empty
+        list → unscoped (no explicit code-ownership binding); single
+        element → standard case; multi-element → multi-instance asset
+        flowing through several components (e.g., a session token on
+        client + cache + DB).
+
+        Validates that every supplied component_id exists on the
+        model. Mechanical, non-AI-gated.
+        """
+        body: dict[str, Any] = {
+            "component_ids": list(component_ids),
+            "change_reason": change_reason,
+        }
+        resp = await self._request_with_idempotency(
+            "PATCH",
+            f"/api/models/{model_id}/assets/{asset_id}/components",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def model_coherence_report(self, model_id: str) -> dict:
         """Static-analysis report on coherence between the model's
         component declarations and the code-binding strings on its
