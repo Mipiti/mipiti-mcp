@@ -1364,13 +1364,14 @@ async def model_coherence_report(
     model_id: str,
 ) -> dict:
     """Static-analysis report on coherence between the model's
-    component declarations and the code-binding strings on its
-    controls and assertions.
+    component declarations, the code-binding strings on its controls
+    and assertions, and the structural reachability of every CO.
 
-    Findings flag drift between the canonical component graph and the
-    repo strings carried on assertions:
+    Component / assertion bindings:
     - ``control_component_unknown`` — control references a component
       ID that no longer exists on the model.
+    - ``asset_component_unknown`` — asset references a component ID
+      that no longer exists on the model.
     - ``assertion_repo_mismatch`` — an assertion's ``repo`` does not
       match the ``repo_url`` of any component scoping its control.
     - ``assertion_repo_orphan`` — an assertion has a ``repo`` but its
@@ -1379,8 +1380,28 @@ async def model_coherence_report(
       unscoped but assertions targeting it carry ``repo`` values,
       indicating the control should be scoped to those repos.
 
-    Use this before relying on component-scoped control discovery, or
-    when assertion verification fails for path/repo reasons.
+    Reachability findings (deterministic composer; indeterminate
+    verdicts surface as findings, never auto-decided by an LLM):
+    - ``co_attacker_unpositioned`` — the CO's attacker has no
+      positioned trust boundaries. Resolve via ``edit_attacker`` (set
+      ``trust_boundary_ids``) or attest a structured exclusion via an
+      Assumption.
+    - ``co_asset_unbounded`` — the CO's asset has no component-derived
+      trust boundaries (asset unscoped, or its components carry no
+      boundary links). Resolve via ``assign_asset_to_components``,
+      ``edit_asset`` (with ``component_ids``), or an exclusion
+      Assumption.
+    - ``co_no_shared_boundary`` — attacker and asset boundaries do
+      not intersect; cross-boundary attacker movement isn't
+      structurally modeled. Re-position the attacker, scope the asset
+      to a shared component, or attest the exclusion.
+    - ``co_missing_entity`` — the CO references a missing
+      asset/attacker; model state inconsistent.
+
+    Use this before relying on component-scoped control discovery,
+    when assertion verification fails for path/repo reasons, or to
+    enumerate structural-completeness gaps the operator should
+    address before treating the model as audit-ready.
 
     Args:
         model_id: ID of the threat model.
