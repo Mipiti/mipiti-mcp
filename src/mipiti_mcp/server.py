@@ -1269,6 +1269,81 @@ async def remap_control(
 
 
 @mcp.tool()
+async def assign_control_to_components(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    component_ids: str,
+    change_reason: str,
+) -> dict:
+    """Replace a control's component scope.
+
+    Components are the canonical code-binding for controls. A control
+    scoped to one or more components is visible to coding agents working
+    in those repos (matched via Component.repo_url + Component.path);
+    an unscoped control is visible everywhere.
+
+    Use this tool when:
+    - Wiring a previously unscoped control to the component(s) that
+      implement it (so coding agents see the control on their repo).
+    - Adding a second component to a cross-cutting control (e.g.,
+      "all microservices enforce JWT validation").
+    - Correcting a wrong component assignment.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control to scope (e.g., "CTRL-03").
+        component_ids: Comma-separated component IDs (e.g., "CMP1,CMP2").
+            Empty string = unscoped (visible to every coding agent).
+            Validated against the model: every supplied ID must exist.
+        change_reason: Why this scope is appropriate (min 10 chars).
+            Captured in the control's version history.
+    """
+    parsed = [c.strip() for c in component_ids.split(",") if c.strip()] if component_ids else []
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().assign_control_to_components(
+            model_id, control_id, parsed, change_reason.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def model_coherence_report(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Static-analysis report on coherence between the model's
+    component declarations and the code-binding strings on its
+    controls and assertions.
+
+    Findings flag drift between the canonical component graph and the
+    repo strings carried on assertions:
+    - ``control_component_unknown`` — control references a component
+      ID that no longer exists on the model.
+    - ``assertion_repo_mismatch`` — an assertion's ``repo`` does not
+      match the ``repo_url`` of any component scoping its control.
+    - ``assertion_repo_orphan`` — an assertion has a ``repo`` but its
+      control is unscoped, so the binding cannot be cross-checked.
+    - ``control_unscoped_with_scoped_assertions`` — a control is
+      unscoped but assertions targeting it carry ``repo`` values,
+      indicating the control should be scoped to those repos.
+
+    Use this before relying on component-scoped control discovery, or
+    when assertion verification fails for path/repo reasons.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().model_coherence_report(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_mitigation_groups(
     server_version: str,
     model_id: str,

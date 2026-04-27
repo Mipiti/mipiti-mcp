@@ -490,6 +490,47 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def assign_control_to_components(
+        self,
+        model_id: str,
+        control_id: str,
+        component_ids: list[str],
+        change_reason: str,
+    ) -> dict:
+        """Replace the control's component scope with the supplied list.
+
+        Empty list → unscoped (visible to every coding agent regardless
+        of repo). Single-element list → standard per-component scope.
+        Multi-element list → cross-cutting control spanning multiple
+        components.
+
+        Validates that every supplied component_id exists on the model.
+        """
+        body: dict[str, Any] = {
+            "component_ids": list(component_ids),
+            "change_reason": change_reason,
+        }
+        resp = await self._request_with_idempotency(
+            "PATCH",
+            f"/api/models/{model_id}/controls/{control_id}/components",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def model_coherence_report(self, model_id: str) -> dict:
+        """Static-analysis report on coherence between the model's
+        component declarations and the code-binding strings on its
+        controls and assertions.
+
+        Returns ``{model_id, model_version, components_count, findings,
+        summary}``. ``findings`` is a list of warning records, each with
+        ``type``, ``severity``, and a human-readable ``message``.
+        """
+        resp = await self._get_client().get(f"/api/models/{model_id}/coherence")
+        resp.raise_for_status()
+        return resp.json()
+
     async def restore_asset(self, model_id: str, asset_id: str) -> ThreatModel:
         """Un-soft-delete an asset. Tombstoned COs for that asset's
         pairs are revived at save-time with their original IDs."""
