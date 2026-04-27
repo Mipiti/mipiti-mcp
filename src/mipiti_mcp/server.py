@@ -2841,6 +2841,7 @@ async def get_setup_status(server_version: str) -> dict:
 async def add_trust_boundary(
     server_version: str, model_id: str, description: str,
     crosses: Optional[str] = None,
+    passes: Optional[str] = None,
 ) -> dict:
     """Add a trust boundary. Creates a new model version.
 
@@ -2848,10 +2849,20 @@ async def add_trust_boundary(
         model_id: ID of the threat model.
         description: What this boundary represents (e.g., "Public network to API server").
         crosses: Optional comma-separated asset IDs that cross this boundary.
+        passes: Optional comma-separated AttackVector values the boundary
+            allows through (subset of "Network,Adjacent,Local,Physical").
+            Omit for the methodology default (passes-everything). Narrowing
+            this set is what makes a boundary block specific attacker
+            vectors in the deterministic reachability composer.
     """
     parsed_crosses = [c.strip() for c in crosses.split(",") if c.strip()] if crosses else []
+    parsed_passes = (
+        [v.strip() for v in passes.split(",") if v.strip()] if passes is not None else None
+    )
     try:
-        return await _get_client().add_trust_boundary(model_id, description, parsed_crosses or None)
+        return await _get_client().add_trust_boundary(
+            model_id, description, parsed_crosses or None, parsed_passes,
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2861,6 +2872,8 @@ async def edit_trust_boundary(
     server_version: str, model_id: str, tb_id: str,
     description: Optional[str] = None,
     crosses: Optional[str] = None,
+    passes: Optional[str] = None,
+    change_reason: Optional[str] = None,
 ) -> dict:
     """Edit a trust boundary. Creates a new model version.
 
@@ -2869,12 +2882,24 @@ async def edit_trust_boundary(
         tb_id: ID of the trust boundary (e.g., "TB1").
         description: New description.
         crosses: New comma-separated asset IDs.
+        passes: New comma-separated AttackVector values the boundary allows
+            through (subset of "Network,Adjacent,Local,Physical"). Use the
+            empty string to set "blocks all"; omit to leave unchanged.
+            Reach-relevant — narrowing or widening this set can flip CO
+            verdicts.
+        change_reason: Required when ``passes`` actually changes. Captured
+            in the audit trail; documents why the boundary's vector
+            filter was tightened or widened.
     """
     kwargs: dict = {}
     if description is not None:
         kwargs["description"] = description
     if crosses is not None:
         kwargs["crosses"] = [c.strip() for c in crosses.split(",") if c.strip()]
+    if passes is not None:
+        kwargs["passes"] = [v.strip() for v in passes.split(",") if v.strip()]
+    if change_reason is not None:
+        kwargs["change_reason"] = change_reason
     try:
         return await _get_client().edit_trust_boundary(model_id, tb_id, **kwargs)
     except Exception as exc:

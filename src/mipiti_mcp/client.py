@@ -1148,10 +1148,18 @@ class MipitiClient:
 
     # --- Trust boundary CRUD ---
 
-    async def add_trust_boundary(self, model_id: str, description: str, crosses: list[str] | None = None) -> dict:
+    async def add_trust_boundary(
+        self,
+        model_id: str,
+        description: str,
+        crosses: list[str] | None = None,
+        passes: list[str] | None = None,
+    ) -> dict:
         body: dict = {"description": description}
         if crosses:
             body["crosses"] = crosses
+        if passes is not None:
+            body["passes"] = passes
         return await self._post(f"/api/models/{model_id}/trust-boundaries", body)
 
     async def edit_trust_boundary(self, model_id: str, tb_id: str, **kwargs) -> dict:
