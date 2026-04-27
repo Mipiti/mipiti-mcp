@@ -858,21 +858,21 @@ class TestAddAsset:
             "restored_asset_id": "A-04",
             "reason": "Proposed asset matched soft-deleted A-04; restored it.",
             "discarded_fields": [
-                {"field": "impact", "proposed_value": "H",
-                 "preserved_value": "M", "identity_bearing": False,
-                 "reason": "Restored asset keeps archived rating."},
+                {"field": "notes", "proposed_value": "extra context",
+                 "preserved_value": "", "identity_bearing": False,
+                 "reason": "Restored asset keeps archived notes."},
             ],
         }))
         with _patch_client(mock):
             result = await add_asset(
                 server_version="0", model_id="tm-001",
-                name="OIDC Token", impact="H",
+                name="OIDC Token", notes="extra context",
             )
         assert result["auto_restored"] is True
         assert result["restored_asset_id"] == "A-04"
         # Agent needs the discarded fields to decide whether to reapply.
         assert len(result["discarded_fields"]) == 1
-        assert result["discarded_fields"][0]["field"] == "impact"
+        assert result["discarded_fields"][0]["field"] == "notes"
         assert result["discarded_fields"][0]["identity_bearing"] is False
 
     @pytest.mark.asyncio
