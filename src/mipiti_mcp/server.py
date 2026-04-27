@@ -1623,6 +1623,13 @@ async def get_review_queue(server_version: str) -> dict:
 # === Assets & Attackers ===
 
 
+_ASSET_FACTOR_PARAMS = (
+    "confidentiality_subscore", "integrity_subscore",
+    "availability_subscore", "usage_subscore",
+    "blast_radius", "recoverability", "regulatory_scope",
+)
+
+
 @mcp.tool()
 async def add_asset(
     server_version: str,
@@ -1630,51 +1637,47 @@ async def add_asset(
     name: str,
     description: str = "",
     security_properties: Optional[str] = None,
-    impact: str = "M",
     notes: str = "",
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
+    The caller supplies identity-bearing fields (name, description,
+    security_properties, notes); the backend LLM-reasons the factor
+    decomposition (and composes the ``impact`` rating from it). The
+    same prompt the generation pipeline uses for LLM-produced assets
+    is reused here, so factors are calibrated consistently regardless
+    of who introduced the asset. Override any factor post-create via
+    ``edit_asset`` with a ``change_reason`` for the audit trail.
+
     LLM-gated against a re-add of a previously soft-deleted asset on
     the same model. Three possible outcomes:
 
-    - **Normal create** — no soft-deleted assets match. Response has
-      ``{"model": <ThreatModel>, "controls_carried": N, ...}`` as
-      usual; the new asset is in ``model.assets`` with a fresh ID.
-    - **Auto-restore** — LLM classified the proposal as the same
-      entity as one soft-deleted asset. That asset is un-deleted (CO
-      tombstones revive with their original IDs; orphaned controls
-      reactivate). Response carries ``auto_restored: True``,
-      ``restored_asset_id: "A-N"``, and a ``discarded_fields`` list
-      enumerating any proposed values that differed from the
-      archived asset (with each entry's ``identity_bearing`` flag).
-      Agents can reapply non-identity discards (e.g., impact, notes)
-      via ``edit_asset``; identity-bearing discards (name,
-      description, security_properties) require explicit operator
-      intent and will hit the semantic guard.
-    - **Similar-verdict rejection** — LLM couldn't confidently say
-      whether the proposal was the same as a soft-deleted one.
-      Response is ``{"accepted": False, "classification": "similar",
-      "candidate_restore_id": "A-N", "reason": "...",
-      "suggestion": "..."}`` and NOTHING was saved. Either call
-      ``restore_asset(candidate_restore_id)`` if the match was the
-      operator's intent, or re-submit with a more distinctive
-      name/description.
+    - **Normal create** — fresh asset with a new ID. Returns the
+      envelope ``{"model": ThreatModel, "controls_carried": N, ...}``.
+    - **Auto-restore** — proposal matched a soft-deleted asset; that
+      asset is un-deleted (CO tombstones revive). Response carries
+      ``auto_restored: True``, ``restored_asset_id``, and
+      ``discarded_fields``.
+    - **Similar-verdict rejection** — ``{"accepted": False,
+      "classification": "similar", "candidate_restore_id": "A-N",
+      ...}``; nothing saved.
 
-    Fails with a tool error on HTTP 503 when the LLM evaluator is
-    unreachable (transient outage — retry with backoff), or 502
-    when the evaluator returned a malformed response (retry same
-    prompt — fresh attempt may parse cleanly).
+    Fails with a tool error on:
+    - 503 — restore-candidate evaluator OR factor-reasoning evaluator
+      unavailable. Retry with backoff.
+    - 502 — restore-candidate evaluator returned malformed response.
+      Retry same prompt.
 
     Args:
         model_id: ID of the threat model.
         name: Asset name (required).
-        description: Optional description.
-        security_properties: Comma-separated properties, e.g. "C,I,A" (default: "C").
-        impact: Impact level: "H", "M", "L".
+        description: Optional description (recommended — feeds the
+            factor-reasoning prompt).
+        security_properties: Comma-separated properties, e.g. "C,I,A"
+            (default: "C").
         notes: Optional notes.
     """
-    body: dict[str, Any] = {"name": name, "impact": impact}
+    body: dict[str, Any] = {"name": name}
     if description:
         body["description"] = description
     if security_properties is not None:
@@ -1695,41 +1698,58 @@ async def edit_asset(
     name: Optional[str] = None,
     description: Optional[str] = None,
     security_properties: Optional[str] = None,
-    impact: Optional[str] = None,
+    confidentiality_subscore: Optional[str] = None,
+    integrity_subscore: Optional[str] = None,
+    availability_subscore: Optional[str] = None,
+    usage_subscore: Optional[str] = None,
+    blast_radius: Optional[str] = None,
+    recoverability: Optional[str] = None,
+    regulatory_scope: Optional[str] = None,
+    impact_rationale: Optional[str] = None,
     notes: Optional[str] = None,
+    change_reason: Optional[str] = None,
 ) -> dict:
-    """Edit an existing asset. Creates a new version. Only provided fields changed.
+    """Edit an existing asset. Only provided fields changed.
+
+    The composed ``impact`` is server-derived from the factor fields;
+    there is no way to set it directly. To change the rating, set
+    factor values (the platform composes the new rating) and supply
+    ``change_reason`` documenting the operator override of the
+    LLM-generated factors. The reason is captured in the
+    rating-revision audit trail.
 
     LLM-gated on identity-bearing fields (name, description,
-    security_properties). Non-identity edits (impact, notes) skip the
-    gate. Two possible outcomes when identity fields change:
+    security_properties). Factor and notes edits skip the gate.
 
-    - **Accepted edit** — LLM classified as ``preserve`` (typo,
-      wording, property-tightening). Response is the normal
-      ``{"model": <ThreatModel>, ...}`` envelope; the edit is
-      persisted.
-    - **Rejected edit** — LLM classified as ``replace`` (different
-      asset under same ID) or ``ambiguous``. Response is
-      ``{"accepted": False, "classification": "replace"|"ambiguous",
-      "reason": "...", "per_field": {...}, "suggestion": "..."}`` —
-      NOTHING was saved. The correct action is to soft-delete the
-      current asset (``remove_asset``) and add a new one under a new
-      ID (``add_asset`` with the replacement semantics), OR narrow
-      the edit to a wording-only change.
+    Outcomes when identity fields change:
+    - **Accepted edit** (LLM classifies as ``preserve``) — normal
+      envelope response.
+    - **Rejected edit** (LLM classifies as ``replace`` /
+      ``ambiguous``) — ``{"accepted": False, ...}``; nothing saved.
+      Soft-delete + add-new instead.
 
-    Editing a soft-deleted asset is rejected outright — restore it
-    first via ``restore_asset``. Fails with a tool error on HTTP 503
-    when the semantic-preservation evaluator is unreachable, or 502
-    when the evaluator returns malformed output.
+    Editing a soft-deleted asset is rejected — ``restore_asset``
+    first. 503 on evaluator outage, 502 on malformed response, 400
+    when factor fields are sent without ``change_reason``.
 
     Args:
         model_id: ID of the threat model.
         asset_id: ID of the asset (e.g., "A1").
         name: New name (optional).
         description: New description (optional).
-        security_properties: Comma-separated properties, e.g. "C,I" (optional).
-        impact: New impact level (optional).
+        security_properties: Comma-separated properties (optional).
+        confidentiality_subscore: "None" | "Low" | "High".
+        integrity_subscore: "None" | "Low" | "High".
+        availability_subscore: "None" | "Low" | "High".
+        usage_subscore: "None" | "Low" | "High".
+        blast_radius: "Isolated" | "Multiplicative" | "Cascading".
+        recoverability: "Trivial" | "Manageable" | "Permanent".
+        regulatory_scope: "None" | "Notification" | "Legal".
+        impact_rationale: New rationale (optional).
         notes: New notes (optional).
+        change_reason: Required when any factor field is supplied —
+            documents the operator override of LLM-generated factors
+            for the audit trail.
     """
     body: dict[str, Any] = {}
     if name is not None:
@@ -1738,10 +1758,33 @@ async def edit_asset(
         body["description"] = description
     if security_properties is not None:
         body["security_properties"] = [p.strip() for p in security_properties.split(",") if p.strip()]
-    if impact is not None:
-        body["impact"] = impact
+    for fkey, fval in (
+        ("confidentiality_subscore", confidentiality_subscore),
+        ("integrity_subscore", integrity_subscore),
+        ("availability_subscore", availability_subscore),
+        ("usage_subscore", usage_subscore),
+        ("blast_radius", blast_radius),
+        ("recoverability", recoverability),
+        ("regulatory_scope", regulatory_scope),
+    ):
+        if fval is not None:
+            body[fkey] = fval
+    if impact_rationale is not None:
+        body["impact_rationale"] = impact_rationale
     if notes is not None:
         body["notes"] = notes
+    if change_reason is not None:
+        body["change_reason"] = change_reason
+    # Pre-flight: factor edits without change_reason will 400 server-
+    # side; surface that as a tool-level error so callers don't burn
+    # an HTTP round-trip on the obvious case.
+    factor_sent = any(k in body for k in _ASSET_FACTOR_PARAMS)
+    if factor_sent and not (change_reason and change_reason.strip()):
+        raise ToolError(
+            "change_reason is required when editing rating factors. "
+            "Factors are LLM-generated; an operator override needs a "
+            "documented reason for the audit trail."
+        )
     try:
         return _dump(await _get_client().edit_asset(model_id, asset_id, **body))
     except Exception as exc:
@@ -1782,6 +1825,12 @@ async def restore_asset(server_version: str, model_id: str, asset_id: str) -> di
         raise _api_error(exc) from exc
 
 
+_ATTACKER_FACTOR_PARAMS = (
+    "attack_vector", "privileges_required", "attack_complexity",
+    "user_interaction", "capability_prevalence",
+)
+
+
 @mcp.tool()
 async def add_attacker(
     server_version: str,
@@ -1789,40 +1838,27 @@ async def add_attacker(
     capability: str,
     position: str = "",
     archetype: str = "",
-    likelihood: str = "M",
     trust_boundary_ids: Optional[str] = None,
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
 
-    LLM-gated against a re-add of a previously soft-deleted attacker
-    — mirror of ``add_asset``. Three outcomes:
+    The caller supplies identity-bearing fields (capability, position,
+    archetype, trust_boundary_ids); the backend LLM-reasons the factor
+    decomposition. Override any factor post-create via ``edit_attacker``
+    with a ``change_reason``. Mirror of ``add_asset`` semantics.
 
-    - **Normal create**: response ``{"model": <ThreatModel>, ...}``,
-      fresh sequential ID.
-    - **Auto-restore**: response carries ``auto_restored: True``,
-      ``restored_attacker_id: "T-N"``, and a ``discarded_fields``
-      list. Non-identity attacker fields (likelihood,
-      trust_boundary_ids) can be re-applied via ``edit_attacker``;
-      identity-bearing fields (capability, archetype, position)
-      require operator confirmation via the semantic-guarded edit.
-    - **Similar-verdict rejection**: ``{"accepted": False,
-      "classification": "similar", "candidate_restore_id": "T-N",
-      ...}`` — nothing saved; either ``restore_attacker(id)`` or
-      rephrase.
-
-    Fails with a tool error on HTTP 503 when the evaluator is
-    unreachable or 502 when it returns malformed output.
+    Three outcomes (normal create / auto-restore / similar-rejection)
+    mirror ``add_asset``. 503 on factor-reasoning or restore-candidate
+    evaluator outage, 502 on malformed restore-candidate response.
 
     Args:
         model_id: ID of the threat model.
         capability: Attacker capability description (required).
         position: Position/access level.
         archetype: Archetype (e.g., "insider", "external").
-        likelihood: Likelihood: "H", "M", "L".
-        trust_boundary_ids: Comma-separated trust boundary IDs this attacker
-            is positioned at (e.g., "TB1,TB2").
+        trust_boundary_ids: Comma-separated trust boundary IDs.
     """
-    body: dict[str, Any] = {"capability": capability, "likelihood": likelihood}
+    body: dict[str, Any] = {"capability": capability}
     if position:
         body["position"] = position
     if archetype:
@@ -1843,26 +1879,26 @@ async def edit_attacker(
     capability: Optional[str] = None,
     position: Optional[str] = None,
     archetype: Optional[str] = None,
-    likelihood: Optional[str] = None,
+    attack_vector: Optional[str] = None,
+    privileges_required: Optional[str] = None,
+    attack_complexity: Optional[str] = None,
+    user_interaction: Optional[str] = None,
+    capability_prevalence: Optional[str] = None,
+    likelihood_rationale: Optional[str] = None,
     trust_boundary_ids: Optional[str] = None,
+    change_reason: Optional[str] = None,
 ) -> dict:
-    """Edit an existing attacker. Creates a new version. Only provided fields changed.
+    """Edit an existing attacker. Only provided fields changed.
+
+    The composed ``likelihood`` is server-derived from the factor
+    fields; to change the rating, set factor values and supply
+    ``change_reason`` for the audit trail.
 
     LLM-gated on identity-bearing fields (capability, archetype,
-    position) — mirror of ``edit_asset``. Two outcomes:
+    position). Factor and trust_boundary edits skip the gate.
 
-    - **Accepted edit**: normal envelope response.
-    - **Rejected edit**: ``{"accepted": False, "classification":
-      "replace"|"ambiguous", "reason": "...", "per_field": {...},
-      "suggestion": "..."}`` — nothing saved. Changing archetype
-      (e.g., Unauthenticated -> Supply chain) is a classic
-      replacement rejection; soft-delete the current attacker and
-      add a new one instead.
-
-    Non-identity edits (likelihood, trust_boundary_ids) skip the
-    gate. Editing a soft-deleted attacker is rejected — restore
-    first. Fails with a tool error on HTTP 503 when the evaluator
-    is unreachable or 502 when it returns malformed output.
+    503 on evaluator outage, 502 on malformed response, 400 when
+    factor fields are sent without ``change_reason``.
 
     Args:
         model_id: ID of the threat model.
@@ -1870,8 +1906,15 @@ async def edit_attacker(
         capability: New capability (optional).
         position: New position (optional).
         archetype: New archetype (optional).
-        likelihood: New likelihood (optional).
+        attack_vector: "Network" | "Adjacent" | "Local" | "Physical".
+        privileges_required: "None" | "Low" | "High".
+        attack_complexity: "Low" | "High".
+        user_interaction: "None" | "Required".
+        capability_prevalence: "Commodity" | "Targeted" | "Rare".
+        likelihood_rationale: New rationale (optional).
         trust_boundary_ids: Comma-separated trust boundary IDs (replaces existing).
+        change_reason: Required when any factor field is supplied —
+            documents the operator override of LLM-generated factors.
     """
     body: dict[str, Any] = {}
     if capability is not None:
@@ -1880,10 +1923,28 @@ async def edit_attacker(
         body["position"] = position
     if archetype is not None:
         body["archetype"] = archetype
-    if likelihood is not None:
-        body["likelihood"] = likelihood
+    for fkey, fval in (
+        ("attack_vector", attack_vector),
+        ("privileges_required", privileges_required),
+        ("attack_complexity", attack_complexity),
+        ("user_interaction", user_interaction),
+        ("capability_prevalence", capability_prevalence),
+    ):
+        if fval is not None:
+            body[fkey] = fval
+    if likelihood_rationale is not None:
+        body["likelihood_rationale"] = likelihood_rationale
     if trust_boundary_ids is not None:
         body["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
+    if change_reason is not None:
+        body["change_reason"] = change_reason
+    factor_sent = any(k in body for k in _ATTACKER_FACTOR_PARAMS)
+    if factor_sent and not (change_reason and change_reason.strip()):
+        raise ToolError(
+            "change_reason is required when editing rating factors. "
+            "Factors are LLM-generated; an operator override needs a "
+            "documented reason for the audit trail."
+        )
     try:
         return _dump(await _get_client().edit_attacker(model_id, attacker_id, **body))
     except Exception as exc:
