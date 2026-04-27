@@ -21,7 +21,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "14"
+_SERVER_VERSION = "15"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -1395,41 +1395,80 @@ async def model_coherence_report(
     component declarations, the code-binding strings on its controls
     and assertions, and the structural reachability of every CO.
 
+    The report carries up to twelve finding types, grouped below by
+    concern. Each finding includes the entity IDs it concerns
+    (``co_id``, ``asset_id``, ``attacker_id``, ``component_id``, etc.)
+    so the agent can dispatch the resolution tool directly without
+    re-fetching the model.
+
     Component / assertion bindings:
     - ``control_component_unknown`` — control references a component
-      ID that no longer exists on the model.
-    - ``asset_component_unknown`` — asset references a component ID
-      that no longer exists on the model.
+      ID that no longer exists. Resolve: ``assign_control_to_components``.
+    - ``asset_component_unknown`` — asset references a missing
+      component. Resolve: ``edit_asset`` (with corrected
+      ``component_ids``).
     - ``assertion_repo_mismatch`` — an assertion's ``repo`` does not
       match the ``repo_url`` of any component scoping its control.
+      Resolve: rebind the assertion or rescope the control.
     - ``assertion_repo_orphan`` — an assertion has a ``repo`` but its
-      control is unscoped, so the binding cannot be cross-checked.
-    - ``control_unscoped_with_scoped_assertions`` — a control is
-      unscoped but assertions targeting it carry ``repo`` values,
-      indicating the control should be scoped to those repos.
+      control is unscoped. Resolve: ``assign_control_to_components``
+      to scope the control, or correct the assertion's repo.
+    - ``control_unscoped_with_scoped_assertions`` — control is
+      unscoped, but its assertions all carry a single component's
+      ``repo``. Resolve: ``assign_control_to_components`` to that
+      component.
+    - ``component_unbound`` — a component has no ``repo_url``
+      (speculative; LLM-proposed during generation, or operator-
+      added without a binding yet). Resolve: ``edit_component`` with
+      the real repo URL once the codebase exists. Speculative is a
+      valid lifecycle state, not an error — surfaced so the gap is
+      visible to auditors.
 
     Reachability findings (deterministic composer; indeterminate
     verdicts surface as findings, never auto-decided by an LLM):
     - ``co_attacker_unpositioned`` — the CO's attacker has no
-      positioned trust boundaries. Resolve via ``edit_attacker`` (set
-      ``trust_boundary_ids``) or attest a structured exclusion via an
-      Assumption.
+      positioned trust boundaries. Resolve: ``edit_attacker`` (set
+      ``trust_boundary_ids``), or ``add_assumption`` with a
+      structured exclusion predicate.
     - ``co_asset_unbounded`` — the CO's asset has no component-derived
-      trust boundaries (asset unscoped, or its components carry no
-      boundary links). Resolve via ``assign_asset_to_components``,
-      ``edit_asset`` (with ``component_ids``), or an exclusion
-      Assumption.
+      trust boundaries. Resolve: ``assign_asset_to_components``,
+      ``edit_asset`` (with ``component_ids``), or ``add_assumption``
+      with a structured exclusion.
     - ``co_no_shared_boundary`` — attacker and asset boundaries do
-      not intersect; cross-boundary attacker movement isn't
-      structurally modeled. Re-position the attacker, scope the asset
-      to a shared component, or attest the exclusion.
+      not intersect. Resolve: re-position the attacker via
+      ``edit_attacker``, scope the asset to a shared component via
+      ``assign_asset_to_components``, or ``add_assumption`` with a
+      structured exclusion.
     - ``co_missing_entity`` — the CO references a missing
-      asset/attacker; model state inconsistent.
+      asset/attacker; model state inconsistent. Resolve: restore
+      the entity (``restore_asset`` / ``restore_attacker``) or
+      remove the orphaned CO via ``refine_threat_model``.
+
+    Attestation/composer cross-checks (fire when the persisted
+    ``boundary_reachable`` attestation diverges from what the
+    composer derives):
+    - ``co_reach_attestation_diverges`` — the persisted
+      ``boundary_reachable`` disagrees with the composer's decided
+      verdict (composer says reachable but attestation says
+      unreachable, or vice versa). Resolve: ``edit_attacker`` or
+      ``edit_asset`` to amend the structural primitives so the
+      composer derives the attested outcome, OR refine the model
+      to update the attestation.
+    - ``co_reach_attestation_unstructured`` — the CO is attested
+      unreachable, but the composer is indeterminate (no structural
+      primitive backs the attestation). The prose
+      ``boundary_unreachable_reason`` is class-1 evidence on its
+      own; converting it to a structured ``Assumption.exclusion``
+      predicate makes the audit trail name the structural cause.
+      Resolve: ``add_assumption`` with an ``exclusion`` predicate
+      matching the CO.
 
     Use this before relying on component-scoped control discovery,
     when assertion verification fails for path/repo reasons, or to
     enumerate structural-completeness gaps the operator should
-    address before treating the model as audit-ready.
+    address before treating the model as audit-ready. ``get_reachability_verdicts``
+    exposes the underlying composer verdicts directly when the
+    finding-shape summary isn't enough.
 
     Args:
         model_id: ID of the threat model.
