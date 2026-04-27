@@ -21,7 +21,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "12"
+_SERVER_VERSION = "13"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -367,12 +367,40 @@ cross-model compliance reporting.
 
 Components bridge security architecture (trust boundaries) to code \
 organization (repos). Add components to a model to scope controls \
-to specific codebases.
+to specific codebases AND to ground the deterministic reachability \
+composer's asset-boundary derivation.
 
 - `add_component` — create a component with name, repo_url, and \
 optional path (for monorepos) and trust_boundary_ids.
 - `edit_component` / `remove_component` — modify or delete a component.
 - `get_controls` with `component_id` — filter controls by component.
+- `assign_asset_to_components` — link an asset to one or more \
+components. Drives the reachability composer's per-CO verdicts.
+
+### When to populate components
+
+`generate_threat_model` proposes speculative components (with \
+`repo_url=""`) when no topology has been supplied. These are a \
+starting point — refine them as code grounding emerges:
+
+- **Existing codebase**: when you've scanned the repo and know \
+the real services, call `add_component` (with grounded `repo_url` \
+and `path`) BEFORE `generate_threat_model`. The generation prompts \
+will scope assets and boundaries to the components you supplied. \
+Alternatively, call `generate_threat_model` first and then \
+`edit_component` on each speculative component the LLM proposed, \
+swapping `repo_url` to the real URL.
+- **Planning conversation, no code yet**: call `generate_threat_model` \
+directly; the LLM-proposed speculative components serve as a \
+topology starting point the user/developer refines as the design \
+firms up. `repo_url` stays empty until code exists; the coherence \
+report flags `component_unbound` findings on speculative components \
+so they're visible to auditors.
+
+A component with empty `repo_url` is the natural signal "speculative \
+— not yet bound to code." A component with a populated `repo_url` is \
+grounded. There is no separate status field — the binding is the \
+state.
 """
 
 _INSTRUCTIONS_ASYNC = """\
@@ -2321,16 +2349,30 @@ async def add_component(
 ) -> dict:
     """Add a component to a threat model.
 
-    Components bridge security architecture to code organization. They map
-    trust boundaries to repos so controls can be scoped to the codebase
-    that implements them.
+    Components bridge security architecture to code organization. They
+    map trust boundaries to repos so controls can be scoped to the
+    codebase that implements them. They also drive the deterministic
+    reachability composer's asset-boundary derivation: an asset's
+    trust-boundary footprint is the union of its components'
+    ``trust_boundary_ids``.
+
+    A component with empty ``repo_url`` is speculative — a topology
+    waypoint that hasn't been bound to code yet. The coherence report
+    surfaces these as ``component_unbound`` findings. Speculative
+    components are valid in the lifecycle (LLM-proposed during
+    generation, or operator-added during planning); ground them via
+    ``edit_component`` once the code exists.
 
     Args:
         model_id: ID of the threat model.
         name: Component name (e.g., "Backend API", "Auth Worker").
         repo_url: Repository URL (e.g., "github.com/org/backend").
+            Empty string is valid for speculative components — pass a
+            real URL once you've identified the codebase.
         path: Path within repo for monorepos (e.g., "services/auth").
-        trust_boundary_ids: Comma-separated trust boundary IDs.
+        trust_boundary_ids: Comma-separated trust boundary IDs that
+            this component spans (its deployment zone). Drives reach
+            decisions for any asset scoped to this component.
     """
     tb_ids = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()] if trust_boundary_ids else []
     try:
