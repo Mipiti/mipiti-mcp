@@ -561,6 +561,22 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def model_reachability_verdicts(self, model_id: str) -> dict:
+        """Composer verdicts for every live CO on the model.
+
+        Pure derivation from the model's structural primitives; not
+        persisted on the CO. Returns ``{model_id, model_version,
+        verdicts}`` where each verdict carries ``co_id``, ``kind``
+        ("reachable" | "unreachable" | "indeterminate"), ``reason``
+        (structural label), ``narration``, and (when applicable)
+        ``boundary_id`` / ``assumption_id``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/reachability",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def restore_asset(self, model_id: str, asset_id: str) -> ThreatModel:
         """Un-soft-delete an asset. Tombstoned COs for that asset's
         pairs are revived at save-time with their original IDs."""

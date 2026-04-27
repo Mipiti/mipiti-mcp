@@ -21,7 +21,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "13"
+_SERVER_VERSION = "14"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -1436,6 +1436,60 @@ async def model_coherence_report(
     """
     try:
         return _dump(await _get_client().model_coherence_report(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_reachability_verdicts(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Composer verdicts for every live CO on the model.
+
+    Pure derivation over the model's structural primitives —
+    components, asset.component_ids, trust_boundary.passes,
+    attacker.trust_boundary_ids + attack_vector, and
+    Assumption.exclusion predicates. NOT persisted on the CO; the
+    composer is a separate provenance class from the operator/LLM-
+    attested ``boundary_reachable`` field. Re-running this call
+    against the model JSON produces the same result every time —
+    that's the verification an auditor performs.
+
+    Each verdict carries:
+      - ``co_id``
+      - ``kind``: "reachable" | "unreachable" | "indeterminate"
+      - ``reason``: structural label
+        (``boundary_blocks_vector`` / ``assumption_excludes`` /
+        ``attacker_unpositioned`` / ``asset_unbounded`` /
+        ``no_shared_boundary`` / ``missing_entity``)
+      - ``narration``: auditor-readable explanation
+      - ``boundary_id``: which boundary blocked, if applicable
+      - ``assumption_id``: which assumption excluded, if applicable
+
+    When the verdict is indeterminate, address the gap via the
+    standard model-edit affordances:
+      - ``attacker_unpositioned`` → ``edit_attacker`` setting
+        ``trust_boundary_ids``
+      - ``asset_unbounded`` → ``assign_asset_to_components`` or
+        ``edit_asset`` with ``component_ids``
+      - ``no_shared_boundary`` → re-position attacker, re-scope
+        asset, OR ``add_assumption`` with structured exclusion
+      - ``missing_entity`` → restore the missing asset/attacker,
+        or remove the orphaned CO
+
+    Use this before relying on per-CO reach state for triage,
+    auto-remediation, or audit responses. The
+    ``model_coherence_report`` tool surfaces the same gaps as
+    actionable findings; this tool exposes the raw verdicts when
+    you need the structured data (boundary_id citations, narration
+    strings) that the findings summarize.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().model_reachability_verdicts(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
