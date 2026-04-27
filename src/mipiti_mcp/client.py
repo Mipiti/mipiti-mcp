@@ -1186,12 +1186,22 @@ class MipitiClient:
 
     # --- Assumption CRUD ---
 
-    async def add_assumption(self, model_id: str, description: str, linked_co_ids: list[str] | None = None, *, assumption_type: str = "external") -> dict:
+    async def add_assumption(
+        self,
+        model_id: str,
+        description: str,
+        linked_co_ids: list[str] | None = None,
+        *,
+        assumption_type: str = "external",
+        exclusion: dict | None = None,
+    ) -> dict:
         body: dict = {"description": description}
         if linked_co_ids:
             body["linked_co_ids"] = linked_co_ids
         if assumption_type != "external":
             body["assumption_type"] = assumption_type
+        if exclusion is not None:
+            body["exclusion"] = exclusion
         return await self._post(f"/api/models/{model_id}/assumptions", body)
 
     async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:

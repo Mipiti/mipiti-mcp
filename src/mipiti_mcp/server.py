@@ -21,7 +21,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "13"
+_SERVER_VERSION = "14"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -3063,6 +3063,12 @@ async def add_assumption(
     server_version: str, model_id: str, description: str,
     linked_co_ids: Optional[str] = None,
     assumption_type: str = "external",
+    exclusion_attacker_id: Optional[str] = None,
+    exclusion_attacker_vector: Optional[str] = None,
+    exclusion_asset_id: Optional[str] = None,
+    exclusion_asset_component_id: Optional[str] = None,
+    exclusion_property_match: Optional[str] = None,
+    exclusion_co_ids: Optional[str] = None,
 ) -> dict:
     """Add an assumption. Creates a new model version.
 
@@ -3070,16 +3076,66 @@ async def add_assumption(
     trust boundary. When linked to COs and attested, they mitigate those
     COs in the assessment.
 
+    Optionally attach a structured exclusion predicate (the
+    ``exclusion_*`` params). The reachability composer matches active
+    + attested assumptions with predicates against COs deterministically
+    — class-3 (deterministic computation) evidence in addition to the
+    operator-attested class-1 evidence. Pass any subset of the fields;
+    unspecified fields default to wildcard ("*"). When
+    ``exclusion_co_ids`` is non-empty, it takes precedence over the
+    match fields.
+
+    Use this to resolve a `co_reach_attestation_unstructured` finding:
+    take the prose ``boundary_unreachable_reason`` from the CO's
+    attestation, set ``exclusion_co_ids=<co_id>`` (and optionally the
+    attacker/asset/property fields), and the composer will derive the
+    same unreachable verdict structurally on subsequent loads.
+
     Args:
         model_id: ID of the threat model.
         description: What is assumed (e.g., "Customer restricts CI runner egress").
         linked_co_ids: Optional comma-separated CO IDs this assumption covers.
         assumption_type: "external" (default, allows manual attestation)
             or "non_applicability" (requires CI verification, no manual attestation).
+        exclusion_attacker_id: Predicate match — "*" wildcard (default
+            when any other exclusion_* param is set) or concrete attacker ID.
+        exclusion_attacker_vector: One of "Network" | "Adjacent" | "Local"
+            | "Physical" | "*".
+        exclusion_asset_id: "*" or concrete asset ID.
+        exclusion_asset_component_id: "*" or concrete component ID.
+        exclusion_property_match: "C" | "I" | "A" | "U" | "*".
+        exclusion_co_ids: Comma-separated CO IDs the predicate matches
+            explicitly. When non-empty, overrides the match fields.
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
+
+    # Build exclusion only when at least one exclusion_* param is supplied.
+    has_excl = any(
+        v is not None for v in (
+            exclusion_attacker_id, exclusion_attacker_vector,
+            exclusion_asset_id, exclusion_asset_component_id,
+            exclusion_property_match, exclusion_co_ids,
+        )
+    )
+    exclusion: Optional[dict] = None
+    if has_excl:
+        exclusion = {
+            "attacker_id": exclusion_attacker_id or "*",
+            "attacker_vector": exclusion_attacker_vector or "*",
+            "asset_id": exclusion_asset_id or "*",
+            "asset_component_id": exclusion_asset_component_id or "*",
+            "property_match": exclusion_property_match or "*",
+            "co_ids": (
+                [c.strip() for c in exclusion_co_ids.split(",") if c.strip()]
+                if exclusion_co_ids else []
+            ),
+        }
     try:
-        return await _get_client().add_assumption(model_id, description, parsed, assumption_type=assumption_type)
+        return await _get_client().add_assumption(
+            model_id, description, parsed,
+            assumption_type=assumption_type,
+            exclusion=exclusion,
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3089,20 +3145,65 @@ async def edit_assumption(
     server_version: str, model_id: str, assumption_id: str,
     description: Optional[str] = None,
     linked_co_ids: Optional[str] = None,
+    exclusion_attacker_id: Optional[str] = None,
+    exclusion_attacker_vector: Optional[str] = None,
+    exclusion_asset_id: Optional[str] = None,
+    exclusion_asset_component_id: Optional[str] = None,
+    exclusion_property_match: Optional[str] = None,
+    exclusion_co_ids: Optional[str] = None,
+    clear_exclusion: bool = False,
 ) -> dict:
     """Edit an assumption. Creates a new model version.
+
+    Exclusion predicate semantics on edit:
+      - If any ``exclusion_*`` param is set: replace the existing
+        predicate with one built from the supplied fields (unspecified
+        fields default to "*").
+      - If ``clear_exclusion=True``: remove the existing predicate
+        entirely (the assumption becomes prose-only).
+      - If neither: leave the existing predicate untouched.
 
     Args:
         model_id: ID of the threat model.
         assumption_id: ID of the assumption (e.g., "AS1").
         description: New description.
         linked_co_ids: New comma-separated CO IDs (replaces existing linkage).
+        exclusion_attacker_id, exclusion_attacker_vector,
+        exclusion_asset_id, exclusion_asset_component_id,
+        exclusion_property_match, exclusion_co_ids: Same semantics as
+            on ``add_assumption`` — supplying any of them rewrites the
+            predicate.
+        clear_exclusion: When True, clears the predicate. Mutually
+            exclusive with the exclusion_* params (those win if both
+            are sent).
     """
     kwargs: dict = {}
     if description is not None:
         kwargs["description"] = description
     if linked_co_ids is not None:
         kwargs["linked_co_ids"] = [c.strip() for c in linked_co_ids.split(",") if c.strip()]
+
+    has_excl = any(
+        v is not None for v in (
+            exclusion_attacker_id, exclusion_attacker_vector,
+            exclusion_asset_id, exclusion_asset_component_id,
+            exclusion_property_match, exclusion_co_ids,
+        )
+    )
+    if has_excl:
+        kwargs["exclusion"] = {
+            "attacker_id": exclusion_attacker_id or "*",
+            "attacker_vector": exclusion_attacker_vector or "*",
+            "asset_id": exclusion_asset_id or "*",
+            "asset_component_id": exclusion_asset_component_id or "*",
+            "property_match": exclusion_property_match or "*",
+            "co_ids": (
+                [c.strip() for c in exclusion_co_ids.split(",") if c.strip()]
+                if exclusion_co_ids else []
+            ),
+        }
+    elif clear_exclusion:
+        kwargs["exclusion"] = None
     try:
         return await _get_client().edit_assumption(model_id, assumption_id, **kwargs)
     except Exception as exc:
