@@ -1390,10 +1390,17 @@ async def assign_asset_to_components(
 async def model_coherence_report(
     server_version: str,
     model_id: str,
+    co_id: str = "",
 ) -> dict:
     """Static-analysis report on coherence between the model's
     component declarations, the code-binding strings on its controls
     and assertions, and the structural reachability of every CO.
+
+    Pass ``co_id`` to scope the report to findings carrying that CO id
+    (the ``co_*`` reachability findings + the attestation cross-link
+    findings). Component- and assertion-level findings without a CO
+    binding are excluded in single-CO mode. 404 if the CO doesn't
+    exist on the model.
 
     The report carries up to twelve finding types, grouped below by
     concern. Each finding includes the entity IDs it concerns
@@ -1472,9 +1479,12 @@ async def model_coherence_report(
 
     Args:
         model_id: ID of the threat model.
+        co_id: Optional CO id to scope the report to a single CO.
     """
     try:
-        return _dump(await _get_client().model_coherence_report(model_id))
+        return _dump(
+            await _get_client().model_coherence_report(model_id, co_id=co_id),
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1483,8 +1493,10 @@ async def model_coherence_report(
 async def get_reachability_verdicts(
     server_version: str,
     model_id: str,
+    co_id: str = "",
 ) -> dict:
-    """Composer verdicts for every live CO on the model.
+    """Composer verdicts for every live CO on the model. Pass ``co_id``
+    to retrieve a single verdict (skips the cross-CO loop).
 
     Pure derivation over the model's structural primitives —
     components, asset.component_ids, trust_boundary.passes,
@@ -1526,9 +1538,168 @@ async def get_reachability_verdicts(
 
     Args:
         model_id: ID of the threat model.
+        co_id: Optional CO id. When set, returns a single verdict;
+            404 if the CO doesn't exist or is tombstoned.
     """
     try:
-        return _dump(await _get_client().model_reachability_verdicts(model_id))
+        return _dump(
+            await _get_client().model_reachability_verdicts(model_id, co_id=co_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_control_objective(
+    server_version: str,
+    model_id: str,
+    co_id: str,
+) -> dict:
+    """Get a single control objective with its composer verdict.
+
+    Returns the CO's typed fields, the IDs of any controls that map to
+    it, and the deterministic reachability verdict. Mirrors the
+    auditor-walkthrough pattern: one read surfaces the persisted
+    attestation (``boundary_reachable`` / ``boundary_unreachable_reason``)
+    side-by-side with the structural verdict so the caller can tell
+    immediately which class of evidence backs the reach claim.
+
+    Tombstoned COs (``removed: true``) are returned with the flag set;
+    the verdict is omitted because reach state is frozen at the
+    removal version.
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: Control-objective ID (e.g. ``CO3``).
+    """
+    try:
+        return _dump(await _get_client().get_control_objective(model_id, co_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_asset(
+    server_version: str,
+    model_id: str,
+    asset_id: str,
+) -> dict:
+    """Get a single asset. Soft-deleted assets carry ``deleted: true``;
+    the caller decides whether to surface them.
+
+    Args:
+        model_id: ID of the threat model.
+        asset_id: Asset ID (e.g. ``A-01``).
+    """
+    try:
+        return _dump(await _get_client().get_asset(model_id, asset_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_attacker(
+    server_version: str,
+    model_id: str,
+    attacker_id: str,
+) -> dict:
+    """Get a single attacker. Soft-deleted attackers carry ``deleted: true``.
+
+    Args:
+        model_id: ID of the threat model.
+        attacker_id: Attacker ID (e.g. ``T-03``).
+    """
+    try:
+        return _dump(await _get_client().get_attacker(model_id, attacker_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_component(
+    server_version: str,
+    model_id: str,
+    component_id: str,
+) -> dict:
+    """Get a single component. Speculative components (``repo_url=""``)
+    are returned as-is — the empty repo IS the lifecycle state, not an
+    error.
+
+    Args:
+        model_id: ID of the threat model.
+        component_id: Component ID (e.g. ``CMP-01``).
+    """
+    try:
+        return _dump(await _get_client().get_component(model_id, component_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_trust_boundary(
+    server_version: str,
+    model_id: str,
+    tb_id: str,
+) -> dict:
+    """Get a single trust boundary, including its ``passes`` set
+    (closed-vocabulary subset of ``{Network, Adjacent, Local, Physical}``).
+
+    Args:
+        model_id: ID of the threat model.
+        tb_id: Trust-boundary ID (e.g. ``TB-Net``).
+    """
+    try:
+        return _dump(await _get_client().get_trust_boundary(model_id, tb_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_assumption(
+    server_version: str,
+    model_id: str,
+    assumption_id: str,
+) -> dict:
+    """Get a single assumption with its override applied.
+
+    Mirrors ``list_assumptions``' merge logic for one entity. Returns
+    the assumption's typed fields, structured ``exclusion`` predicate
+    (when present), and the override layer (status / justification /
+    linked CO IDs / target model). Soft-deleted assumptions carry
+    ``deleted: true``.
+
+    Args:
+        model_id: ID of the threat model.
+        assumption_id: Assumption ID (e.g. ``AS-01``).
+    """
+    try:
+        return _dump(await _get_client().get_assumption(model_id, assumption_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_control(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    version: int = 0,
+) -> dict:
+    """Get a single control with verified-status enrichment and an
+    ``orphaned`` flag derived from the live CO set.
+
+    Returns the control directly (not wrapped in an array). 404 if the
+    control doesn't exist on the requested version.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: Control ID (e.g. ``CTL-12``).
+        version: Optional model version. 0 (default) uses the latest.
+    """
+    try:
+        return _dump(
+            await _get_client().get_control(model_id, control_id, version=version),
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
