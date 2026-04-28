@@ -71,6 +71,15 @@ from mipiti_mcp.server import (
     restore_attacker,
     update_control_status,
     update_finding,
+    model_coherence_report,
+    get_reachability_verdicts,
+    get_control_objective,
+    get_asset,
+    get_attacker,
+    get_component,
+    get_trust_boundary,
+    get_assumption,
+    get_control,
 )
 
 from .conftest import SAMPLE_CONTROLS, SAMPLE_MODELS_LIST, SAMPLE_THREAT_MODEL
@@ -165,6 +174,45 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "assumption_groups": {"1": ["AS1"]},
             "justification": "AWS KMS handles this control.",
         },
+        "model_coherence_report": {
+            "model_id": "tm-001", "model_version": 1,
+            "components_count": 1,
+            "findings": [{"type": "co_asset_unbounded", "severity": "medium",
+                          "co_id": "CO3", "asset_id": "A1", "attacker_id": "T1",
+                          "reason": "asset_unbounded", "message": "...", "narration": "..."}],
+            "summary": {"total": 1, "by_type": {}, "by_severity": {}},
+        },
+        "model_reachability_verdicts": {
+            "model_id": "tm-001", "model_version": 1,
+            "verdicts": [{"co_id": "CO3", "kind": "indeterminate",
+                          "reason": "asset_unbounded", "narration": "...",
+                          "boundary_id": "", "assumption_id": ""}],
+        },
+        "get_control_objective": {
+            "model_id": "tm-001", "model_version": 1,
+            "control_objective": {"id": "CO3", "asset_id": "A1", "attacker_id": "T1",
+                                  "security_properties": ["C"], "statement": "...",
+                                  "risk_tier": "medium", "boundary_reachable": False,
+                                  "boundary_unreachable_reason": "", "removed": False,
+                                  "removed_at": "", "removed_in_version": 0,
+                                  "controls": []},
+            "reachability_verdict": {"kind": "indeterminate", "reason": "asset_unbounded",
+                                     "narration": "...", "boundary_id": "",
+                                     "assumption_id": ""},
+        },
+        "get_asset": {"model_id": "tm-001", "model_version": 1,
+                       "asset": {"id": "A1", "name": "Tokens"}},
+        "get_attacker": {"model_id": "tm-001", "model_version": 1,
+                          "attacker": {"id": "T1", "capability": "Network"}},
+        "get_component": {"model_id": "tm-001", "model_version": 1,
+                           "component": {"id": "C1", "name": "api", "repo_url": ""}},
+        "get_trust_boundary": {"model_id": "tm-001", "model_version": 1,
+                                "trust_boundary": {"id": "TB1", "passes": ["Network"]}},
+        "get_assumption": {"model_id": "tm-001", "model_version": 1,
+                            "assumption": {"id": "AS1", "description": "x",
+                                           "deleted": False, "exclusion": None}},
+        "get_control": {"model_id": "tm-001", "model_version": 1,
+                         "control": {"id": "CTRL-01", "description": "test"}},
     }
 
     for name, default_val in defaults.items():
@@ -1666,3 +1714,105 @@ class TestSetControlAssumptionGroups:
                     groups='{"1": ["AS1"]}',
                     justification="too short",
                 )
+
+
+# ------------------------------------------------------------------
+# Per-entity GET tools + co_id filters
+# ------------------------------------------------------------------
+
+
+class TestPerIdGets:
+    @pytest.mark.asyncio
+    async def test_get_control_objective(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_control_objective(
+                server_version="0", model_id="tm-001", co_id="CO3",
+            )
+        assert result["control_objective"]["id"] == "CO3"
+        assert result["reachability_verdict"]["kind"] == "indeterminate"
+        mock.get_control_objective.assert_awaited_once_with("tm-001", "CO3")
+
+    @pytest.mark.asyncio
+    async def test_get_asset(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_asset(
+                server_version="0", model_id="tm-001", asset_id="A1",
+            )
+        assert result["asset"]["id"] == "A1"
+
+    @pytest.mark.asyncio
+    async def test_get_attacker(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_attacker(
+                server_version="0", model_id="tm-001", attacker_id="T1",
+            )
+        assert result["attacker"]["id"] == "T1"
+
+    @pytest.mark.asyncio
+    async def test_get_component(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_component(
+                server_version="0", model_id="tm-001", component_id="C1",
+            )
+        assert result["component"]["id"] == "C1"
+
+    @pytest.mark.asyncio
+    async def test_get_trust_boundary(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_trust_boundary(
+                server_version="0", model_id="tm-001", tb_id="TB1",
+            )
+        assert result["trust_boundary"]["id"] == "TB1"
+        assert "Network" in result["trust_boundary"]["passes"]
+
+    @pytest.mark.asyncio
+    async def test_get_assumption(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_assumption(
+                server_version="0", model_id="tm-001", assumption_id="AS1",
+            )
+        assert result["assumption"]["id"] == "AS1"
+
+    @pytest.mark.asyncio
+    async def test_get_control(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_control(
+                server_version="0", model_id="tm-001", control_id="CTRL-01",
+            )
+        assert result["control"]["id"] == "CTRL-01"
+        # Default version=0 maps to latest at the API layer.
+        mock.get_control.assert_awaited_once_with("tm-001", "CTRL-01", version=0)
+
+
+class TestCoIdFilters:
+    @pytest.mark.asyncio
+    async def test_reachability_co_id_passthrough(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await get_reachability_verdicts(
+                server_version="0", model_id="tm-001", co_id="CO3",
+            )
+        mock.model_reachability_verdicts.assert_awaited_once_with("tm-001", co_id="CO3")
+
+    @pytest.mark.asyncio
+    async def test_reachability_no_co_id(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await get_reachability_verdicts(server_version="0", model_id="tm-001")
+        mock.model_reachability_verdicts.assert_awaited_once_with("tm-001", co_id="")
+
+    @pytest.mark.asyncio
+    async def test_coherence_co_id_passthrough(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await model_coherence_report(
+                server_version="0", model_id="tm-001", co_id="CO3",
+            )
+        mock.model_coherence_report.assert_awaited_once_with("tm-001", co_id="CO3")
