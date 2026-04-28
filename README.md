@@ -120,7 +120,7 @@ uvx mipiti-mcp
 | Tool | Description |
 |------|-------------|
 | `get_controls` | List controls with current status. Use `summary_only=True` for compact response. |
-| `get_control_objectives` | List COs with which controls cover each one. Includes `boundary_reachable` per CO. |
+| `get_control_objectives` | List COs with which controls cover each one. Pair with `get_reachability_verdicts` for per-CO composer reachability state. |
 | `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
 | `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. |
 | `regenerate_controls` | Regenerate controls. Supports `mode="per_co"` and `co_ids` to target specific COs. |
@@ -163,7 +163,7 @@ uvx mipiti-mcp
 
 | Tool | Description |
 |------|-------------|
-| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation) and `boundary_reachable` per CO. |
+| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation). For per-CO reachability state call `get_reachability_verdicts`. |
 
 ### Compliance
 
