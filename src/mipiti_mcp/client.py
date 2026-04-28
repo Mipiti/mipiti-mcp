@@ -548,7 +548,9 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def model_coherence_report(self, model_id: str) -> dict:
+    async def model_coherence_report(
+        self, model_id: str, co_id: str = "",
+    ) -> dict:
         """Static-analysis report on coherence between the model's
         component declarations and the code-binding strings on its
         controls and assertions.
@@ -556,12 +558,20 @@ class MipitiClient:
         Returns ``{model_id, model_version, components_count, findings,
         summary}``. ``findings`` is a list of warning records, each with
         ``type``, ``severity``, and a human-readable ``message``.
+
+        When ``co_id`` is set, the server filters findings to those
+        carrying that CO id and returns 404 if the CO doesn't exist.
         """
-        resp = await self._get_client().get(f"/api/models/{model_id}/coherence")
+        params = {"co_id": co_id} if co_id else None
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/coherence", params=params,
+        )
         resp.raise_for_status()
         return resp.json()
 
-    async def model_reachability_verdicts(self, model_id: str) -> dict:
+    async def model_reachability_verdicts(
+        self, model_id: str, co_id: str = "",
+    ) -> dict:
         """Composer verdicts for every live CO on the model.
 
         Pure derivation from the model's structural primitives; not
@@ -570,9 +580,67 @@ class MipitiClient:
         ("reachable" | "unreachable" | "indeterminate"), ``reason``
         (structural label), ``narration``, and (when applicable)
         ``boundary_id`` / ``assumption_id``.
+
+        When ``co_id`` is set, the server returns a single verdict
+        (the composer is per-CO; the cross-CO loop is skipped). 404
+        if the CO doesn't exist or is tombstoned.
         """
+        params = {"co_id": co_id} if co_id else None
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/reachability",
+            f"/api/models/{model_id}/reachability", params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_control_objective(self, model_id: str, co_id: str) -> dict:
+        """Get a single control objective with its composer verdict."""
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/control-objectives/{co_id}",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_asset(self, model_id: str, asset_id: str) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/assets/{asset_id}",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_attacker(self, model_id: str, attacker_id: str) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/attackers/{attacker_id}",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_component(self, model_id: str, component_id: str) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/components/{component_id}",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_trust_boundary(self, model_id: str, tb_id: str) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/trust-boundaries/{tb_id}",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_assumption(self, model_id: str, assumption_id: str) -> dict:
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/assumptions/{assumption_id}",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_control(
+        self, model_id: str, control_id: str, version: int = 0,
+    ) -> dict:
+        params = {"version": version} if version else None
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/controls/{control_id}", params=params,
         )
         resp.raise_for_status()
         return resp.json()
