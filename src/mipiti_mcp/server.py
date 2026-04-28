@@ -21,7 +21,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "13"
+_SERVER_VERSION = "14"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -90,8 +90,8 @@ external service settings.
 - `get_controls` — lists controls with current status. Use `summary_only=True` \
 for a compact response (id, description, status, assertion_count, assumed_by).
 - `get_control_objectives` — lists COs with which controls cover each one. \
-Includes `boundary_reachable` and `boundary_unreachable_reason` per CO. \
-Useful for understanding scope before linking assumptions or regenerating.
+Pair with `get_reachability_verdicts` to surface composer reachability \
+state per CO before linking assumptions or regenerating.
 - `submit_assertions` — provide proof for a control. See that tool's docstring for \
 assertion types and required params. Always verify locally first: \
 `mipiti-verify verify <type> -p key=value --project-root .` \
@@ -207,9 +207,10 @@ Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` \
 — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` \
 and `unassessed` COs require action.
 
-**Boundary context and risk reason**: Each CO assessment includes:
-- `boundary_reachable` — false if the attacker cannot reach the asset \
-across any trust boundary.
+**Reachability and risk reason**: Reachability per CO is exposed by \
+`get_reachability_verdicts` (deterministic-computation provenance — \
+re-derived from structural primitives, never persisted). Each CO \
+assessment also includes:
 - `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` \
 (implement controls), `pending_attestation` (submit an attestation for \
 the linked boundary assumption), `expired_attestation` (renew an expired \
@@ -228,9 +229,10 @@ listed in `pending_assumption_ids` — do NOT try to implement controls \
 for boundary-excluded COs. \
 `expired_attestation` → call `submit_attestation` to renew for the \
 assumption IDs listed in `expired_assumption_ids`. \
-`unassessed` → generate controls with `regenerate_controls`, or if the \
-CO is boundary-unreachable (`boundary_reachable=false`), create an \
-assumption with `add_assumption`. \
+`unassessed` → generate controls with `regenerate_controls`. If the \
+composer says the CO is unreachable or indeterminate (per \
+`get_reachability_verdicts`), author a structured `Assumption.exclusion` \
+predicate via `add_assumption` instead of generating controls. \
 `asset_absent` → the asset is not applicable. No action \
 needed — skip controls for this CO. \
 `attacker_irrelevant` → the attack surface is not applicable. No action \
@@ -1451,25 +1453,6 @@ async def model_coherence_report(
       the entity (``restore_asset`` / ``restore_attacker``) or
       remove the orphaned CO via ``refine_threat_model``.
 
-    Attestation/composer cross-checks (fire when the persisted
-    ``boundary_reachable`` attestation diverges from what the
-    composer derives):
-    - ``co_reach_attestation_diverges`` — the persisted
-      ``boundary_reachable`` disagrees with the composer's decided
-      verdict (composer says reachable but attestation says
-      unreachable, or vice versa). Resolve: ``edit_attacker`` or
-      ``edit_asset`` to amend the structural primitives so the
-      composer derives the attested outcome, OR refine the model
-      to update the attestation.
-    - ``co_reach_attestation_unstructured`` — the CO is attested
-      unreachable, but the composer is indeterminate (no structural
-      primitive backs the attestation). The prose
-      ``boundary_unreachable_reason`` is class-1 evidence on its
-      own; converting it to a structured ``Assumption.exclusion``
-      predicate makes the audit trail name the structural cause.
-      Resolve: ``add_assumption`` with an ``exclusion`` predicate
-      matching the CO.
-
     Use this before relying on component-scoped control discovery,
     when assertion verification fails for path/repo reasons, or to
     enumerate structural-completeness gaps the operator should
@@ -1501,11 +1484,9 @@ async def get_reachability_verdicts(
     Pure derivation over the model's structural primitives —
     components, asset.component_ids, trust_boundary.passes,
     attacker.trust_boundary_ids + attack_vector, and
-    Assumption.exclusion predicates. NOT persisted on the CO; the
-    composer is a separate provenance class from the operator/LLM-
-    attested ``boundary_reachable`` field. Re-running this call
-    against the model JSON produces the same result every time —
-    that's the verification an auditor performs.
+    Assumption.exclusion predicates. NOT persisted on the CO. Re-
+    running this call against the model JSON produces the same
+    result every time — that's the verification an auditor performs.
 
     Each verdict carries:
       - ``co_id``
@@ -1558,11 +1539,8 @@ async def get_control_objective(
     """Get a single control objective with its composer verdict.
 
     Returns the CO's typed fields, the IDs of any controls that map to
-    it, and the deterministic reachability verdict. Mirrors the
-    auditor-walkthrough pattern: one read surfaces the persisted
-    attestation (``boundary_reachable`` / ``boundary_unreachable_reason``)
-    side-by-side with the structural verdict so the caller can tell
-    immediately which class of evidence backs the reach claim.
+    it, and the deterministic reachability verdict — the structural
+    derivation that backs any reach claim on the CO.
 
     Tombstoned COs (``removed: true``) are returned with the flag set;
     the verdict is omitted because reach state is frozen at the
@@ -3256,11 +3234,13 @@ async def add_assumption(
     ``exclusion_co_ids`` is non-empty, it takes precedence over the
     match fields.
 
-    Use this to resolve a `co_reach_attestation_unstructured` finding:
-    take the prose ``boundary_unreachable_reason`` from the CO's
-    attestation, set ``exclusion_co_ids=<co_id>`` (and optionally the
-    attacker/asset/property fields), and the composer will derive the
-    same unreachable verdict structurally on subsequent loads.
+    Use this to resolve a CO whose composer verdict is
+    ``indeterminate`` because no structural primitive backs an
+    operator non-applicability claim: set ``exclusion_co_ids=<co_id>``
+    (and optionally the attacker/asset/property fields), and the
+    composer will derive ``unreachable / reason: assumption_excludes``
+    on subsequent loads, with the assumption's structured predicate as
+    the audit-trail cause.
 
     Args:
         model_id: ID of the threat model.
