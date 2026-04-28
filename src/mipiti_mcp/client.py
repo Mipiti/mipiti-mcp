@@ -518,6 +518,36 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def assign_asset_to_components(
+        self,
+        model_id: str,
+        asset_id: str,
+        component_ids: list[str],
+        change_reason: str,
+    ) -> dict:
+        """Replace an asset's component scope with the supplied list.
+
+        Mirror of ``assign_control_to_components`` for assets. Empty
+        list → unscoped (no explicit code-ownership binding); single
+        element → standard case; multi-element → multi-instance asset
+        flowing through several components (e.g., a session token on
+        client + cache + DB).
+
+        Validates that every supplied component_id exists on the
+        model. Mechanical, non-AI-gated.
+        """
+        body: dict[str, Any] = {
+            "component_ids": list(component_ids),
+            "change_reason": change_reason,
+        }
+        resp = await self._request_with_idempotency(
+            "PATCH",
+            f"/api/models/{model_id}/assets/{asset_id}/components",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def model_coherence_report(self, model_id: str) -> dict:
         """Static-analysis report on coherence between the model's
         component declarations and the code-binding strings on its
@@ -528,6 +558,22 @@ class MipitiClient:
         ``type``, ``severity``, and a human-readable ``message``.
         """
         resp = await self._get_client().get(f"/api/models/{model_id}/coherence")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def model_reachability_verdicts(self, model_id: str) -> dict:
+        """Composer verdicts for every live CO on the model.
+
+        Pure derivation from the model's structural primitives; not
+        persisted on the CO. Returns ``{model_id, model_version,
+        verdicts}`` where each verdict carries ``co_id``, ``kind``
+        ("reachable" | "unreachable" | "indeterminate"), ``reason``
+        (structural label), ``narration``, and (when applicable)
+        ``boundary_id`` / ``assumption_id``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/reachability",
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -1118,10 +1164,18 @@ class MipitiClient:
 
     # --- Trust boundary CRUD ---
 
-    async def add_trust_boundary(self, model_id: str, description: str, crosses: list[str] | None = None) -> dict:
+    async def add_trust_boundary(
+        self,
+        model_id: str,
+        description: str,
+        crosses: list[str] | None = None,
+        passes: list[str] | None = None,
+    ) -> dict:
         body: dict = {"description": description}
         if crosses:
             body["crosses"] = crosses
+        if passes is not None:
+            body["passes"] = passes
         return await self._post(f"/api/models/{model_id}/trust-boundaries", body)
 
     async def edit_trust_boundary(self, model_id: str, tb_id: str, **kwargs) -> dict:
@@ -1132,12 +1186,22 @@ class MipitiClient:
 
     # --- Assumption CRUD ---
 
-    async def add_assumption(self, model_id: str, description: str, linked_co_ids: list[str] | None = None, *, assumption_type: str = "external") -> dict:
+    async def add_assumption(
+        self,
+        model_id: str,
+        description: str,
+        linked_co_ids: list[str] | None = None,
+        *,
+        assumption_type: str = "external",
+        exclusion: dict | None = None,
+    ) -> dict:
         body: dict = {"description": description}
         if linked_co_ids:
             body["linked_co_ids"] = linked_co_ids
         if assumption_type != "external":
             body["assumption_type"] = assumption_type
+        if exclusion is not None:
+            body["exclusion"] = exclusion
         return await self._post(f"/api/models/{model_id}/assumptions", body)
 
     async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:

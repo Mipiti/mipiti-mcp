@@ -21,7 +21,7 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "12"
+_SERVER_VERSION = "13"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -367,12 +367,40 @@ cross-model compliance reporting.
 
 Components bridge security architecture (trust boundaries) to code \
 organization (repos). Add components to a model to scope controls \
-to specific codebases.
+to specific codebases AND to ground the deterministic reachability \
+composer's asset-boundary derivation.
 
 - `add_component` — create a component with name, repo_url, and \
 optional path (for monorepos) and trust_boundary_ids.
 - `edit_component` / `remove_component` — modify or delete a component.
 - `get_controls` with `component_id` — filter controls by component.
+- `assign_asset_to_components` — link an asset to one or more \
+components. Drives the reachability composer's per-CO verdicts.
+
+### When to populate components
+
+`generate_threat_model` proposes speculative components (with \
+`repo_url=""`) when no topology has been supplied. These are a \
+starting point — refine them as code grounding emerges:
+
+- **Existing codebase**: when you've scanned the repo and know \
+the real services, call `add_component` (with grounded `repo_url` \
+and `path`) BEFORE `generate_threat_model`. The generation prompts \
+will scope assets and boundaries to the components you supplied. \
+Alternatively, call `generate_threat_model` first and then \
+`edit_component` on each speculative component the LLM proposed, \
+swapping `repo_url` to the real URL.
+- **Planning conversation, no code yet**: call `generate_threat_model` \
+directly; the LLM-proposed speculative components serve as a \
+topology starting point the user/developer refines as the design \
+firms up. `repo_url` stays empty until code exists; the coherence \
+report flags `component_unbound` findings on speculative components \
+so they're visible to auditors.
+
+A component with empty `repo_url` is the natural signal "speculative \
+— not yet bound to code." A component with a populated `repo_url` is \
+grounded. There is no separate status field — the binding is the \
+state.
 """
 
 _INSTRUCTIONS_ASYNC = """\
@@ -1311,34 +1339,196 @@ async def assign_control_to_components(
 
 
 @mcp.tool()
+async def assign_asset_to_components(
+    server_version: str,
+    model_id: str,
+    asset_id: str,
+    component_ids: str,
+    change_reason: str,
+) -> dict:
+    """Replace an asset's component scope.
+
+    Mirror of ``assign_control_to_components`` for assets. Components
+    are the canonical bridge between security architecture (trust
+    boundaries) and code organization (repos). Linking assets to
+    components flows boundary context into reachability derivation
+    without giving Asset its own ``trust_boundary_ids``.
+
+    An asset's component scope can be:
+    - Unscoped (empty string): no explicit code-ownership binding.
+      Reach decisions fall back to LLM judgment of the asset's
+      description / security properties.
+    - Single-component: standard case for assets handled by one
+      deployable unit.
+    - Multi-component: a multi-instance asset that flows through
+      several components (e.g., a session token on client + cache
+      + DB — each component handles a distinct instance).
+
+    Mechanical, non-AI-gated. Validates only that every referenced
+    component exists on the model.
+
+    Args:
+        model_id: ID of the threat model.
+        asset_id: ID of the asset to scope (e.g., "A1").
+        component_ids: Comma-separated component IDs (e.g., "CMP1,CMP2").
+            Empty string = unscoped.
+        change_reason: Why this scope is appropriate (min 10 chars).
+            Captured in the model's version history.
+    """
+    parsed = [c.strip() for c in component_ids.split(",") if c.strip()] if component_ids else []
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().assign_asset_to_components(
+            model_id, asset_id, parsed, change_reason.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def model_coherence_report(
     server_version: str,
     model_id: str,
 ) -> dict:
     """Static-analysis report on coherence between the model's
-    component declarations and the code-binding strings on its
-    controls and assertions.
+    component declarations, the code-binding strings on its controls
+    and assertions, and the structural reachability of every CO.
 
-    Findings flag drift between the canonical component graph and the
-    repo strings carried on assertions:
+    The report carries up to twelve finding types, grouped below by
+    concern. Each finding includes the entity IDs it concerns
+    (``co_id``, ``asset_id``, ``attacker_id``, ``component_id``, etc.)
+    so the agent can dispatch the resolution tool directly without
+    re-fetching the model.
+
+    Component / assertion bindings:
     - ``control_component_unknown`` — control references a component
-      ID that no longer exists on the model.
+      ID that no longer exists. Resolve: ``assign_control_to_components``.
+    - ``asset_component_unknown`` — asset references a missing
+      component. Resolve: ``edit_asset`` (with corrected
+      ``component_ids``).
     - ``assertion_repo_mismatch`` — an assertion's ``repo`` does not
       match the ``repo_url`` of any component scoping its control.
+      Resolve: rebind the assertion or rescope the control.
     - ``assertion_repo_orphan`` — an assertion has a ``repo`` but its
-      control is unscoped, so the binding cannot be cross-checked.
-    - ``control_unscoped_with_scoped_assertions`` — a control is
-      unscoped but assertions targeting it carry ``repo`` values,
-      indicating the control should be scoped to those repos.
+      control is unscoped. Resolve: ``assign_control_to_components``
+      to scope the control, or correct the assertion's repo.
+    - ``control_unscoped_with_scoped_assertions`` — control is
+      unscoped, but its assertions all carry a single component's
+      ``repo``. Resolve: ``assign_control_to_components`` to that
+      component.
+    - ``component_unbound`` — a component has no ``repo_url``
+      (speculative; LLM-proposed during generation, or operator-
+      added without a binding yet). Resolve: ``edit_component`` with
+      the real repo URL once the codebase exists. Speculative is a
+      valid lifecycle state, not an error — surfaced so the gap is
+      visible to auditors.
 
-    Use this before relying on component-scoped control discovery, or
-    when assertion verification fails for path/repo reasons.
+    Reachability findings (deterministic composer; indeterminate
+    verdicts surface as findings, never auto-decided by an LLM):
+    - ``co_attacker_unpositioned`` — the CO's attacker has no
+      positioned trust boundaries. Resolve: ``edit_attacker`` (set
+      ``trust_boundary_ids``), or ``add_assumption`` with a
+      structured exclusion predicate.
+    - ``co_asset_unbounded`` — the CO's asset has no component-derived
+      trust boundaries. Resolve: ``assign_asset_to_components``,
+      ``edit_asset`` (with ``component_ids``), or ``add_assumption``
+      with a structured exclusion.
+    - ``co_no_shared_boundary`` — attacker and asset boundaries do
+      not intersect. Resolve: re-position the attacker via
+      ``edit_attacker``, scope the asset to a shared component via
+      ``assign_asset_to_components``, or ``add_assumption`` with a
+      structured exclusion.
+    - ``co_missing_entity`` — the CO references a missing
+      asset/attacker; model state inconsistent. Resolve: restore
+      the entity (``restore_asset`` / ``restore_attacker``) or
+      remove the orphaned CO via ``refine_threat_model``.
+
+    Attestation/composer cross-checks (fire when the persisted
+    ``boundary_reachable`` attestation diverges from what the
+    composer derives):
+    - ``co_reach_attestation_diverges`` — the persisted
+      ``boundary_reachable`` disagrees with the composer's decided
+      verdict (composer says reachable but attestation says
+      unreachable, or vice versa). Resolve: ``edit_attacker`` or
+      ``edit_asset`` to amend the structural primitives so the
+      composer derives the attested outcome, OR refine the model
+      to update the attestation.
+    - ``co_reach_attestation_unstructured`` — the CO is attested
+      unreachable, but the composer is indeterminate (no structural
+      primitive backs the attestation). The prose
+      ``boundary_unreachable_reason`` is class-1 evidence on its
+      own; converting it to a structured ``Assumption.exclusion``
+      predicate makes the audit trail name the structural cause.
+      Resolve: ``add_assumption`` with an ``exclusion`` predicate
+      matching the CO.
+
+    Use this before relying on component-scoped control discovery,
+    when assertion verification fails for path/repo reasons, or to
+    enumerate structural-completeness gaps the operator should
+    address before treating the model as audit-ready. ``get_reachability_verdicts``
+    exposes the underlying composer verdicts directly when the
+    finding-shape summary isn't enough.
 
     Args:
         model_id: ID of the threat model.
     """
     try:
         return _dump(await _get_client().model_coherence_report(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_reachability_verdicts(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Composer verdicts for every live CO on the model.
+
+    Pure derivation over the model's structural primitives —
+    components, asset.component_ids, trust_boundary.passes,
+    attacker.trust_boundary_ids + attack_vector, and
+    Assumption.exclusion predicates. NOT persisted on the CO; the
+    composer is a separate provenance class from the operator/LLM-
+    attested ``boundary_reachable`` field. Re-running this call
+    against the model JSON produces the same result every time —
+    that's the verification an auditor performs.
+
+    Each verdict carries:
+      - ``co_id``
+      - ``kind``: "reachable" | "unreachable" | "indeterminate"
+      - ``reason``: structural label
+        (``boundary_blocks_vector`` / ``assumption_excludes`` /
+        ``attacker_unpositioned`` / ``asset_unbounded`` /
+        ``no_shared_boundary`` / ``missing_entity``)
+      - ``narration``: auditor-readable explanation
+      - ``boundary_id``: which boundary blocked, if applicable
+      - ``assumption_id``: which assumption excluded, if applicable
+
+    When the verdict is indeterminate, address the gap via the
+    standard model-edit affordances:
+      - ``attacker_unpositioned`` → ``edit_attacker`` setting
+        ``trust_boundary_ids``
+      - ``asset_unbounded`` → ``assign_asset_to_components`` or
+        ``edit_asset`` with ``component_ids``
+      - ``no_shared_boundary`` → re-position attacker, re-scope
+        asset, OR ``add_assumption`` with structured exclusion
+      - ``missing_entity`` → restore the missing asset/attacker,
+        or remove the orphaned CO
+
+    Use this before relying on per-CO reach state for triage,
+    auto-remediation, or audit responses. The
+    ``model_coherence_report`` tool surfaces the same gaps as
+    actionable findings; this tool exposes the raw verdicts when
+    you need the structured data (boundary_id citations, narration
+    strings) that the findings summarize.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().model_reachability_verdicts(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1638,16 +1828,25 @@ async def add_asset(
     description: str = "",
     security_properties: Optional[str] = None,
     notes: str = "",
+    component_ids: Optional[str] = None,
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
     The caller supplies identity-bearing fields (name, description,
-    security_properties, notes); the backend LLM-reasons the factor
-    decomposition (and composes the ``impact`` rating from it). The
-    same prompt the generation pipeline uses for LLM-produced assets
-    is reused here, so factors are calibrated consistently regardless
-    of who introduced the asset. Override any factor post-create via
-    ``edit_asset`` with a ``change_reason`` for the audit trail.
+    security_properties, notes) plus optional component scoping; the
+    backend LLM-reasons the factor decomposition (and composes the
+    ``impact`` rating from it). The same prompt the generation
+    pipeline uses for LLM-produced assets is reused here, so factors
+    are calibrated consistently regardless of who introduced the
+    asset. Override any factor post-create via ``edit_asset`` with a
+    ``change_reason`` for the audit trail.
+
+    ``component_ids`` (optional) links the asset to one or more
+    deployable units. Components are the canonical bridge between
+    security architecture (trust boundaries) and code organization
+    (repos); linking assets here flows boundary context into the
+    reachability graph. Multi-component is the right shape for
+    multi-instance assets (e.g., a session token on client + cache).
 
     LLM-gated against a re-add of a previously soft-deleted asset on
     the same model. Three possible outcomes:
@@ -1676,6 +1875,9 @@ async def add_asset(
         security_properties: Comma-separated properties, e.g. "C,I,A"
             (default: "C").
         notes: Optional notes.
+        component_ids: Comma-separated component IDs scoping the asset
+            (e.g., "CMP1,CMP2"). Empty / omitted = unscoped. Validated
+            against components declared on the model.
     """
     body: dict[str, Any] = {"name": name}
     if description:
@@ -1684,6 +1886,8 @@ async def add_asset(
         body["security_properties"] = [p.strip() for p in security_properties.split(",") if p.strip()]
     if notes:
         body["notes"] = notes
+    if component_ids is not None:
+        body["component_ids"] = [c.strip() for c in component_ids.split(",") if c.strip()]
     try:
         return _dump(await _get_client().add_asset(model_id, **body))
     except Exception as exc:
@@ -2238,16 +2442,30 @@ async def add_component(
 ) -> dict:
     """Add a component to a threat model.
 
-    Components bridge security architecture to code organization. They map
-    trust boundaries to repos so controls can be scoped to the codebase
-    that implements them.
+    Components bridge security architecture to code organization. They
+    map trust boundaries to repos so controls can be scoped to the
+    codebase that implements them. They also drive the deterministic
+    reachability composer's asset-boundary derivation: an asset's
+    trust-boundary footprint is the union of its components'
+    ``trust_boundary_ids``.
+
+    A component with empty ``repo_url`` is speculative — a topology
+    waypoint that hasn't been bound to code yet. The coherence report
+    surfaces these as ``component_unbound`` findings. Speculative
+    components are valid in the lifecycle (LLM-proposed during
+    generation, or operator-added during planning); ground them via
+    ``edit_component`` once the code exists.
 
     Args:
         model_id: ID of the threat model.
         name: Component name (e.g., "Backend API", "Auth Worker").
         repo_url: Repository URL (e.g., "github.com/org/backend").
+            Empty string is valid for speculative components — pass a
+            real URL once you've identified the codebase.
         path: Path within repo for monorepos (e.g., "services/auth").
-        trust_boundary_ids: Comma-separated trust boundary IDs.
+        trust_boundary_ids: Comma-separated trust boundary IDs that
+            this component spans (its deployment zone). Drives reach
+            decisions for any asset scoped to this component.
     """
     tb_ids = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()] if trust_boundary_ids else []
     try:
@@ -2758,6 +2976,7 @@ async def get_setup_status(server_version: str) -> dict:
 async def add_trust_boundary(
     server_version: str, model_id: str, description: str,
     crosses: Optional[str] = None,
+    passes: Optional[str] = None,
 ) -> dict:
     """Add a trust boundary. Creates a new model version.
 
@@ -2765,10 +2984,20 @@ async def add_trust_boundary(
         model_id: ID of the threat model.
         description: What this boundary represents (e.g., "Public network to API server").
         crosses: Optional comma-separated asset IDs that cross this boundary.
+        passes: Optional comma-separated AttackVector values the boundary
+            allows through (subset of "Network,Adjacent,Local,Physical").
+            Omit for the methodology default (passes-everything). Narrowing
+            this set is what makes a boundary block specific attacker
+            vectors in the deterministic reachability composer.
     """
     parsed_crosses = [c.strip() for c in crosses.split(",") if c.strip()] if crosses else []
+    parsed_passes = (
+        [v.strip() for v in passes.split(",") if v.strip()] if passes is not None else None
+    )
     try:
-        return await _get_client().add_trust_boundary(model_id, description, parsed_crosses or None)
+        return await _get_client().add_trust_boundary(
+            model_id, description, parsed_crosses or None, parsed_passes,
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2778,6 +3007,8 @@ async def edit_trust_boundary(
     server_version: str, model_id: str, tb_id: str,
     description: Optional[str] = None,
     crosses: Optional[str] = None,
+    passes: Optional[str] = None,
+    change_reason: Optional[str] = None,
 ) -> dict:
     """Edit a trust boundary. Creates a new model version.
 
@@ -2786,12 +3017,24 @@ async def edit_trust_boundary(
         tb_id: ID of the trust boundary (e.g., "TB1").
         description: New description.
         crosses: New comma-separated asset IDs.
+        passes: New comma-separated AttackVector values the boundary allows
+            through (subset of "Network,Adjacent,Local,Physical"). Use the
+            empty string to set "blocks all"; omit to leave unchanged.
+            Reach-relevant — narrowing or widening this set can flip CO
+            verdicts.
+        change_reason: Required when ``passes`` actually changes. Captured
+            in the audit trail; documents why the boundary's vector
+            filter was tightened or widened.
     """
     kwargs: dict = {}
     if description is not None:
         kwargs["description"] = description
     if crosses is not None:
         kwargs["crosses"] = [c.strip() for c in crosses.split(",") if c.strip()]
+    if passes is not None:
+        kwargs["passes"] = [v.strip() for v in passes.split(",") if v.strip()]
+    if change_reason is not None:
+        kwargs["change_reason"] = change_reason
     try:
         return await _get_client().edit_trust_boundary(model_id, tb_id, **kwargs)
     except Exception as exc:
@@ -2820,6 +3063,12 @@ async def add_assumption(
     server_version: str, model_id: str, description: str,
     linked_co_ids: Optional[str] = None,
     assumption_type: str = "external",
+    exclusion_attacker_id: Optional[str] = None,
+    exclusion_attacker_vector: Optional[str] = None,
+    exclusion_asset_id: Optional[str] = None,
+    exclusion_asset_component_id: Optional[str] = None,
+    exclusion_property_match: Optional[str] = None,
+    exclusion_co_ids: Optional[str] = None,
 ) -> dict:
     """Add an assumption. Creates a new model version.
 
@@ -2827,16 +3076,66 @@ async def add_assumption(
     trust boundary. When linked to COs and attested, they mitigate those
     COs in the assessment.
 
+    Optionally attach a structured exclusion predicate (the
+    ``exclusion_*`` params). The reachability composer matches active
+    + attested assumptions with predicates against COs deterministically
+    — class-3 (deterministic computation) evidence in addition to the
+    operator-attested class-1 evidence. Pass any subset of the fields;
+    unspecified fields default to wildcard ("*"). When
+    ``exclusion_co_ids`` is non-empty, it takes precedence over the
+    match fields.
+
+    Use this to resolve a `co_reach_attestation_unstructured` finding:
+    take the prose ``boundary_unreachable_reason`` from the CO's
+    attestation, set ``exclusion_co_ids=<co_id>`` (and optionally the
+    attacker/asset/property fields), and the composer will derive the
+    same unreachable verdict structurally on subsequent loads.
+
     Args:
         model_id: ID of the threat model.
         description: What is assumed (e.g., "Customer restricts CI runner egress").
         linked_co_ids: Optional comma-separated CO IDs this assumption covers.
         assumption_type: "external" (default, allows manual attestation)
             or "non_applicability" (requires CI verification, no manual attestation).
+        exclusion_attacker_id: Predicate match — "*" wildcard (default
+            when any other exclusion_* param is set) or concrete attacker ID.
+        exclusion_attacker_vector: One of "Network" | "Adjacent" | "Local"
+            | "Physical" | "*".
+        exclusion_asset_id: "*" or concrete asset ID.
+        exclusion_asset_component_id: "*" or concrete component ID.
+        exclusion_property_match: "C" | "I" | "A" | "U" | "*".
+        exclusion_co_ids: Comma-separated CO IDs the predicate matches
+            explicitly. When non-empty, overrides the match fields.
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
+
+    # Build exclusion only when at least one exclusion_* param is supplied.
+    has_excl = any(
+        v is not None for v in (
+            exclusion_attacker_id, exclusion_attacker_vector,
+            exclusion_asset_id, exclusion_asset_component_id,
+            exclusion_property_match, exclusion_co_ids,
+        )
+    )
+    exclusion: Optional[dict] = None
+    if has_excl:
+        exclusion = {
+            "attacker_id": exclusion_attacker_id or "*",
+            "attacker_vector": exclusion_attacker_vector or "*",
+            "asset_id": exclusion_asset_id or "*",
+            "asset_component_id": exclusion_asset_component_id or "*",
+            "property_match": exclusion_property_match or "*",
+            "co_ids": (
+                [c.strip() for c in exclusion_co_ids.split(",") if c.strip()]
+                if exclusion_co_ids else []
+            ),
+        }
     try:
-        return await _get_client().add_assumption(model_id, description, parsed, assumption_type=assumption_type)
+        return await _get_client().add_assumption(
+            model_id, description, parsed,
+            assumption_type=assumption_type,
+            exclusion=exclusion,
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2846,20 +3145,65 @@ async def edit_assumption(
     server_version: str, model_id: str, assumption_id: str,
     description: Optional[str] = None,
     linked_co_ids: Optional[str] = None,
+    exclusion_attacker_id: Optional[str] = None,
+    exclusion_attacker_vector: Optional[str] = None,
+    exclusion_asset_id: Optional[str] = None,
+    exclusion_asset_component_id: Optional[str] = None,
+    exclusion_property_match: Optional[str] = None,
+    exclusion_co_ids: Optional[str] = None,
+    clear_exclusion: bool = False,
 ) -> dict:
     """Edit an assumption. Creates a new model version.
+
+    Exclusion predicate semantics on edit:
+      - If any ``exclusion_*`` param is set: replace the existing
+        predicate with one built from the supplied fields (unspecified
+        fields default to "*").
+      - If ``clear_exclusion=True``: remove the existing predicate
+        entirely (the assumption becomes prose-only).
+      - If neither: leave the existing predicate untouched.
 
     Args:
         model_id: ID of the threat model.
         assumption_id: ID of the assumption (e.g., "AS1").
         description: New description.
         linked_co_ids: New comma-separated CO IDs (replaces existing linkage).
+        exclusion_attacker_id, exclusion_attacker_vector,
+        exclusion_asset_id, exclusion_asset_component_id,
+        exclusion_property_match, exclusion_co_ids: Same semantics as
+            on ``add_assumption`` — supplying any of them rewrites the
+            predicate.
+        clear_exclusion: When True, clears the predicate. Mutually
+            exclusive with the exclusion_* params (those win if both
+            are sent).
     """
     kwargs: dict = {}
     if description is not None:
         kwargs["description"] = description
     if linked_co_ids is not None:
         kwargs["linked_co_ids"] = [c.strip() for c in linked_co_ids.split(",") if c.strip()]
+
+    has_excl = any(
+        v is not None for v in (
+            exclusion_attacker_id, exclusion_attacker_vector,
+            exclusion_asset_id, exclusion_asset_component_id,
+            exclusion_property_match, exclusion_co_ids,
+        )
+    )
+    if has_excl:
+        kwargs["exclusion"] = {
+            "attacker_id": exclusion_attacker_id or "*",
+            "attacker_vector": exclusion_attacker_vector or "*",
+            "asset_id": exclusion_asset_id or "*",
+            "asset_component_id": exclusion_asset_component_id or "*",
+            "property_match": exclusion_property_match or "*",
+            "co_ids": (
+                [c.strip() for c in exclusion_co_ids.split(",") if c.strip()]
+                if exclusion_co_ids else []
+            ),
+        }
+    elif clear_exclusion:
+        kwargs["exclusion"] = None
     try:
         return await _get_client().edit_assumption(model_id, assumption_id, **kwargs)
     except Exception as exc:
