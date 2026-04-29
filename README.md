@@ -67,7 +67,7 @@ uvx mipiti-mcp
 |----------|----------|---------|-------------|
 | `MIPITI_API_KEY` | Yes | — | Your Mipiti API key |
 | `MIPITI_API_URL` | No | `https://api.mipiti.io` | API base URL |
-| `SERVER_VERSION` | Yes | — | Identifier for the running server's MCP surface (instructions, tool docstrings, schemas, behavior). Sent on every tool call. Clients invalidate cached MCP guidance when this changes. Use a commit SHA, package version, or any string that changes when the surface changes. |
+| `SERVER_VERSION` | Yes | — | Identifier for the running server's MCP surface (instructions, tool docstrings, schemas, behavior). Sent on every tool call. Clients invalidate cached MCP guidance when this changes. For local runs, any sentinel string is fine (`"local"`, `"dev"`). For deployed runs, use a value that changes when this package's source changes (commit SHA is typical). |
 
 ### Claude Code (standalone)
 
@@ -79,7 +79,7 @@ uvx mipiti-mcp
       "args": ["mipiti-mcp"],
       "env": {
         "MIPITI_API_KEY": "your-api-key",
-        "SERVER_VERSION": "0.33.0"
+        "SERVER_VERSION": "local"
       }
     }
   }
