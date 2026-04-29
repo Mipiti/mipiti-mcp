@@ -7,6 +7,7 @@ All tools call the Mipiti REST API via MipitiClient.
 import asyncio
 import contextvars
 import json
+import os
 import time
 from typing import Any, Literal, Optional
 
@@ -21,7 +22,15 @@ from .client import MipitiClient
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-_SERVER_VERSION = "14"
+# SERVER_VERSION env var is the authoritative version identifier sent
+# to clients on every tool call. Required at startup. The value must
+# change exactly when this package's runtime behavior changes —
+# instructions block, tool docstrings, tool schemas, tool function
+# bodies — so connected clients invalidate cached MCP guidance and
+# pick up the new surface. A commit SHA of this package's source is
+# the typical value; deployment tooling sets it. Local runs can set
+# it to any string ("dev", a feature-branch name, etc.).
+_SERVER_VERSION = os.environ["SERVER_VERSION"]
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
