@@ -1,5 +1,11 @@
 """Shared test fixtures and sample data."""
 
+import os
+
+# SERVER_VERSION is required at server.py import time. Set a sentinel
+# value before any test imports the server module.
+os.environ.setdefault("SERVER_VERSION", "test")
+
 import pytest
 
 
