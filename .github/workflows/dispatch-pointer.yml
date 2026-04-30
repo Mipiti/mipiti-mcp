@@ -1,17 +1,29 @@
 name: Dispatch Pointer Update
 
-# Fires only when a release tag lands on this repo. One pointer-update
-# PR per release, instead of one per commit.
+# Fires only AFTER Publish-to-PyPI succeeds for a release tag. One
+# pointer-update PR per release, only after `pip install mipiti-mcp`
+# can actually resolve the new version.
 #
-# Rationale: parent repo should track mipiti-mcp's latest *released*
-# version (what users install via `pip install mipiti-mcp`), not every
-# intermediate commit. release-pipeline.yml in parent creates the tag
-# after bumping pyproject.toml — the tag push is the canonical signal
-# that a release has landed.
+# Why workflow_run, not push:tags. Both this workflow and Publish-to-PyPI
+# previously triggered in parallel on the same `push tags: 'v*'` event.
+# This one finished in ~10s and dispatched immediately to the parent;
+# Publish-to-PyPI sat in the `environment: pypi` approval gate for ~15
+# minutes. The parent's `update-submodule.yml` would then try to
+# `uv pip compile` against a PyPI index that didn't yet have the new
+# version, and the entire pointer-update flow failed with
+# `No solution found when resolving dependencies`.
+#
+# Gating the dispatch on Publish-to-PyPI success removes the race —
+# the parent only learns about the new tag once `pip install` will
+# work for it. workflow_run fires on every Publish-to-PyPI completion;
+# the conditional below filters to (a) success only, (b) tag pushes
+# (head_branch starting with `v`), so manual workflow_dispatch runs
+# of Publish-to-PyPI don't trigger spurious pointer dispatches.
 
 on:
-  push:
-    tags: ['v*']
+  workflow_run:
+    workflows: ["Publish to PyPI"]
+    types: [completed]
 
 jobs:
   dispatch-submodule-update:
@@ -19,6 +31,9 @@ jobs:
     environment: dispatch
     permissions:
       contents: read
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     steps:
       - uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         id: app-token
@@ -31,8 +46,11 @@ jobs:
       - name: Trigger submodule update in parent repo
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # head_sha is the commit the release tag points to — the
+          # right ref for the parent to lock its submodule pointer at.
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           gh api repos/Mipiti/mipiti/dispatches \
             -f event_type=submodule-update \
             -f 'client_payload[submodule]=mcp-server' \
-            -f 'client_payload[ref]=${{ github.sha }}'
+            -f "client_payload[ref]=${RELEASE_SHA}"
