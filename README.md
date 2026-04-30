@@ -6,12 +6,12 @@ Lets AI coding agents (Claude Code, Claude Desktop, Cursor, etc.) generate and m
 
 ## Hosted Endpoint (Recommended)
 
-The Mipiti backend hosts an MCP server at `https://api.mipiti.io/mcp/`. No installation needed — just configure your MCP client to connect.
+The Mipiti backend hosts an MCP server at `https://api.mipiti.io/mcp`. No installation needed — just configure your MCP client to connect.
 
 ### Claude Code (quickstart)
 
 ```bash
-claude mcp add --transport http Mipiti https://api.mipiti.io/mcp/
+claude mcp add --transport http Mipiti https://api.mipiti.io/mcp
 ```
 
 You'll be prompted to log in via your browser (OAuth). That's it.
@@ -25,7 +25,7 @@ MCP clients with OAuth support (Claude Code, Claude Desktop, Cursor) automatical
   "mcpServers": {
     "mipiti": {
       "type": "http",
-      "url": "https://api.mipiti.io/mcp/"
+      "url": "https://api.mipiti.io/mcp"
     }
   }
 }
@@ -42,7 +42,7 @@ For clients without OAuth support, or headless/CI environments, create an API ke
   "mcpServers": {
     "mipiti": {
       "type": "http",
-      "url": "https://api.mipiti.io/mcp/",
+      "url": "https://api.mipiti.io/mcp",
       "headers": {
         "X-API-Key": "your-api-key"
       }
