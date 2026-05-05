@@ -107,7 +107,9 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "get_model": _tm,
         "rename_model": RenameResult(id="tm-001", title="New"),
         "delete_model": None,
-        "export_model": b"AssetID,Name\nA1,Tokens\n",
+        "start_export_model": "job_export_csv",
+        "start_export_model_full": "job_export_full",
+        "fetch_operation_result": b"AssetID,Name\nA1,Tokens\n",
         "get_controls": ControlsResponse(controls=_controls),
         "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
@@ -536,17 +538,30 @@ class TestDeleteThreatModel:
 class TestExportThreatModelArchive:
     @pytest.mark.asyncio
     async def test_returns_envelope(self) -> None:
-        mock = _mock_client()
+        import json as _json
         envelope = {
             "format_version": 1,
             "title": "Checkout",
             "versions": [{"version": 1, "data": {}, "created_at": "2026-04-20T00:00:00Z"}],
         }
-        mock.export_model_full = AsyncMock(return_value=envelope)
+        mock = _mock_client(
+            start_export_model_full=AsyncMock(return_value="job_full_1"),
+            get_operation=AsyncMock(return_value={"status": "completed", "result": {
+                "kind": "file", "filename": "audit.json",
+                "content_type": "application/json", "content_b64": "",
+            }}),
+            fetch_operation_result=AsyncMock(
+                return_value=_json.dumps(envelope).encode("utf-8"),
+            ),
+        )
+        ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await export_threat_model_archive(server_version="0", model_id="tm-001")
+            result = await export_threat_model_archive(
+                server_version="0", model_id="tm-001", ctx=ctx,
+            )
         assert result["envelope"] == envelope
-        mock.export_model_full.assert_awaited_once_with("tm-001")
+        mock.start_export_model_full.assert_awaited_once_with("tm-001")
+        mock.fetch_operation_result.assert_awaited_once_with("job_full_1")
 
 
 class TestImportThreatModelArchive:
@@ -599,24 +614,54 @@ class TestGetThreatModel:
 class TestExportThreatModel:
     @pytest.mark.asyncio
     async def test_csv(self) -> None:
-        mock = _mock_client()
+        mock = _mock_client(
+            start_export_model=AsyncMock(return_value="job_csv_1"),
+            get_operation=AsyncMock(return_value={"status": "completed", "result": {
+                "kind": "file", "filename": "report.csv",
+                "content_type": "text/csv", "content_b64": "",
+            }}),
+            fetch_operation_result=AsyncMock(return_value=b"AssetID,Name\nA1,Tokens\n"),
+        )
+        ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await export_threat_model(server_version="0", model_id="tm-001", format="csv")
+            result = await export_threat_model(
+                server_version="0", model_id="tm-001", ctx=ctx, format="csv",
+            )
         assert result["format"] == "csv"
+        assert result["filename"] == "report.csv"
         assert "AssetID,Name" in result["content"]
+        mock.start_export_model.assert_awaited_once_with("tm-001", "csv")
 
     @pytest.mark.asyncio
-    async def test_pdf_returns_url(self) -> None:
-        mock = _mock_client(export_model=AsyncMock(return_value=b"%PDF-binary"))
+    async def test_pdf_returns_b64(self) -> None:
+        import base64 as _b64
+        pdf_bytes = b"%PDF-binary"
+        mock = _mock_client(
+            start_export_model=AsyncMock(return_value="job_pdf_1"),
+            get_operation=AsyncMock(return_value={"status": "completed", "result": {
+                "kind": "file", "filename": "report.pdf",
+                "content_type": "application/pdf", "content_b64": "",
+            }}),
+            fetch_operation_result=AsyncMock(return_value=pdf_bytes),
+        )
+        ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await export_threat_model(server_version="0", model_id="tm-001", format="pdf")
+            result = await export_threat_model(
+                server_version="0", model_id="tm-001", ctx=ctx, format="pdf",
+            )
         assert result["format"] == "pdf"
-        assert "/api/models/tm-001/export?format=pdf" in result["download_url"]
+        assert result["filename"] == "report.pdf"
+        assert result["content_type"] == "application/pdf"
+        assert _b64.b64decode(result["content_b64"]) == pdf_bytes
+        mock.start_export_model.assert_awaited_once_with("tm-001", "pdf")
 
     @pytest.mark.asyncio
     async def test_invalid_format(self) -> None:
+        ctx = _mock_ctx()
         with pytest.raises(ToolError, match="format must be"):
-            await export_threat_model(server_version="0", model_id="tm-001", format="xml")
+            await export_threat_model(
+                server_version="0", model_id="tm-001", ctx=ctx, format="xml",
+            )
 
 
 # ------------------------------------------------------------------
