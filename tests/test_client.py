@@ -216,13 +216,41 @@ async def test_list_workspaces(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_export_csv(mock_env: None) -> None:
+    """The export endpoint returns ``{job_id}`` and bytes are fetched
+    from ``/api/operations/{job_id}/result`` per the async-job pattern.
+    """
     csv_content = b"AssetID,Name\nA1,OAuth Tokens\n"
     respx.get("https://test.api.mipiti.io/api/models/tm-001/export").mock(
+        return_value=httpx.Response(200, json={"job_id": "job_csv_1"})
+    )
+    respx.get("https://test.api.mipiti.io/api/operations/job_csv_1/result").mock(
         return_value=httpx.Response(200, content=csv_content)
     )
     client = MipitiClient()
-    result = await client.export_model("tm-001", "csv")
+    job_id = await client.start_export_model("tm-001", "csv")
+    assert job_id == "job_csv_1"
+    result = await client.fetch_operation_result(job_id)
     assert result == csv_content
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_export_full(mock_env: None) -> None:
+    """``/api/models/{id}/export/full`` follows the same async-job
+    pattern: returns ``{job_id}``, archive bytes come from /result."""
+    archive_content = b'{"format_version": 1}'
+    respx.get("https://test.api.mipiti.io/api/models/tm-001/export/full").mock(
+        return_value=httpx.Response(200, json={"job_id": "job_full_1"})
+    )
+    respx.get("https://test.api.mipiti.io/api/operations/job_full_1/result").mock(
+        return_value=httpx.Response(200, content=archive_content)
+    )
+    client = MipitiClient()
+    job_id = await client.start_export_model_full("tm-001")
+    assert job_id == "job_full_1"
+    result = await client.fetch_operation_result(job_id)
+    assert result == archive_content
     await client.close()
 
 

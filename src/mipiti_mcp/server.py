@@ -988,33 +988,62 @@ async def get_threat_model(
 
 
 @mcp.tool()
-async def export_threat_model(server_version: str, model_id: str, format: Literal["csv", "pdf", "html"] = "csv") -> dict:
+async def export_threat_model(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    format: Literal["csv", "pdf", "html"] = "csv",
+) -> dict:
     """Export a threat model as CSV, PDF, or HTML.
 
-    CSV returns content inline. PDF and HTML return a download URL.
+    The backend export endpoint runs as an async job (the synchronous
+    render path was retired because cross-model assurance compute could
+    pin the worker for minutes on large models). This tool kicks off the
+    job, polls for completion via ``_await_backend_job`` (reporting
+    progress), then fetches the rendered bytes.
 
     Args:
         model_id: ID of the threat model to export.
         format: Export format — "csv" (default), "pdf", or "html".
+
+    Returns:
+        ``{"format", "filename", "content"}`` for CSV (inline text).
+        ``{"format", "filename", "content_b64", "content_type"}`` for
+        PDF/HTML (binary, base64-encoded).
     """
     if format not in ("csv", "pdf", "html"):
         raise ToolError("format must be 'csv', 'pdf', or 'html'.")
     try:
-        content = await _get_client().export_model(model_id, format)
-        if format == "csv":
-            return {"format": "csv", "content": content.decode("utf-8")}
         client = _get_client()
+        job_id = await client.start_export_model(model_id, format)
+        result = await _await_backend_job(client, job_id, ctx)
+        # The backend job result is the file envelope.
+        filename = (result or {}).get("filename") or f"threat_model.{format}"
+        content_type = (result or {}).get("content_type") or ""
+        content_bytes = await client.fetch_operation_result(job_id)
+        if format == "csv":
+            return {
+                "format": "csv",
+                "filename": filename,
+                "content": content_bytes.decode("utf-8"),
+            }
+        import base64 as _b64
         return {
             "format": format,
-            "download_url": f"{client.api_url}/api/models/{model_id}/export?format={format}",
-            "message": "Include your API key as the X-API-Key header when downloading.",
+            "filename": filename,
+            "content_type": content_type or (
+                "application/pdf" if format == "pdf" else "text/html"
+            ),
+            "content_b64": _b64.b64encode(content_bytes).decode("ascii"),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
 
 
 @mcp.tool()
-async def export_threat_model_archive(server_version: str, model_id: str) -> dict:
+async def export_threat_model_archive(
+    server_version: str, model_id: str, ctx: Context,
+) -> dict:
     """Export the self-contained JSON audit archive for a threat model.
 
     The archive carries every version, controls, assertions (with CI Tier
@@ -1025,15 +1054,25 @@ async def export_threat_model_archive(server_version: str, model_id: str) -> dic
     workspace's published key, and sufficiency signatures against the
     origin instance's key (via the target's trusted_signers table).
 
+    The backend renders the archive as an async job (the same
+    cross-model assurance compute that motivated PDF/HTML to migrate
+    away from synchronous rendering). This tool kicks off the job,
+    polls for completion via ``_await_backend_job`` (reporting progress),
+    then fetches and decodes the JSON envelope.
+
     Args:
         model_id: ID of the threat model to export.
 
     Returns:
-        {"envelope": <full archive dict>} — pass this envelope to
-        `import_threat_model_archive` on any instance to restore.
+        ``{"envelope": <full archive dict>}`` — pass this envelope to
+        ``import_threat_model_archive`` on any instance to restore.
     """
     try:
-        envelope = await _get_client().export_model_full(model_id)
+        client = _get_client()
+        job_id = await client.start_export_model_full(model_id)
+        await _await_backend_job(client, job_id, ctx)
+        content_bytes = await client.fetch_operation_result(job_id)
+        envelope = json.loads(content_bytes.decode("utf-8"))
         return {"envelope": envelope}
     except Exception as exc:
         raise _api_error(exc) from exc

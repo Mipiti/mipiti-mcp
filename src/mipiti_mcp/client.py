@@ -354,16 +354,34 @@ class MipitiClient:
     async def delete_model(self, model_id: str) -> None:
         await self._delete(f"/api/models/{model_id}")
 
-    async def export_model(self, model_id: str, fmt: str = "csv") -> bytes:
-        resp = await self._get_client().get(
-            f"/api/models/{model_id}/export", params={"format": fmt}
+    async def start_export_model(self, model_id: str, fmt: str = "csv") -> str:
+        """Kick off an async export job and return its job_id.
+
+        The backend returns ``{"job_id": ...}`` immediately; callers poll
+        ``get_operation(job_id)`` and fetch bytes via
+        ``fetch_operation_result(job_id)`` once status is "completed".
+        """
+        data = await self._get(
+            f"/api/models/{model_id}/export", params={"format": fmt},
         )
+        return str(data["job_id"])
+
+    async def start_export_model_full(self, model_id: str) -> str:
+        """Kick off an async full-archive export job; return job_id."""
+        data = await self._get(f"/api/models/{model_id}/export/full")
+        return str(data["job_id"])
+
+    async def fetch_operation_result(self, job_id: str) -> bytes:
+        """Fetch the file bytes of a completed background job.
+
+        The server's ``/api/operations/{job_id}/result`` endpoint decodes
+        the base64-encoded payload from ``job.result`` and streams it
+        with the original Content-Type. Callers are expected to have
+        already polled ``get_operation`` until status="completed".
+        """
+        resp = await self._get_client().get(f"/api/operations/{job_id}/result")
         resp.raise_for_status()
         return resp.content
-
-    async def export_model_full(self, model_id: str) -> dict:
-        """Return the self-contained JSON audit archive envelope for a model."""
-        return await self._get(f"/api/models/{model_id}/export/full")
 
     async def import_model_full(self, envelope: dict, workspace_id: str) -> dict:
         """Import an audit archive envelope into the target workspace.
