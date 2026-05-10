@@ -54,6 +54,47 @@ of the change. It automatically discovers similar existing models — either \
 returning matches to refine or proceeding with generation. Use the resulting \
 controls to guide your implementation.
 
+## Constructing `feature_description`
+
+Output quality scales with input quality. A one-line "this is a backend \
+that handles payments" produces a generic, shallow model; a multi-paragraph \
+spec with concrete components, integrations, and trust boundaries produces a \
+useful one. Two scenarios require different gathering strategies:
+
+**Scenario A — planned change (you're about to implement something).** The \
+in-progress design discussion or PR description is usually enough. Pass it \
+verbatim or lightly edited. Don't pad with unrelated repo context.
+
+**Scenario B — existing repo (operator said "threat-model this repo" or \
+similar).** The conversation context alone is almost never enough. Before \
+calling `generate_threat_model`, gather:
+
+1. **Purpose** — open `README.md` (and any `docs/` overview). One or two \
+sentences on what the system does and who uses it.
+2. **Components / processes** — entry points, services, daemons, workers. \
+Look at `Procfile`, `docker-compose.yml`, `fly.toml`, k8s manifests, the \
+`scripts` block in `package.json`, `__main__.py` / top-level `main.py` / \
+`cmd/` directories, the `[project.scripts]` table in `pyproject.toml`. \
+List each component with a short purpose.
+3. **External integrations** — third-party APIs, databases, queues, auth \
+providers, payment processors. Grep env-var references (`os.environ`, \
+`process.env`), SDK imports (`stripe`, `boto3`, `@octokit`, etc.), and \
+infrastructure definitions. Name each one and what it's used for.
+4. **Data flows / assets** — what data enters the system and where it \
+goes. Skim HTTP route files, webhook handlers, message-queue consumers, \
+schema/model files. Note PII, secrets, credentials, regulated data.
+5. **Trust boundaries** — where requests cross from less-trusted to \
+more-trusted (network ingress, auth middleware, service-to-service calls, \
+worker IPC). At minimum: "anonymous internet → authenticated API → \
+internal services → datastore."
+6. **Deployment shape** — SaaS / on-prem / hybrid / library. Single-tenant \
+vs. multi-tenant. Look at `Dockerfile`, `fly.toml`, `helm/`, `terraform/`, \
+or absence thereof.
+
+Pass all of this as a multi-paragraph `feature_description`. The backend \
+will detect similar existing models — if one matches, prefer \
+`refine_threat_model` on it instead of `force=True`.
+
 ## Threat modeling
 
 - `generate_threat_model` — creates a new model with trust boundaries, \
