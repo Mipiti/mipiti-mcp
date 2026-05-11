@@ -2462,11 +2462,14 @@ async def import_compliance_framework(
         - ``version`` (optional): e.g. "1.0"
         - ``description`` (optional): one-paragraph description
         - ``level_definitions`` (optional, level-aware frameworks only):
-          map of {"1": {"name", "description", "source"}, ...}. Ships
-          the per-level legend to the LLM prompt and the framework-
-          target UI. ``source`` is "authoritative" when paraphrased
-          from the published standard, "mipiti_convention" when you
-          defined the tiers yourself.
+          map keyed by **stringified integer level** ("1", "2", …) since
+          JSON objects can't have native integer keys. Non-integer keys
+          like "baseline" are silently dropped on import. Each value is
+          ``{"name", "description", "source"}``. Ships the per-level
+          legend to the LLM prompt and the framework-target UI.
+          ``source`` is "authoritative" when paraphrased from the
+          published standard, "mipiti_convention" when you defined the
+          tiers yourself.
         - ``requirements`` (required, non-empty list): each entry takes
           ``id`` (required), ``description`` (required),
           ``level`` (optional integer, default 1),
@@ -2474,8 +2477,8 @@ async def import_compliance_framework(
           ``section_name`` / ``title`` (optional grouping),
           ``scope`` (optional, "component" default or "system" for
           requirements covered if ANY model satisfies them),
-          ``level_specific_text`` (optional map of {int: str} for
-          per-tier rigour / parameters).
+          ``level_specific_text`` (optional map of per-tier text;
+          same stringified-integer-key rule as ``level_definitions``).
 
     Example minimal body::
 
