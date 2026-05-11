@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 from httpx_sse import aconnect_sse
@@ -1074,6 +1074,55 @@ class MipitiClient:
 
     async def discover_components(self, repo_url: str) -> dict:
         return await self._get("/api/components/discover", params={"repo_url": repo_url})
+
+    # ------------------------------------------------------------------
+    # Per-CO ISO/SAE 21434 Cybersecurity Assurance Level
+    # ------------------------------------------------------------------
+
+    async def set_co_cal(
+        self, model_id: str, co_id: str, cal: Optional[int],
+    ) -> dict:
+        """PATCH the per-CO ISO/SAE 21434 CAL on the identity side-table.
+
+        ``cal=None`` clears the value. No new model version is created.
+        """
+        return await self._patch(
+            f"/api/models/{model_id}/control-objectives/{co_id}",
+            {"cal": cal},
+        )
+
+    # ------------------------------------------------------------------
+    # Organization level grades (IEC 62443-4-1 ML / NIST CSF Tier)
+    # ------------------------------------------------------------------
+
+    async def update_organization(
+        self,
+        org_id: str,
+        *,
+        target_ml: Optional[int] = None,
+        csf_tier: Optional[int] = None,
+        clear_target_ml: bool = False,
+        clear_csf_tier: bool = False,
+    ) -> dict:
+        """PUT per-organization level grades.
+
+        ``target_ml`` is the IEC 62443-4-1 Maturity Level (1-5).
+        ``csf_tier`` is the NIST CSF Tier (1-4).
+
+        ``None`` on the wire is indistinguishable from "field omitted",
+        so callers must pass ``clear_target_ml=True`` /
+        ``clear_csf_tier=True`` to explicitly reset to NULL.
+        """
+        body: dict = {}
+        if target_ml is not None:
+            body["target_ml"] = target_ml
+        if csf_tier is not None:
+            body["csf_tier"] = csf_tier
+        if clear_target_ml:
+            body["clear_target_ml"] = True
+        if clear_csf_tier:
+            body["clear_csf_tier"] = True
+        return await self._put(f"/api/organizations/{org_id}", body)
 
     # ------------------------------------------------------------------
     # System Compliance
