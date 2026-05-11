@@ -2462,9 +2462,13 @@ async def import_compliance_framework(
         - ``version`` (optional): e.g. "1.0"
         - ``description`` (optional): one-paragraph description
         - ``level_definitions`` (optional, level-aware frameworks only):
-          map keyed by **stringified integer level** ("1", "2", …) since
-          JSON objects can't have native integer keys. Non-integer keys
-          like "baseline" are silently dropped on import. Each value is
+          map keyed by **stringified integer level** ("1", "2", …)
+          because the key IS the cumulative-filter ordinal
+          (``level <= target_level``) and the ``level: int`` field on
+          every requirement. Non-integer keys are rejected with
+          HTTP 400. **Human labels are decoupled** — "Baseline" /
+          "Hardened" / "SL3" / "CAL Critical" live in the ``name``
+          field, not the key. Each value is
           ``{"name", "description", "source"}``. Ships the per-level
           legend to the LLM prompt and the framework-target UI.
           ``source`` is "authoritative" when paraphrased from the
