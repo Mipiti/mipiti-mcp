@@ -935,6 +935,20 @@ class MipitiClient:
         data = await self._get("/api/compliance/frameworks")
         return [ComplianceFramework.model_validate(f) for f in data]
 
+    async def import_compliance_framework(self, framework: dict) -> dict:
+        """Import a custom compliance framework (JSON body).
+
+        The backend accepts ``application/json`` directly — no multipart
+        needed for agent-driven imports. The dict must follow the schema:
+        ``{"name": str, "version": str?, "description": str?,
+        "level_definitions": {int: {name, description, source}}?,
+        "requirements": [{"id", "description", "level"?,
+        "level_specific_text"?, "chapter_id"?, ...}]}``.
+        """
+        return await self._post(
+            "/api/compliance/frameworks/import", framework,
+        )
+
     async def select_compliance_frameworks(
         self, model_id: str, framework_ids: list[str],
     ) -> SelectFrameworksResult:

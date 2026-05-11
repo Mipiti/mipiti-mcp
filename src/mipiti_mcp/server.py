@@ -387,16 +387,20 @@ _INSTRUCTIONS_COMPLIANCE = """\
 ## Compliance
 
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
-2. `select_compliance_frameworks` — activate frameworks for a model. \
+2. `import_compliance_framework` — import a customer-specific framework \
+(regulatory, contractual, or internal program not covered by the 11 \
+built-ins). Accepts a JSON body with `name`, `requirements`, and the \
+optional `level_definitions` per-level legend.
+3. `select_compliance_frameworks` — activate frameworks for a model. \
 **Automatically triggers auto-remediation**: maps existing controls, \
 excludes non-applicable requirements by taxonomy, and suggests/applies \
 new entities for remaining gaps. Returns `auto_remediate_jobs` with \
 job IDs for polling.
-3. `get_compliance_report` — coverage report (run after auto-remediation completes).
-4. `auto_remediate` — re-trigger auto-remediation manually (e.g. after model changes).
-5. `auto_map_controls` — map controls to framework requirements (runs automatically \
+4. `get_compliance_report` — coverage report (run after auto-remediation completes).
+5. `auto_remediate` — re-trigger auto-remediation manually (e.g. after model changes).
+6. `auto_map_controls` — map controls to framework requirements (runs automatically \
 during auto-remediation, but can be triggered independently).
-6. `map_control_to_requirement` — manually map a specific control to a \
+7. `map_control_to_requirement` — manually map a specific control to a \
 specific requirement (use when auto-mapping misses or misassigns).
 
 ## Systems and workspaces
@@ -2437,6 +2441,88 @@ async def list_compliance_frameworks(server_version: str) -> dict:
     """
     try:
         return _dump(await _get_client().list_compliance_frameworks())
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def import_compliance_framework(
+    server_version: str,
+    framework_json: str,
+) -> dict:
+    """Import a custom compliance framework. Requires PRO tier.
+
+    Use this when your customer's program (regulatory, contractual, or
+    internal) is not covered by Mipiti's 11 built-in frameworks. After
+    import, the framework is selectable on threat models exactly like
+    a built-in.
+
+    Schema (top-level fields):
+        - ``name`` (required): framework display name
+        - ``version`` (optional): e.g. "1.0"
+        - ``description`` (optional): one-paragraph description
+        - ``level_definitions`` (optional, level-aware frameworks only):
+          map of {"1": {"name", "description", "source"}, ...}. Ships
+          the per-level legend to the LLM prompt and the framework-
+          target UI. ``source`` is "authoritative" when paraphrased
+          from the published standard, "mipiti_convention" when you
+          defined the tiers yourself.
+        - ``requirements`` (required, non-empty list): each entry takes
+          ``id`` (required), ``description`` (required),
+          ``level`` (optional integer, default 1),
+          ``chapter_id`` / ``chapter_name`` / ``section_id`` /
+          ``section_name`` / ``title`` (optional grouping),
+          ``scope`` (optional, "component" default or "system" for
+          requirements covered if ANY model satisfies them),
+          ``level_specific_text`` (optional map of {int: str} for
+          per-tier rigour / parameters).
+
+    Example minimal body::
+
+        {
+          "name": "ACME Internal Baseline",
+          "version": "2026.1",
+          "requirements": [
+            {"id": "ACME-1", "description": "All endpoints authenticate", "level": 1},
+            {"id": "ACME-2", "description": "TLS 1.3 in transit", "level": 1}
+          ]
+        }
+
+    Example with per-level legend + per-requirement parameters::
+
+        {
+          "name": "ACME Tiered",
+          "level_definitions": {
+            "1": {"name": "Baseline", "description": "Minimum.",
+                  "source": "authoritative"},
+            "2": {"name": "Hardened", "description": "Sensitive data.",
+                  "source": "mipiti_convention"}
+          },
+          "requirements": [
+            {"id": "ACME-PWD",
+             "description": "Passwords meet policy",
+             "level": 1,
+             "level_specific_text": {
+               "1": "Min 8 characters.",
+               "2": "Min 14 + MFA required."
+             }}
+          ]
+        }
+
+    Args:
+        framework_json: A JSON string containing the framework body.
+            (String not dict so the JSON shape stays explicit on the wire.)
+    """
+    import json as _json
+
+    try:
+        parsed = _json.loads(framework_json)
+    except _json.JSONDecodeError as exc:
+        raise ValueError(f"framework_json is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("framework_json must decode to a JSON object.")
+    try:
+        return _dump(await _get_client().import_compliance_framework(parsed))
     except Exception as exc:
         raise _api_error(exc) from exc
 
