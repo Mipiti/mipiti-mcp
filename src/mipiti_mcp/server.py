@@ -403,6 +403,20 @@ during auto-remediation, but can be triggered independently).
 7. `map_control_to_requirement` — manually map a specific control to a \
 specific requirement (use when auto-mapping misses or misassigns).
 
+### Per-entity grades
+
+Some frameworks (IEC 62443, ISO/SAE 21434, NIST CSF, FIPS 140-3, \
+Common Criteria) carry per-entity level grades alongside the \
+control-to-requirement mapping:
+
+- `edit_component` with `target_sl` / `eal` / `fips_level` — set per-\
+component IEC 62443 SL (1-4), CC EAL (1-7), FIPS 140-3 (1-4). \
+Orthogonal axes; set whichever the customer program requires.
+- `set_co_cal` — set per-CO ISO/SAE 21434 Cybersecurity Assurance \
+Level (1-4). Lives on the CO identity table; survives soft-delete.
+- `update_organization` — set per-org IEC 62443-4-1 Maturity Level \
+(1-5) and NIST CSF Tier (1-4). Admin-only.
+
 ## Systems and workspaces
 
 - `list_workspaces` — list workspaces the current user can access. Use to \
@@ -1650,6 +1664,39 @@ async def get_control_objective(
 
 
 @mcp.tool()
+async def set_co_cal(
+    server_version: str,
+    model_id: str,
+    co_id: str,
+    cal: Optional[int] = None,
+) -> dict:
+    """Set the per-CO ISO/SAE 21434 Cybersecurity Assurance Level (CAL).
+
+    CAL is a 1-4 grade on each individual control objective that
+    expresses how much assurance the control program owes for that
+    specific objective. It lives on the ``control_objectives`` identity
+    side-table — writes do NOT create a new threat-model version, and
+    the value survives soft-delete + revival of the CO.
+
+    Pass ``cal=None`` (or omit it) to clear the value.
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: Control-objective ID (e.g. ``CO3``).
+        cal: ISO/SAE 21434 CAL grade (1-4), or ``None`` to clear.
+
+    Returns:
+        ``{"model_id": ..., "co_id": ..., "cal": ...}``
+    """
+    if cal is not None and (cal < 1 or cal > 4):
+        raise ToolError("cal must be between 1 and 4 (inclusive), or None to clear")
+    try:
+        return _dump(await _get_client().set_co_cal(model_id, co_id, cal))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_asset(
     server_version: str,
     model_id: str,
@@ -2706,6 +2753,59 @@ async def list_workspaces(server_version: str) -> dict:
 
 
 @mcp.tool()
+async def update_organization(
+    server_version: str,
+    org_id: str,
+    target_ml: Optional[int] = None,
+    csf_tier: Optional[int] = None,
+    clear_target_ml: bool = False,
+    clear_csf_tier: bool = False,
+) -> dict:
+    """Set per-organization level grades for IEC 62443-4-1 and NIST CSF.
+
+    Admin-only: the backend requires the caller to be an admin in the
+    organization (or a superadmin). Non-admins will get a 403; do not
+    invoke this tool unless you've verified admin role for the target
+    org.
+
+    ``target_ml`` is the IEC 62443-4-1 Maturity Level the organization
+    targets for its secure-development program (1-5). ``csf_tier`` is
+    the NIST CSF Tier the organization targets for its cybersecurity
+    risk-management posture (1-4).
+
+    Because ``None`` on the wire is indistinguishable from "field
+    omitted", pass ``clear_target_ml=True`` or ``clear_csf_tier=True``
+    to explicitly reset a value to NULL. Omitting both the value and
+    its ``clear_*`` flag leaves the existing server-side value
+    untouched.
+
+    Args:
+        org_id: Organization ID.
+        target_ml: IEC 62443-4-1 Maturity Level (1-5), or ``None`` to leave unchanged.
+        csf_tier: NIST CSF Tier (1-4), or ``None`` to leave unchanged.
+        clear_target_ml: Explicitly reset ``target_ml`` to NULL.
+        clear_csf_tier: Explicitly reset ``csf_tier`` to NULL.
+
+    Returns:
+        The full organization dict.
+    """
+    if target_ml is not None and (target_ml < 1 or target_ml > 5):
+        raise ToolError("target_ml must be between 1 and 5 (inclusive)")
+    if csf_tier is not None and (csf_tier < 1 or csf_tier > 4):
+        raise ToolError("csf_tier must be between 1 and 4 (inclusive)")
+    try:
+        return _dump(await _get_client().update_organization(
+            org_id,
+            target_ml=target_ml,
+            csf_tier=csf_tier,
+            clear_target_ml=clear_target_ml,
+            clear_csf_tier=clear_csf_tier,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def list_systems(server_version: str) -> dict:
     """List all saved systems in current workspace."""
     try:
@@ -2816,8 +2916,16 @@ async def edit_component(
     repo_url: str = "",
     path: str = "",
     trust_boundary_ids: str = "",
+    target_sl: Optional[int] = None,
+    eal: Optional[int] = None,
+    fips_level: Optional[int] = None,
 ) -> dict:
     """Edit a component's properties.
+
+    Per-component level grades are orthogonal axes — set whichever
+    apply to the program the component is in scope for. Leave a field
+    unset (``None``) to keep the current server-side value; backend
+    treats absent fields as "unchanged".
 
     Args:
         model_id: ID of the threat model.
@@ -2826,6 +2934,12 @@ async def edit_component(
         repo_url: New repo URL (empty = unchanged).
         path: New path (empty = unchanged).
         trust_boundary_ids: New trust boundary IDs (comma-separated, empty = unchanged).
+        target_sl: IEC 62443 target Security Level (1-4). For
+            industrial / OT components that need a 62443 zone target.
+        eal: Common Criteria Evaluation Assurance Level (1-7).
+            For components subject to CC certification.
+        fips_level: FIPS 140-3 Security Level (1-4) for the
+            cryptographic module embedded in this component.
     """
     fields: dict = {}
     if name:
@@ -2836,6 +2950,12 @@ async def edit_component(
         fields["path"] = path
     if trust_boundary_ids:
         fields["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
+    if target_sl is not None:
+        fields["target_sl"] = target_sl
+    if eal is not None:
+        fields["eal"] = eal
+    if fips_level is not None:
+        fields["fips_level"] = fips_level
     try:
         return _dump(await _get_client().edit_component(model_id, component_id, **fields))
     except Exception as exc:

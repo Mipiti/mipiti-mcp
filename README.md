@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->88<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->90<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -130,6 +130,7 @@ uvx mipiti-mcp
 | `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
 | `check_control_gaps` | AI-powered gap analysis across all controls. |
 | `get_mitigation_groups` / `set_mitigation_groups` | Inspect and modify how controls are grouped into mitigation paths for a CO (AND within groups, OR across groups). Platform AI-evaluates whether proposed changes preserve CO coverage. |
+| `set_co_cal` | Set per-CO ISO/SAE 21434 Cybersecurity Assurance Level (1-4). Persisted on the control_objectives identity side-table; survives soft-delete + revival; no new model version. |
 
 ### Assumptions and Attestation
 
@@ -182,13 +183,14 @@ uvx mipiti-mcp
 
 | Tool | Description |
 |------|-------------|
-| `add_component` / `edit_component` / `remove_component` | Components bridge trust boundaries (security architecture) to repositories (code organization). `Component(id, name, repo_url, path, trust_boundary_ids)` scopes controls to the codebase that implements them. Used for multi-repo systems and per-repo threat models. |
+| `add_component` / `edit_component` / `remove_component` | Components bridge trust boundaries (security architecture) to repositories (code organization). `Component(id, name, repo_url, path, trust_boundary_ids)` scopes controls to the codebase that implements them. Used for multi-repo systems and per-repo threat models. `edit_component` also accepts optional per-component level grades: `target_sl` (IEC 62443 Security Level, 1-4), `eal` (Common Criteria Evaluation Assurance Level, 1-7), `fips_level` (FIPS 140-3 Security Level, 1-4). |
 
 ### Systems and Workspaces
 
 | Tool | Description |
 |------|-------------|
 | `list_workspaces` | List available workspaces. |
+| `update_organization` | Set per-organization level grades: `target_ml` (IEC 62443-4-1 Maturity Level, 1-5), `csf_tier` (NIST CSF Tier, 1-4). Admin-only. Use `clear_target_ml` / `clear_csf_tier` to explicitly reset to NULL. |
 | `list_systems` / `get_system` / `create_system` | Manage systems (groups of related models). |
 | `add_model_to_system` | Add a model to a system. |
 | `get_system_dependencies` | Cross-model dependency graph with satisfaction status for assumptions linked to other models. |
