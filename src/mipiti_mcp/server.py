@@ -110,6 +110,19 @@ update status after verifying.
 - `add_attacker` / `edit_attacker` / `remove_attacker` — same for attackers. \
 Attacker `status` works the same way: `confirmed` means the attack \
 surface exists, `absent` means it is not applicable.
+- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor \
+decomposition (subscores + blast/recoverability/regulatory on assets; \
+CVSS-Base + capability_prevalence on attackers) for every live entity in \
+a model. Use this to re-baseline an existing model after the feature \
+description changes meaningfully, or to refresh stale ratings — without \
+regenerating the whole model (which would destroy controls, assertions, \
+components). The platform's factor judgment is a calibrated *starting \
+point*; layer deployment-specific reality on top via `edit_asset` / \
+`edit_attacker` with a `change_reason` documenting the override (e.g., \
+"regulatory_scope=Legal — tenant is HIPAA-covered", \
+"capability_prevalence=Commodity — endpoint is public-internet \
+exposed"). The rating-revision audit trail distinguishes platform \
+suggestions from operator overrides.
 - `get_threat_model` — retrieve a model's full structure (excludes COs by \
 default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
