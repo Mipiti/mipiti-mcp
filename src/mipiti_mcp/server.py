@@ -2516,9 +2516,12 @@ async def reevaluate_threat_model_factors(
     exposed), use ``edit_asset`` / ``edit_attacker`` afterward with a
     ``change_reason`` documenting the operator override.
 
-    Fail-close: if the LLM is unavailable for any entity, the entire
-    call fails (503) and nothing is persisted — retry when the
-    evaluator is reachable.
+    Per-entity soft-fail: an LLM failure on one entity is recorded in
+    the response's ``failed_entities`` list (with ``id``, ``kind``, and
+    ``reason``); the remaining entities are still re-evaluated and
+    their rating revisions persisted as they complete. The endpoint
+    returns 503 only when *every* live entity failed — in which case
+    nothing was persisted; retry when the evaluator is reachable.
 
     Soft-deleted assets and attackers are skipped.
 
@@ -2533,10 +2536,13 @@ async def reevaluate_threat_model_factors(
     Returns:
         Dict with:
         - model_id
-        - assets_reevaluated: count of assets re-rated
+        - assets_reevaluated: count of assets re-rated successfully
         - attackers_reevaluated: count of attackers re-rated
+          successfully
         - deltas.assets / deltas.attackers: per-entity before/after
-          factor values and composed rating
+          factor values and composed rating (only successful entities)
+        - failed_entities: list of ``{"id", "kind", "reason"}`` entries
+          for per-entity LLM failures; ``[]`` on the happy path
     """
     try:
         return _dump(await _get_client().reevaluate_factors(
