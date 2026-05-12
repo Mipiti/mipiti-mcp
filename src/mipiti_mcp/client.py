@@ -906,15 +906,21 @@ class MipitiClient:
         """POST /api/models/{model_id}/factors/reevaluate.
 
         Bulk re-runs the LLM factor judgment on every live asset and
-        attacker in the model. Sequential, fail-close: any LLM error
-        raises 503 from the server and nothing is persisted. The body
-        is optional; when ``change_reason`` is omitted the backend
+        attacker in the model. Sequential, per-entity soft-fail: an
+        LLM error on a single entity is surfaced via the response's
+        ``failed_entities`` list and does not abort the loop;
+        successful entities' rating revisions are persisted as they
+        complete. The server raises 503 only when *every* live entity
+        failed (in which case nothing was persisted). The body is
+        optional; when ``change_reason`` is omitted the backend
         defaults to ``"LLM factor re-evaluation"`` for the audit trail.
         Soft-deleted entities are skipped.
 
         Returns the response envelope verbatim:
         ``{"model_id", "assets_reevaluated", "attackers_reevaluated",
-        "deltas": {"assets": [...], "attackers": [...]}}``.
+        "deltas": {"assets": [...], "attackers": [...]},
+        "failed_entities": [{"id", "kind", "reason"}, ...]}``.
+        ``failed_entities`` is ``[]`` on the happy path.
         """
         body: dict[str, Any] = {}
         if change_reason is not None:
