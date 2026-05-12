@@ -900,6 +900,29 @@ class MipitiClient:
         with the attacker now marked ``deleted=True`` in the model."""
         return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
 
+    async def reevaluate_factors(
+        self, model_id: str, change_reason: Optional[str] = None,
+    ) -> dict:
+        """POST /api/models/{model_id}/factors/reevaluate.
+
+        Bulk re-runs the LLM factor judgment on every live asset and
+        attacker in the model. Sequential, fail-close: any LLM error
+        raises 503 from the server and nothing is persisted. The body
+        is optional; when ``change_reason`` is omitted the backend
+        defaults to ``"LLM factor re-evaluation"`` for the audit trail.
+        Soft-deleted entities are skipped.
+
+        Returns the response envelope verbatim:
+        ``{"model_id", "assets_reevaluated", "attackers_reevaluated",
+        "deltas": {"assets": [...], "attackers": [...]}}``.
+        """
+        body: dict[str, Any] = {}
+        if change_reason is not None:
+            body["change_reason"] = change_reason
+        return await self._post(
+            f"/api/models/{model_id}/factors/reevaluate", body,
+        )
+
     # ------------------------------------------------------------------
     # Assurance
     # ------------------------------------------------------------------

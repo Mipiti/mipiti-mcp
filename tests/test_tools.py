@@ -67,6 +67,7 @@ from mipiti_mcp.server import (
     submit_findings,
     refine_control,
     remap_control,
+    reevaluate_threat_model_factors,
     restore_asset,
     restore_attacker,
     update_control_status,
@@ -134,6 +135,63 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                           "controls_carried": 0, "controls_orphaned": 0},
         "remove_attacker": {"model": {"id": "tm-001", "attackers": []},
                             "controls_carried": 0, "controls_orphaned": 0},
+        "reevaluate_factors": {
+            "model_id": "tm-001",
+            "assets_reevaluated": 2,
+            "attackers_reevaluated": 1,
+            "deltas": {
+                "assets": [
+                    {
+                        "id": "A1",
+                        "before": {
+                            "confidentiality_subscore": "Medium",
+                            "integrity_subscore": "Medium",
+                            "availability_subscore": "Low",
+                            "usage_subscore": "Low",
+                            "blast_radius": "Single",
+                            "recoverability": "Hours",
+                            "regulatory_scope": "None",
+                            "impact": "Medium",
+                            "impact_rationale": "old",
+                        },
+                        "after": {
+                            "confidentiality_subscore": "High",
+                            "integrity_subscore": "Medium",
+                            "availability_subscore": "Low",
+                            "usage_subscore": "Low",
+                            "blast_radius": "Single",
+                            "recoverability": "Hours",
+                            "regulatory_scope": "None",
+                            "impact": "High",
+                            "impact_rationale": "new",
+                        },
+                    },
+                ],
+                "attackers": [
+                    {
+                        "id": "T1",
+                        "before": {
+                            "attack_vector": "Network",
+                            "privileges_required": "None",
+                            "attack_complexity": "Low",
+                            "user_interaction": "None",
+                            "capability_prevalence": "Commodity",
+                            "likelihood": "High",
+                            "likelihood_rationale": "old",
+                        },
+                        "after": {
+                            "attack_vector": "Network",
+                            "privileges_required": "None",
+                            "attack_complexity": "High",
+                            "user_interaction": "None",
+                            "capability_prevalence": "Niche",
+                            "likelihood": "Medium",
+                            "likelihood_rationale": "new",
+                        },
+                    },
+                ],
+            },
+        },
         "assess_model": {"mitigated": 1, "at_risk": 0},
         "get_review_queue": {"items": []},
         "list_compliance_frameworks": {"frameworks": [{"id": "owasp-asvs"}]},
@@ -828,6 +886,68 @@ class TestRestoreAssetAttacker:
             )
         assert result["deleted"] is False
         mock.restore_attacker.assert_awaited_once_with("tm-001", "T1")
+
+
+class TestReevaluateThreatModelFactors:
+    """The bulk factor re-eval tool wraps a single backend POST. It
+    must (a) appear in the server's registered tool list, (b) pass
+    the model_id and optional change_reason through verbatim, and
+    (c) translate client errors via the `_api_error` convention."""
+
+    @pytest.mark.asyncio
+    async def test_tool_is_registered(self) -> None:
+        tool = await server.mcp.get_tool("reevaluate_threat_model_factors")
+        assert tool is not None
+        assert tool.name == "reevaluate_threat_model_factors"
+
+    @pytest.mark.asyncio
+    async def test_success_returns_envelope(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await reevaluate_threat_model_factors(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["model_id"] == "tm-001"
+        assert result["assets_reevaluated"] == 2
+        assert result["attackers_reevaluated"] == 1
+        assert result["deltas"]["assets"][0]["id"] == "A1"
+        assert result["deltas"]["attackers"][0]["id"] == "T1"
+        # No change_reason passed → client method called with None.
+        mock.reevaluate_factors.assert_awaited_once_with(
+            "tm-001", change_reason=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_change_reason_threaded_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await reevaluate_threat_model_factors(
+                server_version="0", model_id="tm-001",
+                change_reason="Re-eval after refinement bug fix v0.39.0",
+            )
+        mock.reevaluate_factors.assert_awaited_once_with(
+            "tm-001",
+            change_reason="Re-eval after refinement bug fix v0.39.0",
+        )
+
+    @pytest.mark.asyncio
+    async def test_client_error_wrapped_as_tool_error(self) -> None:
+        import httpx
+        request = httpx.Request("POST", "https://api/factors/reevaluate")
+        response = httpx.Response(
+            503, request=request,
+            json={"detail": "LLM evaluator unreachable"},
+        )
+        mock = _mock_client(reevaluate_factors=AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "503 Service Unavailable", request=request, response=response,
+            ),
+        ))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="LLM evaluator unreachable"):
+                await reevaluate_threat_model_factors(
+                    server_version="0", model_id="tm-001",
+                )
 
 
 class TestAddEvidence:

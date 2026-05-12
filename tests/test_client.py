@@ -202,6 +202,61 @@ async def test_submit_assertions(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_reevaluate_factors_no_change_reason(mock_env: None) -> None:
+    """Default call posts an empty body — the backend falls back to
+    its own default change_reason for the audit trail."""
+    captured: dict[str, dict] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(200, json={
+            "model_id": "tm-001",
+            "assets_reevaluated": 0,
+            "attackers_reevaluated": 0,
+            "deltas": {"assets": [], "attackers": []},
+        })
+
+    respx.post(
+        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate",
+    ).mock(side_effect=_capture)
+
+    client = MipitiClient()
+    result = await client.reevaluate_factors("tm-001")
+    assert result["model_id"] == "tm-001"
+    assert captured["body"] == {}
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_reevaluate_factors_with_change_reason(mock_env: None) -> None:
+    """When change_reason is supplied, it is threaded through to the
+    body so the backend records it on every rating revision."""
+    captured: dict[str, dict] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(200, json={
+            "model_id": "tm-001",
+            "assets_reevaluated": 1,
+            "attackers_reevaluated": 1,
+            "deltas": {"assets": [], "attackers": []},
+        })
+
+    respx.post(
+        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate",
+    ).mock(side_effect=_capture)
+
+    client = MipitiClient()
+    await client.reevaluate_factors(
+        "tm-001", change_reason="Re-eval after bug fix",
+    )
+    assert captured["body"] == {"change_reason": "Re-eval after bug fix"}
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_list_workspaces(mock_env: None) -> None:
     respx.get("https://test.api.mipiti.io/api/workspaces").mock(
         return_value=httpx.Response(200, json={"workspaces": [{"id": "ws-1"}]})

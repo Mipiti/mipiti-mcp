@@ -2477,6 +2477,62 @@ async def restore_attacker(server_version: str, model_id: str, attacker_id: str)
         raise _api_error(exc) from exc
 
 
+@mcp.tool()
+async def reevaluate_threat_model_factors(
+    server_version: str,
+    model_id: str,
+    change_reason: Optional[str] = None,
+) -> dict:
+    """Re-run the LLM factor judgment on every asset and attacker in
+    a threat model. Useful for re-baselining factors after a bug fix
+    or feature-description change, without regenerating the whole
+    model (which would destroy controls, assertions, components).
+
+    Each entity's factors and rationale are replaced with a fresh
+    LLM-judged decomposition; the composed impact / likelihood is
+    re-derived deterministically from the new factors. Each re-rating
+    is recorded as a rating revision in the audit trail with
+    ``change_reason`` (default: "LLM factor re-evaluation") so the
+    starting-point regeneration is distinguishable from operator-
+    supplied factor overrides via ``edit_asset`` / ``edit_attacker``.
+
+    The platform's LLM factor judgment is a *starting point*. For
+    deployment-specific factor adjustments (e.g., elevated
+    regulatory_scope because your tenant is HIPAA-covered, or
+    Commodity prevalence because your endpoint is public-internet
+    exposed), use ``edit_asset`` / ``edit_attacker`` afterward with a
+    ``change_reason`` documenting the operator override.
+
+    Fail-close: if the LLM is unavailable for any entity, the entire
+    call fails (503) and nothing is persisted — retry when the
+    evaluator is reachable.
+
+    Soft-deleted assets and attackers are skipped.
+
+    Args:
+        model_id: ID of the threat model to re-rate.
+        change_reason: Optional override of the audit-trail reason
+            (default: "LLM factor re-evaluation"). Use this to thread
+            a higher-level reason like "Re-eval after refinement bug
+            fix shipped in vN.N.N" when running the tool as part of a
+            broader workflow.
+
+    Returns:
+        Dict with:
+        - model_id
+        - assets_reevaluated: count of assets re-rated
+        - attackers_reevaluated: count of attackers re-rated
+        - deltas.assets / deltas.attackers: per-entity before/after
+          factor values and composed rating
+    """
+    try:
+        return _dump(await _get_client().reevaluate_factors(
+            model_id, change_reason=change_reason,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 # === Compliance ===
 
 
