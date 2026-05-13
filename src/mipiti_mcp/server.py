@@ -314,6 +314,17 @@ against specific not_implemented controls.
 - `check_control_gaps` — AI-powered gap analysis across all controls.
 - `submit_findings` — report confirmed gaps where controls are missing.
 - `list_findings` / `update_finding` — track finding lifecycle.
+- `get_findings_risks` — workspace-wide dashboard: open findings, active \
+risk acceptances, and at-risk Control Objectives in one call. Use as the \
+triage entry point when the operator asks "what's open?" / "what should \
+I work on next?".
+- `get_model_risk_view` / `get_system_risk_view` — Prioritized Risk View \
+rows for a specific model or system with risk dimensions, control \
+coverage counts, and open-finding counts per CO. Use when narrowing \
+from workspace-wide to a specific target.
+- `list_risk_acceptances` — see which risks have been explicitly accepted \
+on a model (with owner, justification, review deadline) so you can \
+separate intentional acceptances from genuinely unaddressed gaps.
 
 ## Project setup
 
@@ -3429,6 +3440,95 @@ async def update_finding(
         return _dump(await _get_client().update_finding(
             model_id, finding_id, status, notes, reason, remediation_assertion_ids,
         ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Findings / Risk aggregates ===
+
+
+@mcp.tool()
+async def get_findings_risks(server_version: str) -> dict:
+    """Workspace-scoped triage dashboard: open findings, active risk
+    acceptances, and at-risk Control Objectives across every model
+    the workspace can access.
+
+    Use this as the entry point when an operator asks "what's open?"
+    or "what should I work on next?" — one round-trip returns all
+    three categories with model context and risk dimensions
+    (severity, status, risk_tier, owner, review_by) so the agent can
+    triage without per-model fan-out. The endpoint is read-only and
+    fast; it composes from existing per-model queries server-side.
+
+    Returns the envelope verbatim: ``{workspace_id, evaluated_at,
+    models, findings, risk_acceptances, at_risk_cos, summary}``.
+    ``summary`` carries totals (``open_findings``, ``total_findings``,
+    ``active_risk_acceptances``, ``total_risk_acceptances``,
+    ``at_risk_cos``) for quick health-check responses.
+    """
+    try:
+        return _dump(await _get_client().get_findings_risks())
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_model_risk_view(server_version: str, model_id: str) -> dict:
+    """Per-model Prioritized Risk View: one row per live Control
+    Objective with derived risk tier, asset impact, attacker
+    likelihood, control coverage counts, and open-finding count.
+
+    Use to triage which COs need attention on a specific model. The
+    rows already carry coverage_ratio and open_findings, so a single
+    call is sufficient to rank work — no per-CO fan-out needed.
+    Tombstoned COs are excluded; pair with ``get_threat_model`` if
+    historical context is needed.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_model_risk_view(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_system_risk_view(server_version: str, system_id: str) -> dict:
+    """System-level cross-model Prioritized Risk View: one row per
+    live Control Objective across every model in a System (a System
+    is a group of related threat models), with model context attached
+    to each row.
+
+    Use for posture queries spanning multiple models in the same
+    product or service. Same row shape as ``get_model_risk_view``
+    with ``model_id`` and ``model_title`` added per row so the agent
+    can group / filter by source model without an extra lookup.
+
+    Args:
+        system_id: ID of the system.
+    """
+    try:
+        return _dump(await _get_client().get_system_risk_view(system_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_risk_acceptances(server_version: str, model_id: str) -> dict:
+    """List all risk acceptances on a specific threat model — risks
+    that an operator explicitly accepted instead of mitigating.
+
+    Each entry carries the CO id, owner, justification, status
+    (``active`` / ``expired`` / ``revoked``), and the review
+    deadline. Use to inspect which gaps were intentionally accepted
+    versus genuinely unaddressed when triaging at-risk COs.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().list_risk_acceptances(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 

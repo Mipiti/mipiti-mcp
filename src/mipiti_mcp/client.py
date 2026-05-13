@@ -35,8 +35,10 @@ from .types import (
     DeleteControlResult,
     EvidenceActionResult,
     Finding,
+    FindingsRisksReport,
     GenerateResult,
     ImportConfirmResult,
+    ModelRiskView,
     ModelSummary,
     OkResult,
     RemediationApplyResult,
@@ -46,6 +48,7 @@ from .types import (
     SelectFrameworksResult,
     SubmitAssertionsResult,
     System,
+    SystemRiskView,
     SystemSelectFrameworksResult,
     ThreatModel,
     VerificationReport,
@@ -1300,6 +1303,50 @@ class MipitiClient:
             body["remediation_assertion_ids"] = remediation_assertion_ids
         data = await self._patch(f"/api/models/{model_id}/findings/{finding_id}", body)
         return Finding.model_validate(data)
+
+    # ------------------------------------------------------------------
+    # Findings / Risk aggregates
+    # ------------------------------------------------------------------
+
+    async def get_findings_risks(self) -> FindingsRisksReport:
+        """Workspace-scoped triage dashboard combining open findings,
+        active risk acceptances, and at-risk Control Objectives across
+        every model in the caller's workspace.
+
+        One round-trip returns all three categories with per-model
+        context and risk dimensions. The endpoint is workspace-scoped
+        — no filters are supplied; the server selects every model the
+        caller can access.
+        """
+        data = await self._get("/api/findings-risks")
+        return FindingsRisksReport.model_validate(data)
+
+    async def get_model_risk_view(self, model_id: str) -> ModelRiskView:
+        """Per-model Prioritized Risk View: one row per live Control
+        Objective with derived risk tier, asset impact, attacker
+        likelihood, control coverage counts, and open-finding count.
+        """
+        data = await self._get(f"/api/models/{model_id}/risk-view")
+        return ModelRiskView.model_validate(data)
+
+    async def get_system_risk_view(self, system_id: str) -> SystemRiskView:
+        """System-level cross-model Prioritized Risk View: one row per
+        live Control Objective across every model in the system, with
+        model context attached to each row.
+        """
+        data = await self._get(f"/api/systems/{system_id}/risk-view")
+        return SystemRiskView.model_validate(data)
+
+    async def list_risk_acceptances(self, model_id: str) -> list[dict[str, Any]]:
+        """List all risk acceptances on a specific threat model.
+
+        Returns a bare list of risk-acceptance dicts (id, model_id,
+        control_objective_id, owner, justification, status,
+        accepted_at, review_by). Server-side shape; passed through
+        unchanged so newly added fields surface automatically.
+        """
+        data = await self._get(f"/api/models/{model_id}/risk-acceptances")
+        return list(data) if isinstance(data, list) else data
 
     # ------------------------------------------------------------------
     # Workspaces & Systems

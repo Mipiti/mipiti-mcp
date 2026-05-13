@@ -11,9 +11,12 @@ from mipiti_mcp.types import (
     ChatResponse,
     Control,
     ControlsResponse,
+    FindingsRisksReport,
     GenerateResult,
+    ModelRiskView,
     ModelSummary,
     RenameResult,
+    SystemRiskView,
     ThreatModel,
 )
 from mipiti_mcp.server import (
@@ -40,16 +43,20 @@ from mipiti_mcp.server import (
     get_compliance_report,
     get_control_objectives,
     get_controls,
+    get_findings_risks,
+    get_model_risk_view,
     get_review_queue,
     get_scan_prompt,
     get_system,
     get_system_compliance_report,
+    get_system_risk_view,
     get_threat_model,
     get_verification_report,
     import_controls,
     list_assertions,
     list_compliance_frameworks,
     list_findings,
+    list_risk_acceptances,
     list_systems,
     list_threat_models,
     list_workspaces,
@@ -210,6 +217,96 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "submit_findings": {"count": 1},
         "list_findings": {"findings": []},
         "update_finding": {"id": "f1", "status": "acknowledged"},
+        # Findings / risk aggregate defaults — clients return Pydantic
+        # response models; the tool wrapper passes through unchanged via
+        # _dump. The defaults below mirror the production response shape.
+        "get_findings_risks": FindingsRisksReport(
+            workspace_id="ws-1",
+            evaluated_at="2026-05-13T00:00:00Z",
+            models=[{"id": "tm-001", "title": "Login Service"}],
+            findings=[{
+                "id": "F-1", "model_id": "tm-001", "model_title": "Login Service",
+                "control_id": "CTRL-01", "severity": "high",
+                "status": "discovered", "title": "Missing rate limit",
+                "created_at": "2026-05-01T00:00:00Z", "risk_tier": "high",
+            }],
+            risk_acceptances=[{
+                "id": "RA-1", "model_id": "tm-001", "model_title": "Login Service",
+                "control_objective_id": "CO1", "owner": "Platform Team",
+                "justification": "Mitigated by upstream WAF.",
+                "status": "active",
+                "accepted_at": "2026-03-01T00:00:00Z",
+                "review_by": "2026-09-01T00:00:00Z", "risk_tier": "medium",
+            }],
+            at_risk_cos=[{
+                "model_id": "tm-002", "model_title": "Payments Service",
+                "co_id": "CO9", "statement": "Protect data at rest",
+                "asset_name": "Card Token Store",
+                "attacker_capability": "Insider with DB access",
+                "impact": "H", "likelihood": "M", "risk_tier": "high",
+                "total_controls": 4, "implemented_controls": 2,
+                "verified_controls": 1,
+                "missing_controls": ["CTRL-09", "CTRL-10"],
+                "risk_reason": "missing_controls",
+            }],
+            summary={
+                "open_findings": 1, "total_findings": 1,
+                "active_risk_acceptances": 1, "total_risk_acceptances": 1,
+                "at_risk_cos": 1,
+            },
+        ),
+        "get_model_risk_view": ModelRiskView(
+            model_id="tm-001", model_title="Login Service", total=1,
+            rows=[{
+                "co_id": "CO1", "co_statement": "Protect session tokens",
+                "asset_id": "A1", "asset_name": "Session Token",
+                "attacker_id": "T1", "attacker_capability": "Network adversary",
+                "impact": "H", "likelihood": "M", "risk_tier": "high",
+                "total_controls": 3, "implemented_controls": 2,
+                "verified_controls": 1, "open_findings": 1,
+                "coverage_ratio": 0.66,
+            }],
+        ),
+        "get_system_risk_view": SystemRiskView(
+            system_id="sys-1", system_name="Customer Platform", total=2,
+            models=[
+                {"id": "tm-001", "title": "Login Service"},
+                {"id": "tm-002", "title": "Payments Service"},
+            ],
+            rows=[
+                {
+                    "model_id": "tm-001", "model_title": "Login Service",
+                    "co_id": "CO1", "co_statement": "Protect session tokens",
+                    "asset_id": "A1", "asset_name": "Session Token",
+                    "attacker_id": "T1", "attacker_capability": "Network adversary",
+                    "impact": "H", "likelihood": "M", "risk_tier": "high",
+                    "total_controls": 3, "implemented_controls": 2,
+                    "verified_controls": 1, "open_findings": 1,
+                    "coverage_ratio": 0.66,
+                },
+                {
+                    "model_id": "tm-002", "model_title": "Payments Service",
+                    "co_id": "CO9", "co_statement": "Protect data at rest",
+                    "asset_id": "A4", "asset_name": "Card Token Store",
+                    "attacker_id": "T3", "attacker_capability": "Insider",
+                    "impact": "H", "likelihood": "M", "risk_tier": "high",
+                    "total_controls": 4, "implemented_controls": 2,
+                    "verified_controls": 1, "open_findings": 0,
+                    "coverage_ratio": 0.5,
+                },
+            ],
+        ),
+        "list_risk_acceptances": [
+            {
+                "id": "RA-1", "model_id": "tm-001",
+                "control_objective_id": "CO1",
+                "owner": "Platform Team",
+                "justification": "Mitigated by upstream WAF.",
+                "status": "active",
+                "accepted_at": "2026-03-01T00:00:00Z",
+                "review_by": "2026-09-01T00:00:00Z",
+            },
+        ],
         "list_workspaces": {"workspaces": []},
         "list_systems": {"systems": []},
         "get_system": {"id": "sys-1", "name": "Platform"},
@@ -1981,3 +2078,117 @@ class TestCoIdFilters:
                 server_version="0", model_id="tm-001", co_id="CO3",
             )
         mock.model_coherence_report.assert_awaited_once_with("tm-001", co_id="CO3")
+
+
+# ------------------------------------------------------------------
+# Findings / Risk aggregates
+# ------------------------------------------------------------------
+
+
+class TestGetFindingsRisks:
+    @pytest.mark.asyncio
+    async def test_returns_workspace_aggregate(self) -> None:
+        """Workspace-scoped aggregate surfaces findings, risk
+        acceptances, and at-risk COs in a single envelope."""
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_findings_risks(server_version="0")
+        assert result["workspace_id"] == "ws-1"
+        assert result["summary"]["open_findings"] == 1
+        assert result["summary"]["at_risk_cos"] == 1
+        assert len(result["findings"]) == 1
+        assert len(result["risk_acceptances"]) == 1
+        assert len(result["at_risk_cos"]) == 1
+        assert result["at_risk_cos"][0]["risk_tier"] == "high"
+        # No params forwarded — the endpoint is workspace-scoped.
+        mock.get_findings_risks.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_client_error_wrapped_as_tool_error(self) -> None:
+        mock = _mock_client(
+            get_findings_risks=AsyncMock(side_effect=RuntimeError("boom")),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await get_findings_risks(server_version="0")
+
+
+class TestGetModelRiskView:
+    @pytest.mark.asyncio
+    async def test_returns_rows_for_model(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_model_risk_view(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["model_id"] == "tm-001"
+        assert result["total"] == 1
+        assert result["rows"][0]["co_id"] == "CO1"
+        assert result["rows"][0]["risk_tier"] == "high"
+        assert result["rows"][0]["open_findings"] == 1
+        mock.get_model_risk_view.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_model_id_threaded_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await get_model_risk_view(
+                server_version="0", model_id="tm-xyz",
+            )
+        mock.get_model_risk_view.assert_awaited_once_with("tm-xyz")
+
+
+class TestGetSystemRiskView:
+    @pytest.mark.asyncio
+    async def test_rows_carry_model_context(self) -> None:
+        """System-level view must attach model_id / model_title per row
+        so callers can group by source model without an extra lookup."""
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_system_risk_view(
+                server_version="0", system_id="sys-1",
+            )
+        assert result["system_id"] == "sys-1"
+        assert result["total"] == 2
+        assert all(
+            "model_id" in r and "model_title" in r for r in result["rows"]
+        )
+        mock.get_system_risk_view.assert_awaited_once_with("sys-1")
+
+
+class TestListRiskAcceptances:
+    @pytest.mark.asyncio
+    async def test_wraps_list_in_items(self) -> None:
+        """The client returns a bare list; _dump wraps it as
+        ``{"items": [...]}`` for the FastMCP structured-content
+        contract."""
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_risk_acceptances(
+                server_version="0", model_id="tm-001",
+            )
+        assert "items" in result
+        assert result["items"][0]["id"] == "RA-1"
+        assert result["items"][0]["status"] == "active"
+        assert result["items"][0]["owner"] == "Platform Team"
+        mock.list_risk_acceptances.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self) -> None:
+        mock = _mock_client(list_risk_acceptances=AsyncMock(return_value=[]))
+        with _patch_client(mock):
+            result = await list_risk_acceptances(
+                server_version="0", model_id="tm-001",
+            )
+        assert result == {"items": []}
+
+    @pytest.mark.asyncio
+    async def test_client_error_wrapped_as_tool_error(self) -> None:
+        mock = _mock_client(
+            list_risk_acceptances=AsyncMock(side_effect=RuntimeError("boom")),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await list_risk_acceptances(
+                    server_version="0", model_id="tm-001",
+                )
