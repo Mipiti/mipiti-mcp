@@ -346,6 +346,211 @@ async def test_delete_returns_none_on_204(mock_env: None) -> None:
 
 
 # ------------------------------------------------------------------
+# Findings / Risk aggregates
+# ------------------------------------------------------------------
+
+
+_SAMPLE_FINDINGS_RISKS = {
+    "workspace_id": "ws-1",
+    "evaluated_at": "2026-05-13T00:00:00Z",
+    "models": [
+        {"id": "tm-001", "title": "Login Service"},
+        {"id": "tm-002", "title": "Payments Service"},
+    ],
+    "findings": [
+        {
+            "id": "F-1", "model_id": "tm-001", "model_title": "Login Service",
+            "control_id": "CTRL-01", "severity": "high", "status": "discovered",
+            "title": "Missing rate limit", "created_at": "2026-05-01T00:00:00Z",
+            "risk_tier": "high",
+        },
+    ],
+    "risk_acceptances": [
+        {
+            "id": "RA-1", "model_id": "tm-001", "model_title": "Login Service",
+            "control_objective_id": "CO1",
+            "owner": "Platform Team",
+            "justification": "Mitigated by upstream WAF; revisit in Q4.",
+            "status": "active",
+            "accepted_at": "2026-03-01T00:00:00Z",
+            "review_by": "2026-09-01T00:00:00Z",
+            "risk_tier": "medium",
+        },
+    ],
+    "at_risk_cos": [
+        {
+            "model_id": "tm-002", "model_title": "Payments Service",
+            "co_id": "CO9", "statement": "Protect cardholder data at rest",
+            "asset_name": "Card Token Store",
+            "attacker_capability": "Insider with DB access",
+            "impact": "H", "likelihood": "M", "risk_tier": "high",
+            "total_controls": 4, "implemented_controls": 2, "verified_controls": 1,
+            "missing_controls": ["CTRL-09", "CTRL-10"],
+            "risk_reason": "missing_controls",
+        },
+    ],
+    "summary": {
+        "open_findings": 1, "total_findings": 1,
+        "active_risk_acceptances": 1, "total_risk_acceptances": 1,
+        "at_risk_cos": 1,
+    },
+}
+
+
+_SAMPLE_MODEL_RISK_VIEW = {
+    "model_id": "tm-001",
+    "model_title": "Login Service",
+    "total": 1,
+    "rows": [
+        {
+            "co_id": "CO1", "co_statement": "Protect session tokens",
+            "asset_id": "A1", "asset_name": "Session Token",
+            "attacker_id": "T1", "attacker_capability": "Network adversary",
+            "impact": "H", "likelihood": "M", "risk_tier": "high",
+            "total_controls": 3, "implemented_controls": 2,
+            "verified_controls": 1, "open_findings": 1,
+            "coverage_ratio": 0.66,
+        },
+    ],
+}
+
+
+_SAMPLE_SYSTEM_RISK_VIEW = {
+    "system_id": "sys-1",
+    "system_name": "Customer Platform",
+    "models": [
+        {"id": "tm-001", "title": "Login Service"},
+        {"id": "tm-002", "title": "Payments Service"},
+    ],
+    "total": 2,
+    "rows": [
+        {
+            "model_id": "tm-001", "model_title": "Login Service",
+            "co_id": "CO1", "co_statement": "Protect session tokens",
+            "asset_id": "A1", "asset_name": "Session Token",
+            "attacker_id": "T1", "attacker_capability": "Network adversary",
+            "impact": "H", "likelihood": "M", "risk_tier": "high",
+            "total_controls": 3, "implemented_controls": 2,
+            "verified_controls": 1, "open_findings": 1,
+            "coverage_ratio": 0.66,
+        },
+        {
+            "model_id": "tm-002", "model_title": "Payments Service",
+            "co_id": "CO9", "co_statement": "Protect cardholder data at rest",
+            "asset_id": "A4", "asset_name": "Card Token Store",
+            "attacker_id": "T3", "attacker_capability": "Insider",
+            "impact": "H", "likelihood": "M", "risk_tier": "high",
+            "total_controls": 4, "implemented_controls": 2,
+            "verified_controls": 1, "open_findings": 0,
+            "coverage_ratio": 0.5,
+        },
+    ],
+}
+
+
+_SAMPLE_RISK_ACCEPTANCES = [
+    {
+        "id": "RA-1", "model_id": "tm-001",
+        "control_objective_id": "CO1",
+        "owner": "Platform Team",
+        "justification": "Mitigated by upstream WAF; revisit in Q4.",
+        "status": "active",
+        "accepted_at": "2026-03-01T00:00:00Z",
+        "review_by": "2026-09-01T00:00:00Z",
+    },
+    {
+        "id": "RA-2", "model_id": "tm-001",
+        "control_objective_id": "CO4",
+        "owner": "Infra Team",
+        "justification": "Compensating control in network layer.",
+        "status": "expired",
+        "accepted_at": "2025-09-01T00:00:00Z",
+        "review_by": "2026-03-01T00:00:00Z",
+    },
+]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_findings_risks(mock_env: None) -> None:
+    route = respx.get("https://test.api.mipiti.io/api/findings-risks").mock(
+        return_value=httpx.Response(200, json=_SAMPLE_FINDINGS_RISKS)
+    )
+    client = MipitiClient()
+    report = await client.get_findings_risks()
+    assert route.called
+    assert report.workspace_id == "ws-1"
+    assert report.summary["open_findings"] == 1
+    assert len(report.findings) == 1
+    assert len(report.risk_acceptances) == 1
+    assert len(report.at_risk_cos) == 1
+    assert report.at_risk_cos[0]["risk_tier"] == "high"
+    # API-key header threaded through.
+    assert route.calls.last.request.headers["X-API-Key"] == "test-key-123"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_model_risk_view(mock_env: None) -> None:
+    route = respx.get(
+        "https://test.api.mipiti.io/api/models/tm-001/risk-view"
+    ).mock(return_value=httpx.Response(200, json=_SAMPLE_MODEL_RISK_VIEW))
+    client = MipitiClient()
+    view = await client.get_model_risk_view("tm-001")
+    assert route.called
+    assert view.model_id == "tm-001"
+    assert view.total == 1
+    assert view.rows[0]["co_id"] == "CO1"
+    assert view.rows[0]["coverage_ratio"] == 0.66
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_system_risk_view(mock_env: None) -> None:
+    route = respx.get(
+        "https://test.api.mipiti.io/api/systems/sys-1/risk-view"
+    ).mock(return_value=httpx.Response(200, json=_SAMPLE_SYSTEM_RISK_VIEW))
+    client = MipitiClient()
+    view = await client.get_system_risk_view("sys-1")
+    assert route.called
+    assert view.system_id == "sys-1"
+    assert view.total == 2
+    # Every row carries model context.
+    assert all("model_id" in r and "model_title" in r for r in view.rows)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_risk_acceptances(mock_env: None) -> None:
+    route = respx.get(
+        "https://test.api.mipiti.io/api/models/tm-001/risk-acceptances"
+    ).mock(return_value=httpx.Response(200, json=_SAMPLE_RISK_ACCEPTANCES))
+    client = MipitiClient()
+    items = await client.list_risk_acceptances("tm-001")
+    assert route.called
+    assert isinstance(items, list)
+    assert len(items) == 2
+    assert items[0]["id"] == "RA-1"
+    assert items[1]["status"] == "expired"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_risk_acceptances_empty(mock_env: None) -> None:
+    respx.get(
+        "https://test.api.mipiti.io/api/models/tm-001/risk-acceptances"
+    ).mock(return_value=httpx.Response(200, json=[]))
+    client = MipitiClient()
+    items = await client.list_risk_acceptances("tm-001")
+    assert items == []
+    await client.close()
+
+
+# ------------------------------------------------------------------
 # SSE stream tests
 # ------------------------------------------------------------------
 

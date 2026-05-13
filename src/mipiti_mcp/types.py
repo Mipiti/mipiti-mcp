@@ -368,6 +368,51 @@ class Finding(_Base):
 
 
 # ------------------------------------------------------------------
+# Findings / Risk aggregates
+# ------------------------------------------------------------------
+
+
+class FindingsRisksReport(_Base):
+    """Workspace-scoped triage dashboard combining open findings, active
+    risk acceptances, and at-risk Control Objectives across every model
+    the workspace can access. Field shapes (severity, status, risk_tier,
+    impact, likelihood, etc.) are validated server-side; per-row dicts
+    are surfaced verbatim so new attributes added on the backend pass
+    through automatically via ``extra="allow"``."""
+
+    workspace_id: str = ""
+    evaluated_at: str = ""
+    models: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+    risk_acceptances: list[dict[str, Any]] = []
+    at_risk_cos: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {}
+
+
+class ModelRiskView(_Base):
+    """Per-model Prioritized Risk View. One row per live Control
+    Objective with derived risk tier, asset impact, attacker
+    likelihood, control coverage counts, and open-finding count."""
+
+    model_id: str = ""
+    model_title: str = ""
+    total: int = 0
+    rows: list[dict[str, Any]] = []
+
+
+class SystemRiskView(_Base):
+    """System-level cross-model Prioritized Risk View. One row per live
+    Control Objective across every model in the system, with model
+    context attached to each row."""
+
+    system_id: str = ""
+    system_name: str = ""
+    total: int = 0
+    models: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+
+
+# ------------------------------------------------------------------
 # Generic action results
 # ------------------------------------------------------------------
 
