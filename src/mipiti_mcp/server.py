@@ -360,6 +360,34 @@ from workspace-wide to a specific target.
 on a model (with owner, justification, review deadline) so you can \
 separate intentional acceptances from genuinely unaddressed gaps.
 
+## Remediating findings (structural drift)
+
+The platform emits structural-drift findings (e.g. duplicate controls \
+that accumulated from prior platform behavior, framework-binding \
+asymmetries when mitigation groups have inconsistent compliance \
+coverage) via list_findings. For findings whose kind supports \
+automatic remediation, you can offer the operator a one-click cleanup \
+flow:
+
+1. Call preview_finding_remediation(finding_id) to see the proposed \
+   change. The response is a structured diff scoped to that one \
+   finding — typically very small.
+
+2. SHOW THE OPERATOR THE DIFF. Do not commit silently. The operator \
+   should see exactly which controls would be merged, what framework \
+   refs would consolidate, etc.
+
+3. Get the operator's confirmation AND a one-line rationale (e.g. \
+   "cleaning up duplicates from pre-fix trigger bug").
+
+4. Call apply_finding_remediation(finding_id, justification=<rationale>) \
+   to commit. The platform records who, what, and why for the audit \
+   trail.
+
+Never apply remediation without preview. The platform does not \
+enforce this — it's the agent's responsibility to surface the change \
+before committing.
+
 ## Project setup
 
 - `get_setup_status` — check which onboarding steps are done and which \
@@ -3473,6 +3501,78 @@ async def update_finding(
     try:
         return _dump(await _get_client().update_finding(
             model_id, finding_id, status, notes, reason, remediation_assertion_ids,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def preview_finding_remediation(
+    server_version: str,
+    finding_id: str,
+) -> dict:
+    """Preview what the platform would do to remediate a finding.
+
+    Read-only. Returns a structured diff describing the changes a
+    subsequent apply_finding_remediation call would make. Use this
+    BEFORE apply_finding_remediation to show the operator exactly
+    what cleanup will happen, and get explicit confirmation before
+    committing.
+
+    The exact shape of the diff depends on the finding's kind. For
+    kind=structural_duplicate_controls, you get back which controls
+    would be kept, which dropped, and the union of CO mappings +
+    framework refs that would land on the survivor.
+
+    Returns 404 if the finding doesn't exist; 422 if the finding's
+    kind has no automatic remediation handler.
+
+    Args:
+        finding_id: ID of the finding to preview remediation for.
+    """
+    try:
+        return _dump(await _get_client().preview_finding_remediation(finding_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def apply_finding_remediation(
+    server_version: str,
+    finding_id: str,
+    justification: str,
+) -> dict:
+    """Apply the remediation for a finding. Mutates state.
+
+    Commits the changes preview_finding_remediation showed. The
+    justification is recorded in the audit trail and shown in any
+    future review of why this cleanup was run.
+
+    DO NOT call this without first calling
+    preview_finding_remediation and showing the operator the diff.
+    The agent's role is to surface what's about to happen and get
+    explicit operator confirmation; the platform records who acted
+    but doesn't enforce the preview-then-apply norm — the agent does.
+
+    Returns 404 if the finding doesn't exist; 409 if the finding is
+    already remediated or dismissed; 400 if justification is empty;
+    422 if the finding's kind has no automatic remediation handler.
+
+    Args:
+        finding_id: ID of the finding to remediate.
+        justification: One-line operator rationale recorded on the
+            audit trail. Must be non-empty.
+    """
+    if not justification or not justification.strip():
+        raise ToolError(
+            "justification is required and must be non-empty. Pass the "
+            "operator's one-line rationale (e.g., \"cleaning up duplicates "
+            "from pre-fix trigger bug\") so the audit trail records why "
+            "the remediation ran."
+        )
+    try:
+        return _dump(await _get_client().apply_finding_remediation(
+            finding_id, justification,
         ))
     except Exception as exc:
         raise _api_error(exc) from exc

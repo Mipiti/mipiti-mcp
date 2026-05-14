@@ -1304,6 +1304,42 @@ class MipitiClient:
         data = await self._patch(f"/api/models/{model_id}/findings/{finding_id}", body)
         return Finding.model_validate(data)
 
+    async def preview_finding_remediation(self, finding_id: str) -> dict:
+        """GET /api/findings/{finding_id}/remediation/preview.
+
+        Read-only. Returns a structured diff describing what an
+        ``apply_finding_remediation`` call would do. The exact shape of
+        the diff depends on the finding's ``kind``; the server returns
+        the envelope verbatim so newly added remediation handlers
+        surface automatically without a client change.
+
+        404 if the finding doesn't exist; 422 if the finding's kind has
+        no automatic remediation handler — both surface as
+        ``HTTPStatusError`` and are wrapped by the tool layer's
+        ``_api_error`` helper.
+        """
+        return await self._get(f"/api/findings/{finding_id}/remediation/preview")
+
+    async def apply_finding_remediation(
+        self, finding_id: str, justification: str,
+    ) -> dict:
+        """POST /api/findings/{finding_id}/remediation/apply.
+
+        Mutating. Commits the remediation that
+        ``preview_finding_remediation`` showed. ``justification`` is
+        recorded on the audit trail so future reviewers can see why
+        the cleanup was run; the server enforces non-empty.
+
+        Returns the server envelope verbatim. 404 if the finding
+        doesn't exist; 409 if it is already remediated or dismissed;
+        400 if justification is empty; 422 if the finding's kind has
+        no automatic remediation handler.
+        """
+        return await self._post(
+            f"/api/findings/{finding_id}/remediation/apply",
+            {"justification": justification},
+        )
+
     # ------------------------------------------------------------------
     # Findings / Risk aggregates
     # ------------------------------------------------------------------
