@@ -258,6 +258,40 @@ as prescribed, submit assertions, and update status.
 Sufficiency is evaluated automatically server-side when assertions \
 are submitted — no manual trigger needed.
 
+## When you hit an implementation constraint mid-coding
+
+When a reviewer, hardware limit, library bound, or operator decision \
+forces you off the prescribed mechanism (e.g., "this device only \
+supports AES-128, not AES-256"), do NOT silently weaken the existing \
+control or its assertions. Record the constraint structurally so the \
+threat model reflects reality and the audit trail captures the \
+reasoning. Use this 3-step pattern:
+
+1. **Add the alternative control** — call `import_controls` with a \
+single-entry `controls_json` describing the weaker-but-feasible \
+mechanism. Set `co_ids` to the affected CO. Set `framework_refs` \
+**honestly**: include only bindings the alternative actually \
+satisfies — drop any that the weaker mechanism cannot meet. Then \
+call `assign_control_to_components` to scope it to the constrained \
+component(s) only, so the original control still applies elsewhere.
+
+2. **Declare them as OR-alternatives** — call `set_mitigation_groups` \
+on the affected CO with the original (strict) control in one group \
+and the new (weaker) control in another (across groups = OR). Pass \
+the operator's plain-language constraint reason in `justification` \
+— it flows into the AI gate's verdict and the activity log.
+
+3. **Record the constraint context** — call `add_assumption` with \
+`linked_co_ids=[<co>]` capturing what reviewer or system imposed \
+the constraint, the rationale, and any expiry conditions (e.g., \
+"hardware refresh in 2027 lifts the AES-128 limit"). Then \
+`submit_attestation` so the assumption is active.
+
+If the alternative drops a framework binding the original carried, \
+the platform automatically emits a `framework_binding_asymmetry` \
+finding for the security team to triage — surfaced via \
+`list_findings` and `get_findings_risks`.
+
 ## Assurance posture
 
 - `assess_model` — deterministic assessment of all control objectives. \
