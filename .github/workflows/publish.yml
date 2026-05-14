@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      contents: read
-      id-token: write  # OIDC for PyPI trusted publishing
+      contents: write   # create GitHub Release
+      id-token: write   # OIDC for PyPI trusted publishing
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -35,4 +35,23 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # v1.13.0
+
+      - name: Create GitHub Release from CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          # Extract the section between "## [VERSION]" and the next "## [" header.
+          NOTES=$(awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" {flag=1; next}
+            flag && /^## \[/ {exit}
+            flag {print}
+          ' CHANGELOG.md)
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            NOTES="See [CHANGELOG.md](CHANGELOG.md) for release notes."
+          fi
+          gh release create "$TAG" --title "$TAG" --notes "$NOTES" || \
+            echo "Release already exists or could not be created; skipping."
 
