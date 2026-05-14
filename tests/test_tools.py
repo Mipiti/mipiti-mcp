@@ -1838,6 +1838,34 @@ class TestListFindings:
             result = await list_findings(server_version="0", model_id="tm-001")
         assert "findings" in result
 
+    @pytest.mark.asyncio
+    async def test_defaults_forwarded_unchanged(self) -> None:
+        """Existing callers (no new params) must produce the same client
+        call as before — backwards compatibility."""
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_findings(server_version="0", model_id="tm-001")
+        mock.list_findings.assert_awaited_once_with("tm-001", "", "", "", False, 0, 0)
+
+    @pytest.mark.asyncio
+    async def test_new_params_forwarded(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_findings(
+                server_version="0",
+                model_id="tm-001",
+                control_id="CTRL-01",
+                status="discovered",
+                kind="structural_duplicate_controls",
+                summary_only=True,
+                limit=50,
+                offset=100,
+            )
+        mock.list_findings.assert_awaited_once_with(
+            "tm-001", "CTRL-01", "discovered",
+            "structural_duplicate_controls", True, 50, 100,
+        )
+
 
 class TestUpdateFinding:
     @pytest.mark.asyncio

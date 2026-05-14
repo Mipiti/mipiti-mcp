@@ -3463,6 +3463,10 @@ async def list_findings(
     model_id: str,
     control_id: str = "",
     status: str = "",
+    kind: str = "",
+    summary_only: bool = False,
+    limit: int = 0,
+    offset: int = 0,
 ) -> dict:
     """List negative findings for a threat model.
 
@@ -3471,9 +3475,18 @@ async def list_findings(
         control_id: Optional filter by control ID.
         status: Optional filter: "discovered", "acknowledged", "remediated",
             "verified", "dismissed".
+        kind: Optional filter by finding kind (e.g. structural_duplicate_controls,
+            framework_binding_asymmetry, manual). Empty = no filter.
+        summary_only: When true, response rows omit the heavy details_json
+            field. Use this to list candidates cheaply; fetch per-finding
+            detail via preview_finding_remediation.
+        limit: Max rows to return. 0 = no limit (existing behavior).
+        offset: Skip first N rows. Used with limit for pagination.
     """
     try:
-        return _dump(await _get_client().list_findings(model_id, control_id, status))
+        return _dump(await _get_client().list_findings(
+            model_id, control_id, status, kind, summary_only, limit, offset,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 

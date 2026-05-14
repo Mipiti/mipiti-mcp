@@ -1275,15 +1275,40 @@ class MipitiClient:
         return [Finding.model_validate(f) for f in data]
 
     async def list_findings(
-        self, model_id: str, control_id: str = "", status: str = "",
-    ) -> list[Finding]:
+        self,
+        model_id: str,
+        control_id: str = "",
+        status: str = "",
+        kind: str = "",
+        summary_only: bool = False,
+        limit: int = 0,
+        offset: int = 0,
+    ) -> list[Finding] | dict[str, Any]:
+        """List negative findings for a model.
+
+        When any of ``kind``, ``summary_only``, ``limit``, or ``offset`` is
+        set, the REST endpoint returns a wrapped envelope
+        ``{"findings": [...], "total": N, "returned": N, "summary_only": bool}``
+        instead of a bare list. This helper passes the response through
+        unchanged so callers can branch on shape.
+        """
         params: dict[str, Any] = {}
         if control_id:
             params["control_id"] = control_id
         if status:
             params["status"] = status
+        if kind:
+            params["kind"] = kind
+        if summary_only:
+            params["summary_only"] = "true"
+        if limit:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
         data = await self._get(f"/api/models/{model_id}/findings", params=params)
-        return [Finding.model_validate(f) for f in data]
+        if isinstance(data, list):
+            return [Finding.model_validate(f) for f in data]
+        return data
 
     async def update_finding(
         self,

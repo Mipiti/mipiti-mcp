@@ -984,3 +984,88 @@ class TestTransientRetry:
         await client.close()
         # Initial attempt + 3 retries = 4 total attempts
         assert attempts["n"] == 4
+
+
+# ------------------------------------------------------------------
+# list_findings query-param forwarding tests
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_findings_defaults_no_query_params(mock_env: None) -> None:
+    """Backwards compatibility: bare call sends no query params."""
+    route = respx.get("https://test.api.mipiti.io/api/models/tm-001/findings").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    client = MipitiClient()
+    result = await client.list_findings("tm-001")
+    assert result == []
+    assert route.calls[0].request.url.params.multi_items() == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_findings_forwards_new_params(mock_env: None) -> None:
+    """All four new params (kind, summary_only, limit, offset) must be
+    sent as query params with the names locked by the REST contract."""
+    wrapped = {
+        "findings": [],
+        "total": 0,
+        "returned": 0,
+        "summary_only": True,
+    }
+    route = respx.get("https://test.api.mipiti.io/api/models/tm-001/findings").mock(
+        return_value=httpx.Response(200, json=wrapped),
+    )
+    client = MipitiClient()
+    result = await client.list_findings(
+        "tm-001",
+        control_id="CTRL-01",
+        status="discovered",
+        kind="structural_duplicate_controls",
+        summary_only=True,
+        limit=50,
+        offset=100,
+    )
+    # Wrapped envelope passes through unchanged when not a list.
+    assert result == wrapped
+    params = route.calls[0].request.url.params
+    assert params["control_id"] == "CTRL-01"
+    assert params["status"] == "discovered"
+    assert params["kind"] == "structural_duplicate_controls"
+    assert params["summary_only"] == "true"
+    assert params["limit"] == "50"
+    assert params["offset"] == "100"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_findings_summary_only_false_omitted(mock_env: None) -> None:
+    """summary_only=False (default) must NOT appear in the query string —
+    keeps the legacy URL stable for callers that don't opt in."""
+    route = respx.get("https://test.api.mipiti.io/api/models/tm-001/findings").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    client = MipitiClient()
+    await client.list_findings("tm-001", summary_only=False)
+    params = route.calls[0].request.url.params
+    assert "summary_only" not in params
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_findings_limit_offset_zero_omitted(mock_env: None) -> None:
+    """limit=0 / offset=0 (defaults) must NOT appear in the query string."""
+    route = respx.get("https://test.api.mipiti.io/api/models/tm-001/findings").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    client = MipitiClient()
+    await client.list_findings("tm-001", limit=0, offset=0)
+    params = route.calls[0].request.url.params
+    assert "limit" not in params
+    assert "offset" not in params
+    await client.close()
