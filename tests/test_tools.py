@@ -89,6 +89,9 @@ from mipiti_mcp.server import (
     list_effective_attack_paths,
     list_reconciliation_candidates,
     apply_certain_reconciliation_match,
+    reject_reconciliation_candidate,
+    unreject_reconciliation_candidate,
+    list_reconciliation_rejections,
     get_control_objective,
     get_asset,
     get_attacker,
@@ -447,6 +450,19 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "controls_carried": 0,
             "controls_orphaned": 0,
             "orphaned_control_ids": [],
+        },
+        "reject_reconciliation_candidate": {
+            "id": "rej-001",
+            "model_id": "tm-001",
+            "kind": "assets",
+            "own_qid": "child:A1",
+            "inherited_qid": "parent:A1",
+            "rejected_by": "user-1",
+            "rejected_at": "2026-05-27T00:00:00+00:00",
+        },
+        "unreject_reconciliation_candidate": {"ok": True},
+        "list_reconciliation_rejections": {
+            "model_id": "tm-001", "flag_enabled": True, "rejections": [],
         },
         "get_control_objective": {
             "model_id": "tm-001", "model_version": 1,
@@ -2860,4 +2876,335 @@ class TestApplyCertainReconciliationMatch:
                     kind="assets",
                     own_qid="child:A1",
                     inherited_qid="parent:A1",
+                )
+
+
+class TestRejectReconciliationCandidate:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_persisted_record(self) -> None:
+        persisted = {
+            "id": "rej-001",
+            "model_id": "tm-001",
+            "kind": "assets",
+            "own_qid": "child:A1",
+            "inherited_qid": "parent:A1",
+            "rejected_by": "user-1",
+            "rejected_at": "2026-05-27T00:00:00+00:00",
+        }
+        mock = _mock_client(
+            reject_reconciliation_candidate=AsyncMock(return_value=persisted),
+        )
+        with _patch_client(mock):
+            result = await reject_reconciliation_candidate(
+                server_version="0",
+                model_id="tm-001",
+                kind="assets",
+                own_qid="child:A1",
+                inherited_qid="parent:A1",
+            )
+        assert result == persisted
+        mock.reject_reconciliation_candidate.assert_awaited_once_with(
+            "tm-001", "assets", "child:A1", "parent:A1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_kinds_all_accepted(self) -> None:
+        mock = _mock_client()
+        for kind in ("assets", "attackers", "components"):
+            with _patch_client(mock):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind=kind,
+                    own_qid="child:X1",
+                    inherited_qid="parent:X1",
+                )
+
+    @pytest.mark.asyncio
+    async def test_invalid_kind_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="kind must be one of"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assumptions",
+                    own_qid="child:A1",
+                    inherited_qid="parent:A1",
+                )
+        mock.reject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_own_qid_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="own_qid is required"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assets",
+                    own_qid="",
+                    inherited_qid="parent:A1",
+                )
+        mock.reject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_inherited_qid_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="inherited_qid is required"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assets",
+                    own_qid="child:A1",
+                    inherited_qid="",
+                )
+        mock.reject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_own_qid_missing_colon_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="own_qid must be a qualified id"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assets",
+                    own_qid="A1",
+                    inherited_qid="parent:A1",
+                )
+        mock.reject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_inherited_qid_missing_colon_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="inherited_qid must be a qualified id"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assets",
+                    own_qid="child:A1",
+                    inherited_qid="A1",
+                )
+        mock.reject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_400_partial_body_surfaces_clean_tool_error(self) -> None:
+        # Pre-flight catches the common malformed-input cases, but the
+        # server may still return 400 if its own validation drifts ahead
+        # of the tool layer. Surface whichever detail the route returned.
+        mock = _mock_client(
+            reject_reconciliation_candidate=AsyncMock(
+                side_effect=_http_error(
+                    400,
+                    "kind, own_qid, and inherited_qid are all required.",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="400"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assets",
+                    own_qid="child:A1",
+                    inherited_qid="parent:A1",
+                )
+
+    @pytest.mark.asyncio
+    async def test_404_model_missing_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            reject_reconciliation_candidate=AsyncMock(
+                side_effect=_http_error(404, "Threat model not found.", method="POST"),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-missing",
+                    kind="assets",
+                    own_qid="child:A1",
+                    inherited_qid="parent:A1",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            reject_reconciliation_candidate=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await reject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    kind="assets",
+                    own_qid="child:A1",
+                    inherited_qid="parent:A1",
+                )
+
+
+class TestUnrejectReconciliationCandidate:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_ok_envelope(self) -> None:
+        mock = _mock_client(
+            unreject_reconciliation_candidate=AsyncMock(return_value={"ok": True}),
+        )
+        with _patch_client(mock):
+            result = await unreject_reconciliation_candidate(
+                server_version="0",
+                model_id="tm-001",
+                rejection_id="rej-001",
+            )
+        assert result == {"ok": True}
+        mock.unreject_reconciliation_candidate.assert_awaited_once_with(
+            "tm-001", "rej-001",
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_model_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="model_id is required"):
+                await unreject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="",
+                    rejection_id="rej-001",
+                )
+        mock.unreject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_rejection_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="rejection_id is required"):
+                await unreject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    rejection_id="",
+                )
+        mock.unreject_reconciliation_candidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_404_unknown_id_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            unreject_reconciliation_candidate=AsyncMock(
+                side_effect=_http_error(
+                    404, "Rejection not found.", method="DELETE",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await unreject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    rejection_id="rej-missing",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            unreject_reconciliation_candidate=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="DELETE",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await unreject_reconciliation_candidate(
+                    server_version="0",
+                    model_id="tm-001",
+                    rejection_id="rej-001",
+                )
+
+
+class TestListReconciliationRejections:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_rejections_list(self) -> None:
+        payload = {
+            "model_id": "tm-001",
+            "flag_enabled": True,
+            "rejections": [
+                {
+                    "id": "rej-001",
+                    "model_id": "tm-001",
+                    "kind": "assets",
+                    "own_qid": "child:A1",
+                    "inherited_qid": "parent:A1",
+                    "rejected_by": "user-1",
+                    "rejected_at": "2026-05-27T00:00:00+00:00",
+                },
+                {
+                    "id": "rej-002",
+                    "model_id": "tm-001",
+                    "kind": "attackers",
+                    "own_qid": "child:T1",
+                    "inherited_qid": "parent:T1",
+                    "rejected_by": "user-2",
+                    "rejected_at": "2026-05-27T01:00:00+00:00",
+                },
+            ],
+        }
+        mock = _mock_client(
+            list_reconciliation_rejections=AsyncMock(return_value=payload),
+        )
+        with _patch_client(mock):
+            result = await list_reconciliation_rejections(
+                server_version="0", model_id="tm-001",
+            )
+        assert result == payload
+        assert len(result["rejections"]) == 2
+        mock.list_reconciliation_rejections.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty_with_flag_false(self) -> None:
+        # Flag-off shape from the backend: empty list + ``flag_enabled:
+        # false`` so the caller renders the disabled state without a
+        # separate code path.
+        payload = {
+            "model_id": "tm-001",
+            "flag_enabled": False,
+            "rejections": [],
+        }
+        mock = _mock_client(
+            list_reconciliation_rejections=AsyncMock(return_value=payload),
+        )
+        with _patch_client(mock):
+            result = await list_reconciliation_rejections(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["rejections"] == []
+
+    @pytest.mark.asyncio
+    async def test_empty_model_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="model_id is required"):
+                await list_reconciliation_rejections(
+                    server_version="0", model_id="",
+                )
+        mock.list_reconciliation_rejections.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_404_model_missing_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            list_reconciliation_rejections=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await list_reconciliation_rejections(
+                    server_version="0", model_id="tm-missing",
                 )

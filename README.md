@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->105<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->108<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -188,6 +188,9 @@ Views over the *effective* model — own entities composed with everything inher
 | `list_effective_attack_paths` | Effective AttackPath set + lifted missing/dangling suggestions computed against the composed reach surface. |
 | `list_reconciliation_candidates` | Paginated reconciliation candidates between this model and its ancestors. Tier `certain` is a deterministic match safe to auto-apply; tier `heuristic` is fuzzy and needs review. |
 | `apply_certain_reconciliation_match` | Mutating. Apply a `certain`-tier candidate from `list_reconciliation_candidates`: soft-deletes the descendant's own duplicate so the inherited entity becomes canonical. Server re-validates against current live state and refuses heuristic-tier candidates (those need operator-driven structural-divergence review). Bumps model version; returns the standard `_do_entity_crud` envelope (`{model, controls_carried, controls_orphaned, orphaned_control_ids}`). |
+| `reject_reconciliation_candidate` | Mutating. Persist the operator's "these are NOT duplicates" decision at org scope so the candidate detector filters this pair out of the active queue on subsequent reads. Idempotent on the natural key `(model_id, kind, own_qid, inherited_qid)`. Does NOT bump model version (rejection is org state). Returns the persisted record — keep the `id` if the operator may unreject later. |
+| `unreject_reconciliation_candidate` | Mutating. Remove a persisted rejection by surrogate id (from `list_reconciliation_rejections` or the return value of `reject_reconciliation_candidate`). The pair becomes eligible to surface in the active queue again on the next read. Returns `{ok: true}`. |
+| `list_reconciliation_rejections` | List the persisted rejections on a model in `rejected_at` ascending order — the same set the candidate detector consults to filter the active queue. Use to render a rejected section in a triage view or to find the surrogate id needed by `unreject_reconciliation_candidate`. |
 
 ### Compliance
 

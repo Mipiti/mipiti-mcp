@@ -745,6 +745,84 @@ class MipitiClient:
             },
         )
 
+    async def reject_reconciliation_candidate(
+        self,
+        model_id: str,
+        kind: str,
+        own_qid: str,
+        inherited_qid: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/composition/reconciliation/reject.
+
+        Records the operator's "these are NOT duplicates" decision at
+        org scope. Idempotent on the natural key ``(model_id, kind,
+        own_qid, inherited_qid)`` — re-rejecting an existing pair
+        returns the same row. The candidate detector consults this
+        store on subsequent reads, so the decision is durable across
+        sessions and teammates.
+
+        Does NOT bump model version (rejection is org state, not model
+        state).
+
+        Returns the persisted record::
+
+            {"id": str, "model_id": str, "kind": str, "own_qid": str,
+             "inherited_qid": str, "rejected_by": str,
+             "rejected_at": <ISO-8601>}
+
+        Errors: 400 if the body is missing fields; 404 if the model is
+        missing; 503 if composition is disabled or the rejection store
+        is not configured.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/composition/reconciliation/reject",
+            {
+                "kind": kind,
+                "own_qid": own_qid,
+                "inherited_qid": inherited_qid,
+            },
+        )
+
+    async def unreject_reconciliation_candidate(
+        self,
+        model_id: str,
+        rejection_id: str,
+    ) -> dict:
+        """DELETE /api/models/{model_id}/composition/reconciliation/reject/{rejection_id}.
+
+        Removes a previously-persisted rejection by its surrogate id.
+        The pair becomes eligible to surface in the active candidate
+        queue again on the next read. Does NOT bump model version.
+
+        Returns ``{"ok": True}`` on success.
+
+        Errors: 404 if no rejection with that id exists on the model;
+        503 if composition is disabled or the rejection store is not
+        configured.
+        """
+        return await self._delete(
+            f"/api/models/{model_id}/composition/reconciliation/reject/{rejection_id}",
+        )
+
+    async def list_reconciliation_rejections(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/composition/reconciliation/rejections.
+
+        Lists persisted rejections for a model in ``rejected_at``
+        ascending order. Used to render the "Rejected" section of the
+        triage view and to surface unreject affordances.
+
+        Returns ``{"model_id": str, "flag_enabled": bool, "rejections":
+        [<rejection>, ...]}``. ``flag_enabled: false`` (with an empty
+        list) when ``TREE_COMPOSITION_ENABLED`` is off; the same empty
+        shape is returned with ``flag_enabled: true`` when the
+        rejection store is not configured.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/reconciliation/rejections",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_control_objective(self, model_id: str, co_id: str) -> dict:
         """Get a single control objective with its composer verdict."""
         resp = await self._get_client().get(
