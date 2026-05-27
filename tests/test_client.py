@@ -1228,3 +1228,139 @@ async def test_list_reconciliation_rejections_pins_path(
     assert out == payload
     assert route.called
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lift_composition_entity_pins_path_and_body(
+    mock_env: None,
+) -> None:
+    """Pin the literal POST path + minimal body shape for the lift
+    route. Only the six required fields appear when the optional
+    operator-confirmation knobs are omitted — that's what the backend
+    treats as defaults (empty resolutions, server-computed descendant
+    set, gate ON)."""
+    envelope = {
+        "lift_id": "lift-001",
+        "lca_model": {"id": "tm-lca", "assets": [{"id": "A1"}]},
+        "descendant_a_model": {"id": "tm-da", "assets": []},
+        "descendant_b_model": {"id": "tm-db", "assets": []},
+        "applied_migrations": [],
+        "lift_event": {
+            "lift_id": "lift-001",
+            "kind": "assets",
+            "source_model_ids": ["tm-da", "tm-db"],
+            "source_entity_ids": ["A1", "A1"],
+            "lca_model_id": "tm-lca",
+            "new_entity_id": "A1",
+        },
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-ctx/composition/lift",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.lift_composition_entity(
+        "tm-ctx", "assets", "A1", "A1", "tm-da", "tm-db", "tm-lca",
+    )
+    assert out == envelope
+    assert route.called
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "assets",
+        "local_id_a": "A1",
+        "local_id_b": "A1",
+        "descendant_a_id": "tm-da",
+        "descendant_b_id": "tm-db",
+        "lca_model_id": "tm-lca",
+    }
+    # Idempotency-Key carries on the mutating POST so retries
+    # deduplicate server-side.
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lift_composition_entity_forwards_operator_confirmations(
+    mock_env: None,
+) -> None:
+    """When the agent supplies operator-confirmation knobs, every one
+    appears in the body exactly once and unchanged. The server reads
+    these to re-run conflict detection + the over-application gate."""
+    envelope = {
+        "lift_id": "lift-002",
+        "lca_model": {"id": "tm-lca", "assets": []},
+        "descendant_a_model": {"id": "tm-da", "assets": []},
+        "descendant_b_model": {"id": "tm-db", "assets": []},
+        "applied_migrations": [],
+        "lift_event": {},
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-ctx/composition/lift",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    await client.lift_composition_entity(
+        "tm-ctx", "components", "C1", "C1", "tm-da", "tm-db", "tm-lca",
+        lca_descendant_ids=["tm-da", "tm-db", "tm-dc"],
+        acknowledged_third_party_subtrees=["tm-dc"],
+        field_resolutions={"description": "keep_both"},
+        attached_state_resolutions={"state:assertions/AS1": "keep_b"},
+        skip_overapplication_gate=True,
+    )
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "components",
+        "local_id_a": "C1",
+        "local_id_b": "C1",
+        "descendant_a_id": "tm-da",
+        "descendant_b_id": "tm-db",
+        "lca_model_id": "tm-lca",
+        "lca_descendant_ids": ["tm-da", "tm-db", "tm-dc"],
+        "acknowledged_third_party_subtrees": ["tm-dc"],
+        "field_resolutions": {"description": "keep_both"},
+        "attached_state_resolutions": {"state:assertions/AS1": "keep_b"},
+        "skip_overapplication_gate": True,
+    }
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_split_composition_entity_pins_path_and_body(
+    mock_env: None,
+) -> None:
+    """Pin the literal POST path + body shape for the split route."""
+    envelope = {
+        "split_id": "split-001",
+        "ancestor_model": {"id": "tm-anc", "assets": []},
+        "descendant_models": [
+            {"id": "tm-d1", "assets": [{"id": "A1"}]},
+            {"id": "tm-d2", "assets": [{"id": "A1"}]},
+        ],
+        "applied_duplications": [],
+        "split_event": {
+            "split_id": "split-001",
+            "kind": "assets",
+            "ancestor_model_id": "tm-anc",
+            "source_entity_id": "A1",
+            "target_descendants": ["tm-d1", "tm-d2"],
+            "new_entity_ids": {"tm-d1": "A1", "tm-d2": "A1"},
+        },
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-anc/composition/split",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.split_composition_entity(
+        "tm-anc", "assets", "A1", ["tm-d1", "tm-d2"],
+    )
+    assert out == envelope
+    assert route.called
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "assets",
+        "ancestor_local_id": "A1",
+        "target_descendants": ["tm-d1", "tm-d2"],
+    }
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    await client.close()
