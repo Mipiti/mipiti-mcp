@@ -2100,6 +2100,165 @@ async def apply_certain_reconciliation_match(
 
 
 @mcp.tool()
+async def reject_reconciliation_candidate(
+    server_version: str,
+    model_id: str,
+    kind: str,
+    own_qid: str,
+    inherited_qid: str,
+) -> dict:
+    """Reject a reconciliation candidate. Mutates state.
+
+    Records the operator's "these are NOT duplicates" decision at org
+    scope so the candidate detector filters this pair out of the
+    active queue on subsequent reads. Idempotent on the natural key
+    ``(model_id, kind, own_qid, inherited_qid)`` — re-rejecting an
+    existing pair returns the same row. Use when
+    ``list_reconciliation_candidates`` surfaces a pair that looks like
+    a duplicate but the operator has confirmed it is not.
+
+    Persistence is at org scope, not model state — the rejection is
+    durable across sessions and teammates but does NOT bump model
+    version.
+
+    Args:
+        model_id: ID of the descendant threat model.
+        kind: Entity kind — one of ``"assets"``, ``"attackers"``,
+            ``"components"``.
+        own_qid: Qualified id of the descendant's own entity (e.g.
+            ``"child:A1"``).
+        inherited_qid: Qualified id of the ancestor's entity (e.g.
+            ``"parent:A1"``).
+
+    Returns the persisted record::
+
+        {"id": str, "model_id": str, "kind": str, "own_qid": str,
+         "inherited_qid": str, "rejected_by": str,
+         "rejected_at": <ISO-8601>}
+
+    Use the ``id`` field with ``unreject_reconciliation_candidate`` if
+    the operator changes their mind.
+
+    Errors: 404 if the model isn't found; 503 if
+    ``TREE_COMPOSITION_ENABLED`` is off or the rejection store is not
+    configured.
+    """
+    if kind not in _RECONCILIATION_KINDS:
+        raise ToolError(
+            "kind must be one of 'assets', 'attackers', 'components'.",
+        )
+    if not own_qid or not own_qid.strip():
+        raise ToolError("own_qid is required and must be non-empty.")
+    if not inherited_qid or not inherited_qid.strip():
+        raise ToolError("inherited_qid is required and must be non-empty.")
+    if ":" not in own_qid:
+        raise ToolError(
+            "own_qid must be a qualified id of the form '<owner>:<local_id>'.",
+        )
+    if ":" not in inherited_qid:
+        raise ToolError(
+            "inherited_qid must be a qualified id of the form "
+            "'<owner>:<local_id>'.",
+        )
+    try:
+        return _dump(
+            await _get_client().reject_reconciliation_candidate(
+                model_id, kind, own_qid, inherited_qid,
+            ),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def unreject_reconciliation_candidate(
+    server_version: str,
+    model_id: str,
+    rejection_id: str,
+) -> dict:
+    """Remove a persisted reconciliation rejection. Mutates state.
+
+    The pair becomes eligible to surface in the active candidate queue
+    again on the next read of ``list_reconciliation_candidates``. Use
+    when the operator changes their mind about a prior rejection — the
+    surrogate ``rejection_id`` comes from ``rejections[*].id`` on
+    ``list_reconciliation_rejections`` (or the return value of
+    ``reject_reconciliation_candidate``).
+
+    Does NOT bump model version (rejection is org state, not model
+    state).
+
+    Args:
+        model_id: ID of the descendant threat model the rejection is
+            on.
+        rejection_id: Surrogate id of the persisted rejection.
+
+    Returns ``{"ok": True}`` on success.
+
+    Errors: 404 if no rejection with that id exists on the model;
+    503 if ``TREE_COMPOSITION_ENABLED`` is off or the rejection store
+    is not configured.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not rejection_id or not rejection_id.strip():
+        raise ToolError("rejection_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().unreject_reconciliation_candidate(
+                model_id, rejection_id,
+            ),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_reconciliation_rejections(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """List persisted reconciliation rejections for a model.
+
+    Returns the operator's "these are NOT duplicates" decisions on this
+    model in ``rejected_at`` ascending order — the same set the
+    candidate detector consults to filter the active queue. Use this
+    to render the rejected section of a triage view, or to find the
+    surrogate id needed by ``unreject_reconciliation_candidate``.
+
+    When ``TREE_COMPOSITION_ENABLED`` is off, returns
+    ``{model_id, flag_enabled: false, rejections: []}`` so the caller
+    can render the disabled state without a separate code path. The
+    same empty shape is returned with ``flag_enabled: true`` when the
+    rejection store is not configured on the instance.
+
+    Args:
+        model_id: ID of the threat model.
+
+    Returns::
+
+        {"model_id": str,
+         "flag_enabled": bool,
+         "rejections": [
+             {"id": str, "model_id": str, "kind": str,
+              "own_qid": str, "inherited_qid": str,
+              "rejected_by": str, "rejected_at": <ISO-8601>},
+             ...
+         ]}
+
+    Errors: 404 if the model isn't found.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().list_reconciliation_rejections(model_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_control_objective(
     server_version: str,
     model_id: str,

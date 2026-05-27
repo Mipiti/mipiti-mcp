@@ -1140,3 +1140,91 @@ async def test_apply_certain_reconciliation_match_pins_path_and_body(
     # safely deduplicates server-side.
     assert "Idempotency-Key" in route.calls.last.request.headers
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_reject_reconciliation_candidate_pins_path_and_body(
+    mock_env: None,
+) -> None:
+    """Pin the literal POST path + body shape for the rejection route."""
+    persisted = {
+        "id": "rej-001",
+        "model_id": "tm-001",
+        "kind": "assets",
+        "own_qid": "child:A1",
+        "inherited_qid": "parent:A1",
+        "rejected_by": "user-1",
+        "rejected_at": "2026-05-27T00:00:00+00:00",
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-001/composition/reconciliation/reject",
+    ).mock(return_value=httpx.Response(200, json=persisted))
+    client = MipitiClient()
+    out = await client.reject_reconciliation_candidate(
+        "tm-001", "assets", "child:A1", "parent:A1",
+    )
+    assert out == persisted
+    assert route.called
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "assets",
+        "own_qid": "child:A1",
+        "inherited_qid": "parent:A1",
+    }
+    # Idempotency-Key carries over for the rejection POST too. The
+    # natural-key idempotency on the server doesn't need it, but the
+    # transient-retry path relies on it for safe deduplication.
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_unreject_reconciliation_candidate_pins_path(
+    mock_env: None,
+) -> None:
+    """Pin the literal DELETE path so a typo at the client layer
+    surfaces as a test failure rather than a runtime 404."""
+    route = respx.delete(
+        f"{_BASE}/api/models/tm-001/composition/reconciliation/reject/rej-001",
+    ).mock(return_value=httpx.Response(200, json={"ok": True}))
+    client = MipitiClient()
+    out = await client.unreject_reconciliation_candidate("tm-001", "rej-001")
+    assert out == {"ok": True}
+    assert route.called
+    # Idempotency-Key is set for DELETE too — the transient-retry
+    # helper attaches it on every mutating request uniformly.
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_reconciliation_rejections_pins_path(
+    mock_env: None,
+) -> None:
+    """Pin the literal GET path for the rejections list route."""
+    payload = {
+        "model_id": "tm-001",
+        "flag_enabled": True,
+        "rejections": [
+            {
+                "id": "rej-001",
+                "model_id": "tm-001",
+                "kind": "assets",
+                "own_qid": "child:A1",
+                "inherited_qid": "parent:A1",
+                "rejected_by": "user-1",
+                "rejected_at": "2026-05-27T00:00:00+00:00",
+            },
+        ],
+    }
+    route = respx.get(
+        f"{_BASE}/api/models/tm-001/composition/reconciliation/rejections",
+    ).mock(return_value=httpx.Response(200, json=payload))
+    client = MipitiClient()
+    out = await client.list_reconciliation_rejections("tm-001")
+    assert out == payload
+    assert route.called
+    await client.close()
