@@ -1106,3 +1106,37 @@ async def test_composition_reconciliation_forwards_pagination(
     assert route.calls.last.request.url.params["page"] == "2"
     assert route.calls.last.request.url.params["page_size"] == "25"
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_apply_certain_reconciliation_match_pins_path_and_body(
+    mock_env: None,
+) -> None:
+    """Pin the literal POST path + body shape so a typo at the client
+    layer surfaces as a test failure rather than a runtime 404."""
+    envelope = {
+        "model": {"id": "tm-001", "assets": []},
+        "controls_carried": 2,
+        "controls_orphaned": 1,
+        "orphaned_control_ids": ["CTRL-09"],
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-001/composition/reconciliation/apply-match",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.apply_certain_reconciliation_match(
+        "tm-001", "assets", "child:A1", "parent:A1",
+    )
+    assert out == envelope
+    assert route.called
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "assets",
+        "own_qid": "child:A1",
+        "inherited_qid": "parent:A1",
+    }
+    # Idempotency-Key header is always set on mutating requests so retry
+    # safely deduplicates server-side.
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    await client.close()

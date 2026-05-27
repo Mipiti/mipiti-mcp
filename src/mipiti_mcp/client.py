@@ -715,6 +715,36 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def apply_certain_reconciliation_match(
+        self,
+        model_id: str,
+        kind: str,
+        own_qid: str,
+        inherited_qid: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/composition/reconciliation/apply-match.
+
+        Mutating. Soft-deletes the descendant's own duplicate entity so
+        the inherited entity becomes the canonical surface for the
+        effective-model resolver. The server re-validates the candidate
+        against current live state and refuses heuristic-tier matches.
+
+        Returns the post-mutation model envelope:
+        ``{"model": <ThreatModel>, "controls_carried": int,
+        "controls_orphaned": int, "orphaned_control_ids": [str, ...]}``.
+
+        Errors: 400 if the candidate is stale or heuristic-tier;
+        404 if the model is missing; 503 if composition is disabled.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/composition/reconciliation/apply-match",
+            {
+                "kind": kind,
+                "own_qid": own_qid,
+                "inherited_qid": inherited_qid,
+            },
+        )
+
     async def get_control_objective(self, model_id: str, co_id: str) -> dict:
         """Get a single control objective with its composer verdict."""
         resp = await self._get_client().get(

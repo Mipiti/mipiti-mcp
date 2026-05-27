@@ -2025,6 +2025,80 @@ async def list_reconciliation_candidates(
         raise _api_error(exc) from exc
 
 
+_RECONCILIATION_KINDS = {"assets", "attackers", "components"}
+
+
+@mcp.tool()
+async def apply_certain_reconciliation_match(
+    server_version: str,
+    model_id: str,
+    kind: str,
+    own_qid: str,
+    inherited_qid: str,
+) -> dict:
+    """Apply a certain-tier reconciliation candidate. Mutates state.
+
+    Soft-deletes the descendant's own duplicate entity; the inherited
+    entity becomes the canonical surface for the effective-model
+    resolver. Use after surveying candidates via
+    ``list_reconciliation_candidates`` and only for candidates with
+    ``tier: "certain"`` — heuristic-tier candidates need operator
+    review of the structural divergence and are refused server-side.
+
+    The server re-validates the candidate against current live state
+    before applying; if the model has moved since the candidate was
+    detected, returns 400 and the operator should refresh the
+    candidate list and retry. Bumps model version and emits an
+    activity event on success.
+
+    Args:
+        model_id: ID of the descendant threat model the duplicate is
+            on.
+        kind: Entity kind — one of ``"assets"``, ``"attackers"``,
+            ``"components"``.
+        own_qid: Qualified id of the descendant's own duplicate (e.g.
+            ``"child:A1"``).
+        inherited_qid: Qualified id of the canonical entity on the
+            ancestor (e.g. ``"parent:A1"``).
+
+    Returns the post-mutation model envelope::
+
+        {"model": <ThreatModel>,
+         "controls_carried": int,
+         "controls_orphaned": int,
+         "orphaned_control_ids": [str, ...]}
+
+    Errors: 400 on heuristic-tier or stale candidates; 404 if the
+    model isn't found; 503 if ``TREE_COMPOSITION_ENABLED`` is off on
+    the backend.
+    """
+    if kind not in _RECONCILIATION_KINDS:
+        raise ToolError(
+            "kind must be one of 'assets', 'attackers', 'components'.",
+        )
+    if not own_qid or not own_qid.strip():
+        raise ToolError("own_qid is required and must be non-empty.")
+    if not inherited_qid or not inherited_qid.strip():
+        raise ToolError("inherited_qid is required and must be non-empty.")
+    if ":" not in own_qid:
+        raise ToolError(
+            "own_qid must be a qualified id of the form '<owner>:<local_id>'.",
+        )
+    if ":" not in inherited_qid:
+        raise ToolError(
+            "inherited_qid must be a qualified id of the form "
+            "'<owner>:<local_id>'.",
+        )
+    try:
+        return _dump(
+            await _get_client().apply_certain_reconciliation_match(
+                model_id, kind, own_qid, inherited_qid,
+            ),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 @mcp.tool()
 async def get_control_objective(
     server_version: str,
