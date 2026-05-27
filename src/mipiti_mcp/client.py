@@ -613,6 +613,108 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    # ------------------------------------------------------------------
+    # Composition (recursive-tree effective model) — read-only.
+    # Gated by ``TREE_COMPOSITION_ENABLED`` on the backend. When the flag
+    # is off, each endpoint returns a stable empty body with
+    # ``flag_enabled: false`` so callers can render a disabled state
+    # without a separate code path.
+    # ------------------------------------------------------------------
+
+    async def composition_index(self, model_id: str) -> dict:
+        """Composition index — counts + tree metadata + structural warnings.
+
+        Cheapest fetch (~1-2KB). Returns ``{model_id, model_version,
+        flag_enabled, tree: {parent_id, ancestor_chain, depth, child_ids},
+        counts: {entities, control_objectives, reconciliation_candidates},
+        warnings}``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def composition_entities(self, model_id: str) -> dict:
+        """Effective entity set (own ⊕ inherited) keyed by kind.
+
+        Returns ``{model_id, flag_enabled, kinds: {trust_boundaries: [...],
+        components: [...], assets: [...], attackers: [...], ...}}``. Each
+        entry carries ``{kind, qualified_id, owner_model_id, owner_title,
+        origin, entity}``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/entities",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def composition_control_objectives(self, model_id: str) -> dict:
+        """Effective control objectives with origin classification.
+
+        Returns ``{model_id, flag_enabled, control_objectives: [{co_qid,
+        asset_qid, attacker_qid, security_properties, origin}, ...]}``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/control-objectives",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def composition_coverage(self, model_id: str) -> dict:
+        """Effective coverage rollup with credited inheritance.
+
+        Per CO: ``{co_qid, is_covered, own_credit, inherited_credit,
+        contributing_controls: [{control_id, owner_model_id, origin,
+        is_verified, mitigation_group}, ...]}``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/coverage",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def composition_reachability(self, model_id: str) -> dict:
+        """Per-CO reachability verdicts over the composed effective topology.
+
+        Returns ``{model_id, flag_enabled, verdicts: [{co_qid, asset_qid,
+        attacker_qid, kind, reason}, ...]}``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/reachability",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def composition_attack_paths(self, model_id: str) -> dict:
+        """Effective AttackPath set + lifted suggestion compute.
+
+        Returns ``{model_id, flag_enabled, effective_paths, lattice_positions,
+        authored_paths, suggestions: {missing_path, dangling_path}}``.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/attack-paths",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def composition_reconciliation(
+        self, model_id: str, page: int = 1, page_size: int = 50,
+    ) -> dict:
+        """Reconciliation candidates with origin/heuristic tiers.
+
+        Paginated. Returns ``{model_id, flag_enabled, total, tiers:
+        {certain, heuristic}, page, page_size, candidates: [{kind, own_qid,
+        inherited_qid, tier, reasons}, ...]}``.
+        """
+        params = {"page": page, "page_size": page_size}
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/reconciliation",
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_control_objective(self, model_id: str, co_id: str) -> dict:
         """Get a single control objective with its composer verdict."""
         resp = await self._get_client().get(

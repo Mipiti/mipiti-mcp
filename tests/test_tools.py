@@ -81,6 +81,13 @@ from mipiti_mcp.server import (
     update_finding,
     model_coherence_report,
     get_reachability_verdicts,
+    get_composition_overview,
+    list_effective_entities,
+    list_effective_control_objectives,
+    get_effective_coverage,
+    get_reach_verdicts,
+    list_effective_attack_paths,
+    list_reconciliation_candidates,
     get_control_objective,
     get_asset,
     get_attacker,
@@ -344,6 +351,95 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "verdicts": [{"co_id": "CO3", "kind": "indeterminate",
                           "reason": "asset_unbounded", "narration": "...",
                           "boundary_id": "", "assumption_id": ""}],
+        },
+        # Composition (recursive-tree effective model) defaults. Flag-on
+        # shapes mirror the live backend payloads (see
+        # backend/app/routes/composition.py + composition_index.empty_index).
+        "composition_index": {
+            "model_id": "tm-001", "model_version": 1, "flag_enabled": True,
+            "tree": {"parent_id": None, "ancestor_chain": [],
+                     "depth": 0, "child_ids": []},
+            "counts": {
+                "entities": {
+                    "trust_boundaries": {"own": 1, "inherited": 0},
+                    "components": {"own": 0, "inherited": 0},
+                    "assets": {"own": 2, "inherited": 0},
+                    "attackers": {"own": 1, "inherited": 0},
+                },
+                "control_objectives": {
+                    "total": 1, "live": 1, "covered": 1, "uncovered": 0,
+                    "indeterminate": 0,
+                    "by_origin": {"own": 1, "cross": 0, "inherited": 0},
+                },
+                "reconciliation_candidates": {"certain": 0, "heuristic": 0},
+            },
+            "warnings": [],
+        },
+        "composition_entities": {
+            "model_id": "tm-001", "flag_enabled": True,
+            "kinds": {
+                "trust_boundaries": [],
+                "components": [],
+                "assets": [
+                    {"kind": "asset",
+                     "qualified_id": "tm-001::A1",
+                     "owner_model_id": "tm-001",
+                     "owner_title": "Login",
+                     "origin": "own",
+                     "entity": {"id": "A1", "name": "Tokens"}},
+                ],
+                "attackers": [],
+            },
+        },
+        "composition_control_objectives": {
+            "model_id": "tm-001", "flag_enabled": True,
+            "control_objectives": [
+                {"co_qid": "tm-001::CO1",
+                 "asset_qid": "tm-001::A1",
+                 "attacker_qid": "tm-001::T1",
+                 "security_properties": ["C"],
+                 "origin": "own"},
+            ],
+        },
+        "composition_coverage": {
+            "model_id": "tm-001", "flag_enabled": True,
+            "coverage": [
+                {"co_qid": "tm-001::CO1",
+                 "is_covered": True,
+                 "own_credit": 1.0,
+                 "inherited_credit": 0.0,
+                 "contributing_controls": [
+                     {"control_id": "CTRL-01",
+                      "owner_model_id": "tm-001",
+                      "origin": "own",
+                      "is_verified": False,
+                      "mitigation_group": 1},
+                 ]},
+            ],
+        },
+        "composition_reachability": {
+            "model_id": "tm-001", "flag_enabled": True,
+            "verdicts": [
+                {"co_qid": "tm-001::CO1",
+                 "asset_qid": "tm-001::A1",
+                 "attacker_qid": "tm-001::T1",
+                 "kind": "indeterminate",
+                 "reason": "asset_unbounded"},
+            ],
+        },
+        "composition_attack_paths": {
+            "model_id": "tm-001", "flag_enabled": True,
+            "effective_paths": [],
+            "lattice_positions": 0,
+            "authored_paths": 0,
+            "suggestions": {"missing_path": [], "dangling_path": []},
+        },
+        "composition_reconciliation": {
+            "model_id": "tm-001", "flag_enabled": True,
+            "total": 0,
+            "tiers": {"certain": 0, "heuristic": 0},
+            "page": 1, "page_size": 50,
+            "candidates": [],
         },
         "get_control_objective": {
             "model_id": "tm-001", "model_version": 1,
@@ -2191,4 +2287,370 @@ class TestListRiskAcceptances:
             with pytest.raises(ToolError):
                 await list_risk_acceptances(
                     server_version="0", model_id="tm-001",
+                )
+
+
+# ------------------------------------------------------------------
+# Composition (recursive-tree effective model)
+# ------------------------------------------------------------------
+
+
+# Flag-off response shapes — each composition endpoint returns this
+# stable empty body when ``TREE_COMPOSITION_ENABLED`` is off on the
+# backend. Asserting against these confirms the tool wrappers pass the
+# disabled-state through without crashing or stripping ``flag_enabled``.
+_FLAG_OFF_INDEX = {
+    "model_id": "tm-001", "model_version": 0, "flag_enabled": False,
+    "tree": {"parent_id": None, "ancestor_chain": [],
+             "depth": 0, "child_ids": []},
+    "counts": {
+        "entities": {
+            "trust_boundaries": {"own": 0, "inherited": 0},
+            "components": {"own": 0, "inherited": 0},
+            "assets": {"own": 0, "inherited": 0},
+            "attackers": {"own": 0, "inherited": 0},
+        },
+        "control_objectives": {
+            "total": 0, "live": 0, "covered": 0, "uncovered": 0,
+            "indeterminate": 0,
+            "by_origin": {"own": 0, "cross": 0, "inherited": 0},
+        },
+        "reconciliation_candidates": {"certain": 0, "heuristic": 0},
+    },
+    "warnings": [],
+}
+_FLAG_OFF_ENTITIES = {
+    "model_id": "tm-001", "flag_enabled": False,
+    "kinds": {"trust_boundaries": [], "components": [],
+              "assets": [], "attackers": []},
+}
+_FLAG_OFF_COS = {
+    "model_id": "tm-001", "flag_enabled": False,
+    "control_objectives": [],
+}
+_FLAG_OFF_COVERAGE = {
+    "model_id": "tm-001", "flag_enabled": False, "coverage": [],
+}
+_FLAG_OFF_REACHABILITY = {
+    "model_id": "tm-001", "flag_enabled": False, "verdicts": [],
+}
+_FLAG_OFF_ATTACK_PATHS = {
+    "model_id": "tm-001", "flag_enabled": False,
+    "effective_paths": [],
+    "lattice_positions": 0,
+    "authored_paths": 0,
+    "suggestions": {"missing_path": [], "dangling_path": []},
+}
+_FLAG_OFF_RECONCILIATION = {
+    "model_id": "tm-001", "flag_enabled": False, "total": 0,
+    "tiers": {"certain": 0, "heuristic": 0},
+    "page": 1, "page_size": 50, "candidates": [],
+}
+
+
+def _http_404(method: str = "GET", url: str = "https://api/x") -> Exception:
+    """Build an httpx.HTTPStatusError(404) so tests can drive the same
+    error-wrapping path the production client raises on a missing model."""
+    import httpx
+    req = httpx.Request(method, url)
+    resp = httpx.Response(404, request=req, json={"detail": "model not found"})
+    return httpx.HTTPStatusError("404", request=req, response=resp)
+
+
+class TestGetCompositionOverview:
+    @pytest.mark.asyncio
+    async def test_flag_on(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_composition_overview(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        assert result["counts"]["control_objectives"]["total"] == 1
+        assert result["tree"]["depth"] == 0
+        mock.composition_index.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty_shape(self) -> None:
+        mock = _mock_client(
+            composition_index=AsyncMock(return_value=_FLAG_OFF_INDEX),
+        )
+        with _patch_client(mock):
+            result = await get_composition_overview(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["counts"]["control_objectives"]["total"] == 0
+        assert result["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_index=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError) as exc_info:
+                await get_composition_overview(
+                    server_version="0", model_id="tm-missing",
+                )
+        assert "404" in str(exc_info.value)
+
+
+class TestListEffectiveEntities:
+    @pytest.mark.asyncio
+    async def test_flag_on(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_effective_entities(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        assert result["kinds"]["assets"][0]["qualified_id"] == "tm-001::A1"
+        assert result["kinds"]["assets"][0]["origin"] == "own"
+        mock.composition_entities.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty_kinds(self) -> None:
+        mock = _mock_client(
+            composition_entities=AsyncMock(return_value=_FLAG_OFF_ENTITIES),
+        )
+        with _patch_client(mock):
+            result = await list_effective_entities(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["kinds"]["assets"] == []
+        assert result["kinds"]["attackers"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_entities=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await list_effective_entities(
+                    server_version="0", model_id="tm-missing",
+                )
+
+
+class TestListEffectiveControlObjectives:
+    @pytest.mark.asyncio
+    async def test_flag_on(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_effective_control_objectives(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        assert len(result["control_objectives"]) == 1
+        assert result["control_objectives"][0]["origin"] == "own"
+        mock.composition_control_objectives.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty(self) -> None:
+        mock = _mock_client(
+            composition_control_objectives=AsyncMock(return_value=_FLAG_OFF_COS),
+        )
+        with _patch_client(mock):
+            result = await list_effective_control_objectives(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["control_objectives"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_control_objectives=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await list_effective_control_objectives(
+                    server_version="0", model_id="tm-missing",
+                )
+
+
+class TestGetEffectiveCoverage:
+    @pytest.mark.asyncio
+    async def test_flag_on(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_effective_coverage(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        row = result["coverage"][0]
+        assert row["is_covered"] is True
+        assert row["own_credit"] == 1.0
+        assert row["inherited_credit"] == 0.0
+        assert row["contributing_controls"][0]["control_id"] == "CTRL-01"
+        mock.composition_coverage.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty(self) -> None:
+        mock = _mock_client(
+            composition_coverage=AsyncMock(return_value=_FLAG_OFF_COVERAGE),
+        )
+        with _patch_client(mock):
+            result = await get_effective_coverage(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["coverage"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_coverage=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await get_effective_coverage(
+                    server_version="0", model_id="tm-missing",
+                )
+
+
+class TestGetReachVerdicts:
+    @pytest.mark.asyncio
+    async def test_flag_on(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_reach_verdicts(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        v = result["verdicts"][0]
+        assert v["co_qid"] == "tm-001::CO1"
+        assert v["kind"] in {"reachable", "unreachable", "indeterminate"}
+        mock.composition_reachability.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty(self) -> None:
+        mock = _mock_client(
+            composition_reachability=AsyncMock(return_value=_FLAG_OFF_REACHABILITY),
+        )
+        with _patch_client(mock):
+            result = await get_reach_verdicts(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["verdicts"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_reachability=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await get_reach_verdicts(
+                    server_version="0", model_id="tm-missing",
+                )
+
+
+class TestListEffectiveAttackPaths:
+    @pytest.mark.asyncio
+    async def test_flag_on(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_effective_attack_paths(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        assert "effective_paths" in result
+        assert result["suggestions"] == {"missing_path": [], "dangling_path": []}
+        mock.composition_attack_paths.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty(self) -> None:
+        mock = _mock_client(
+            composition_attack_paths=AsyncMock(return_value=_FLAG_OFF_ATTACK_PATHS),
+        )
+        with _patch_client(mock):
+            result = await list_effective_attack_paths(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["effective_paths"] == []
+        assert result["lattice_positions"] == 0
+        assert result["authored_paths"] == 0
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_attack_paths=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await list_effective_attack_paths(
+                    server_version="0", model_id="tm-missing",
+                )
+
+
+class TestListReconciliationCandidates:
+    @pytest.mark.asyncio
+    async def test_flag_on_default_pagination(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is True
+        assert result["page"] == 1
+        assert result["page_size"] == 50
+        mock.composition_reconciliation.assert_awaited_once_with(
+            "tm-001", page=1, page_size=50,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pagination_forwarded(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001",
+                page=3, page_size=25,
+            )
+        mock.composition_reconciliation.assert_awaited_once_with(
+            "tm-001", page=3, page_size=25,
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_page_rejected(self) -> None:
+        with pytest.raises(ToolError):
+            await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001", page=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_invalid_page_size_rejected(self) -> None:
+        with pytest.raises(ToolError):
+            await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001", page_size=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_flag_off_returns_empty(self) -> None:
+        mock = _mock_client(
+            composition_reconciliation=AsyncMock(
+                return_value=_FLAG_OFF_RECONCILIATION,
+            ),
+        )
+        with _patch_client(mock):
+            result = await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["flag_enabled"] is False
+        assert result["total"] == 0
+        assert result["candidates"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            composition_reconciliation=AsyncMock(side_effect=_http_404()),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await list_reconciliation_candidates(
+                    server_version="0", model_id="tm-missing",
                 )

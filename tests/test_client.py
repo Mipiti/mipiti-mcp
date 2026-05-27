@@ -984,3 +984,125 @@ class TestTransientRetry:
         await client.close()
         # Initial attempt + 3 retries = 4 total attempts
         assert attempts["n"] == 4
+
+
+# ------------------------------------------------------------------
+# Composition (recursive-tree effective model) — client URL contracts.
+#
+# The MCP tool wrappers in tests/test_tools.py mock at the client level;
+# the assertions below pin the actual HTTP paths to the routes the
+# backend exposes (see backend/app/routes/composition.py). If a path
+# drifts, these tests catch it before a tool starts returning
+# unexpected 404s in production.
+# ------------------------------------------------------------------
+
+
+_BASE = "https://test.api.mipiti.io"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_index(mock_env: None) -> None:
+    payload = {"model_id": "tm-001", "flag_enabled": True}
+    respx.get(f"{_BASE}/api/models/tm-001/composition").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    out = await client.composition_index("tm-001")
+    assert out["flag_enabled"] is True
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_entities(mock_env: None) -> None:
+    payload = {"model_id": "tm-001", "flag_enabled": True,
+               "kinds": {"assets": []}}
+    respx.get(f"{_BASE}/api/models/tm-001/composition/entities").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    out = await client.composition_entities("tm-001")
+    assert "kinds" in out
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_control_objectives(mock_env: None) -> None:
+    payload = {"model_id": "tm-001", "flag_enabled": True,
+               "control_objectives": []}
+    respx.get(
+        f"{_BASE}/api/models/tm-001/composition/control-objectives",
+    ).mock(return_value=httpx.Response(200, json=payload))
+    client = MipitiClient()
+    out = await client.composition_control_objectives("tm-001")
+    assert out["control_objectives"] == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_coverage(mock_env: None) -> None:
+    payload = {"model_id": "tm-001", "flag_enabled": True, "coverage": []}
+    respx.get(f"{_BASE}/api/models/tm-001/composition/coverage").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    out = await client.composition_coverage("tm-001")
+    assert out["coverage"] == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_reachability(mock_env: None) -> None:
+    payload = {"model_id": "tm-001", "flag_enabled": True, "verdicts": []}
+    respx.get(f"{_BASE}/api/models/tm-001/composition/reachability").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    out = await client.composition_reachability("tm-001")
+    assert out["verdicts"] == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_attack_paths(mock_env: None) -> None:
+    payload = {
+        "model_id": "tm-001", "flag_enabled": True,
+        "effective_paths": [],
+        "lattice_positions": 0, "authored_paths": 0,
+        "suggestions": {"missing_path": [], "dangling_path": []},
+    }
+    respx.get(f"{_BASE}/api/models/tm-001/composition/attack-paths").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    out = await client.composition_attack_paths("tm-001")
+    assert out["effective_paths"] == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_reconciliation_forwards_pagination(
+    mock_env: None,
+) -> None:
+    payload = {
+        "model_id": "tm-001", "flag_enabled": True, "total": 0,
+        "tiers": {"certain": 0, "heuristic": 0},
+        "page": 2, "page_size": 25, "candidates": [],
+    }
+    route = respx.get(
+        f"{_BASE}/api/models/tm-001/composition/reconciliation",
+    ).mock(return_value=httpx.Response(200, json=payload))
+    client = MipitiClient()
+    out = await client.composition_reconciliation(
+        "tm-001", page=2, page_size=25,
+    )
+    assert out["page"] == 2
+    assert route.calls.last.request.url.params["page"] == "2"
+    assert route.calls.last.request.url.params["page_size"] == "25"
+    await client.close()
