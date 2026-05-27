@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->97<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->104<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -173,6 +173,20 @@ uvx mipiti-mcp
 | `get_model_risk_view` | Per-model Prioritized Risk View: one row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage, and open-finding count. |
 | `get_system_risk_view` | Cross-model variant of `get_model_risk_view`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |
 | `list_risk_acceptances` | All risk acceptances on a model — risks explicitly accepted instead of mitigated. Includes CO id, owner, justification, status, review deadline. |
+
+### Composition (recursive-tree effective model)
+
+Read-only views over the *effective* model — own entities composed with everything inherited from ancestor threat models on the recursive tree. Backend-gated by `TREE_COMPOSITION_ENABLED`; when off, each tool returns a stable empty body with `flag_enabled: false`.
+
+| Tool | Description |
+|------|-------------|
+| `get_composition_overview` | Index: counts + tree metadata (`parent_id`, `ancestor_chain`, `depth`, `child_ids`) + structural warnings. Cheapest call — use first to learn whether composition is enabled and orient on the tree. |
+| `list_effective_entities` | Effective entity set keyed by kind (trust boundaries, components, assets, attackers, attack paths). Each entry carries provenance (`own` vs `inherited`) and a fully-qualified id for cross-model references. |
+| `list_effective_control_objectives` | Effective COs tagged with origin (`own` / `cross` / `inherited`). Pair with `get_effective_coverage` and `get_reach_verdicts`. |
+| `get_effective_coverage` | Per-CO coverage with credited inheritance: `own_credit`, `inherited_credit`, and the list of contributing controls (with the owning model id, origin, verification status, mitigation group). This is what drives the composition coverage view, not per-model `get_verification_report`. |
+| `get_reach_verdicts` | Per-CO reachability verdicts over the composed effective topology — same kinds (`reachable` / `unreachable` / `indeterminate`) as `get_reachability_verdicts`, but evaluated against the merged tree. Use on child models when ancestor topology matters. |
+| `list_effective_attack_paths` | Effective AttackPath set + lifted missing/dangling suggestions computed against the composed reach surface. |
+| `list_reconciliation_candidates` | Paginated reconciliation candidates between this model and its ancestors. Tier `certain` is a deterministic match safe to auto-apply; tier `heuristic` is fuzzy and needs review. |
 
 ### Compliance
 

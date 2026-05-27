@@ -1723,6 +1723,308 @@ async def get_reachability_verdicts(
         raise _api_error(exc) from exc
 
 
+# === Composition (recursive-tree effective model) ===
+#
+# Read-only views over the *effective* model — own entities composed with
+# everything inherited from ancestor threat models on the recursive tree.
+# Backend-gated by ``TREE_COMPOSITION_ENABLED``. When the flag is off every
+# tool below returns its stable empty shape with ``flag_enabled: false`` so
+# agents can detect the disabled state without separate code paths or 404
+# handling.
+
+
+@mcp.tool()
+async def get_composition_overview(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Composition index for a model — counts, tree metadata, warnings.
+
+    Cheapest call in the composition surface (~1-2KB). Use this first to
+    learn whether composition is enabled, where the model sits on the
+    recursive tree (parent + ancestor chain + child ids), how many own vs
+    inherited entities and COs there are per kind, and whether any
+    structural warnings (cycle, parent missing, max depth exceeded) need
+    surfacing before drilling into sub-resources.
+
+    Return shape::
+
+        {
+          model_id, model_version, flag_enabled,
+          tree: {parent_id, ancestor_chain, depth, child_ids},
+          counts: {
+            entities: {kind: {own, inherited}, ...},
+            control_objectives: {total, live, covered, uncovered,
+              indeterminate, by_origin: {own, cross, inherited}},
+            reconciliation_candidates: {certain, heuristic},
+          },
+          warnings: [str, ...],
+        }
+
+    When ``TREE_COMPOSITION_ENABLED`` is off on the backend, returns the
+    same shape with all counts zeroed and ``flag_enabled: false``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().composition_index(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_effective_entities(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Effective entity set (own ⊕ inherited) keyed by kind.
+
+    Returns the entity set this model sees after composition with
+    ancestors: trust boundaries, components, assets, attackers, and
+    (when applicable) attack paths. Each entry carries its provenance —
+    whether it originates on this model or is inherited from an
+    ancestor — plus a fully-qualified id so cross-model references are
+    unambiguous.
+
+    Pair with ``list_effective_control_objectives`` and
+    ``get_effective_coverage`` to see how inherited topology contributes
+    to coverage credit.
+
+    Return shape::
+
+        {
+          model_id, flag_enabled,
+          kinds: {
+            trust_boundaries: [{kind, qualified_id, owner_model_id,
+              owner_title, origin, entity}, ...],
+            components: [...], assets: [...], attackers: [...], ...
+          },
+        }
+
+    When composition is disabled on the backend, ``kinds`` is returned
+    with every kind mapped to an empty list and ``flag_enabled: false``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().composition_entities(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_effective_control_objectives(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Effective control objectives with origin classification.
+
+    Returns every CO visible on the effective model, each tagged with
+    its origin: ``own`` (authored on this model), ``cross`` (an inherited
+    CO whose asset or attacker is local to this model), or ``inherited``
+    (purely inherited from an ancestor). Use this to see what control
+    objectives the model is on the hook for — including those it
+    inherits — before reading coverage or reach.
+
+    Return shape::
+
+        {
+          model_id, flag_enabled,
+          control_objectives: [
+            {co_qid, asset_qid, attacker_qid,
+             security_properties: ["C"|"I"|"A"|"U", ...],
+             origin: "own"|"cross"|"inherited"},
+            ...
+          ],
+        }
+
+    When composition is disabled on the backend, returns an empty list
+    and ``flag_enabled: false``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(
+            await _get_client().composition_control_objectives(model_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_effective_coverage(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Effective coverage rollup with credited inheritance.
+
+    Per effective CO: whether it is covered, how much credit comes from
+    controls owned by this model vs inherited from ancestors, and the
+    list of contributing controls (with the owning model id, origin tag,
+    verification status, and mitigation group). This is the surface that
+    drives the composition view's coverage / compliance numbers — it
+    reflects ``TREE_COMPOSITION_ENABLED`` math, not the per-model
+    coverage shown by ``get_verification_report``.
+
+    Return shape::
+
+        {
+          model_id, flag_enabled,
+          coverage: [
+            {co_qid, is_covered, own_credit, inherited_credit,
+             contributing_controls: [{control_id, owner_model_id,
+               origin, is_verified, mitigation_group}, ...]},
+            ...
+          ],
+        }
+
+    When composition is disabled on the backend, ``coverage`` is empty
+    and ``flag_enabled: false``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().composition_coverage(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_reach_verdicts(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Per-CO reachability verdicts over the *composed* effective topology.
+
+    Same shape as ``get_reachability_verdicts``, but evaluated against
+    the merged tree: own components and trust boundaries combined with
+    everything inherited, and qualified ids used for cross-model
+    references. Use this when the model is a child on the composition
+    tree and you need reach state that reflects the ancestor topology,
+    not just the local model document.
+
+    Return shape::
+
+        {
+          model_id, flag_enabled,
+          verdicts: [
+            {co_qid, asset_qid, attacker_qid,
+             kind: "reachable"|"unreachable"|"indeterminate",
+             reason: <structural label>},
+            ...
+          ],
+        }
+
+    When composition is disabled on the backend, ``verdicts`` is empty
+    and ``flag_enabled: false`` — fall back to ``get_reachability_verdicts``
+    for the per-model derivation.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().composition_reachability(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_effective_attack_paths(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Effective AttackPath set + lifted missing/dangling suggestions.
+
+    AttackPaths inherit from ancestors with the same own / inherited
+    provenance as other entities. The ``suggestions`` block is the
+    missing-path / dangling-path delta computed against the *composed*
+    effective topology — a child sees the inherited baseline claims, the
+    composed reach surface, and the delta against both.
+
+    Return shape::
+
+        {
+          model_id, flag_enabled,
+          effective_paths: [{kind, qualified_id, owner_model_id,
+            owner_title, origin, entity}, ...],
+          lattice_positions: int,
+          authored_paths: int,
+          suggestions: {missing_path: [...], dangling_path: [...]},
+        }
+
+    When composition is disabled on the backend, ``effective_paths`` is
+    empty, the counts are zero, ``suggestions`` is empty, and
+    ``flag_enabled: false``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().composition_attack_paths(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_reconciliation_candidates(
+    server_version: str,
+    model_id: str,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    """Reconciliation candidates between this model and its ancestors.
+
+    When a model inherits entities (assets, attackers, components, trust
+    boundaries) from an ancestor *and* the operator has authored a
+    locally-named entity that looks like the same real-world thing, the
+    reconciliation engine surfaces the pair as a candidate so the operator
+    can decide whether to alias it onto the inherited qualified id. Tier
+    ``certain`` is a deterministic match (same qid or structurally
+    identical) and is safe to auto-apply; tier ``heuristic`` is a fuzzy
+    name/description match that needs review.
+
+    Paginated. Use this on child models in a recursive tree to find
+    duplicates that should be collapsed before they distort coverage.
+
+    Return shape::
+
+        {
+          model_id, flag_enabled, total,
+          tiers: {certain: int, heuristic: int},
+          page, page_size,
+          candidates: [
+            {kind, own_qid, inherited_qid,
+             tier: "certain"|"heuristic", reasons: [str, ...]},
+            ...
+          ],
+        }
+
+    When composition is disabled on the backend, ``total`` is 0,
+    ``candidates`` is empty, and ``flag_enabled: false``.
+
+    Args:
+        model_id: ID of the threat model.
+        page: 1-indexed page number. Default 1.
+        page_size: Items per page. Default 50.
+    """
+    if page < 1:
+        raise ToolError("page must be >= 1")
+    if page_size < 1:
+        raise ToolError("page_size must be >= 1")
+    try:
+        return _dump(
+            await _get_client().composition_reconciliation(
+                model_id, page=page, page_size=page_size,
+            ),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 @mcp.tool()
 async def get_control_objective(
     server_version: str,
