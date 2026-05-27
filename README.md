@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->104<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->105<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -176,7 +176,7 @@ uvx mipiti-mcp
 
 ### Composition (recursive-tree effective model)
 
-Read-only views over the *effective* model — own entities composed with everything inherited from ancestor threat models on the recursive tree. Backend-gated by `TREE_COMPOSITION_ENABLED`; when off, each tool returns a stable empty body with `flag_enabled: false`.
+Views over the *effective* model — own entities composed with everything inherited from ancestor threat models on the recursive tree. Backend-gated by `TREE_COMPOSITION_ENABLED`; when off, read tools return a stable empty body with `flag_enabled: false` and the write tool returns 503.
 
 | Tool | Description |
 |------|-------------|
@@ -187,6 +187,7 @@ Read-only views over the *effective* model — own entities composed with everyt
 | `get_reach_verdicts` | Per-CO reachability verdicts over the composed effective topology — same kinds (`reachable` / `unreachable` / `indeterminate`) as `get_reachability_verdicts`, but evaluated against the merged tree. Use on child models when ancestor topology matters. |
 | `list_effective_attack_paths` | Effective AttackPath set + lifted missing/dangling suggestions computed against the composed reach surface. |
 | `list_reconciliation_candidates` | Paginated reconciliation candidates between this model and its ancestors. Tier `certain` is a deterministic match safe to auto-apply; tier `heuristic` is fuzzy and needs review. |
+| `apply_certain_reconciliation_match` | Mutating. Apply a `certain`-tier candidate from `list_reconciliation_candidates`: soft-deletes the descendant's own duplicate so the inherited entity becomes canonical. Server re-validates against current live state and refuses heuristic-tier candidates (those need operator-driven structural-divergence review). Bumps model version; returns the standard `_do_entity_crud` envelope (`{model, controls_carried, controls_orphaned, orphaned_control_ids}`). |
 
 ### Compliance
 
