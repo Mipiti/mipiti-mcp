@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->108<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->110<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -191,6 +191,8 @@ Views over the *effective* model — own entities composed with everything inher
 | `reject_reconciliation_candidate` | Mutating. Persist the operator's "these are NOT duplicates" decision at org scope so the candidate detector filters this pair out of the active queue on subsequent reads. Idempotent on the natural key `(model_id, kind, own_qid, inherited_qid)`. Does NOT bump model version (rejection is org state). Returns the persisted record — keep the `id` if the operator may unreject later. |
 | `unreject_reconciliation_candidate` | Mutating. Remove a persisted rejection by surrogate id (from `list_reconciliation_rejections` or the return value of `reject_reconciliation_candidate`). The pair becomes eligible to surface in the active queue again on the next read. Returns `{ok: true}`. |
 | `list_reconciliation_rejections` | List the persisted rejections on a model in `rejected_at` ascending order — the same set the candidate detector consults to filter the active queue. Use to render a rejected section in a triage view or to find the surrogate id needed by `unreject_reconciliation_candidate`. |
+| `lift_composition_entity` | Mutating. Promote a shared-anchor entity from two sibling descendants to their lowest common ancestor: each source's copy is soft-deleted and the inherited entity becomes canonical for every descendant of the LCA. Server re-detects field-level and attached-state conflicts against current live state; pass `field_resolutions` / `attached_state_resolutions` keyed by the conflict keys returned in the 400 detail. Server also runs an over-application gate against the LCA's descendant set; pass `acknowledged_third_party_subtrees` to acknowledge extra reach or `skip_overapplication_gate=true` to override after explicit operator confirmation. Bumps version on the LCA + both source descendants; returns `{lift_id, lca_model, descendant_a_model, descendant_b_model, applied_migrations, lift_event}` — the `lift_event` block matches the audit pack's `lift_history` entry. |
+| `split_composition_entity` | Mutating. Inverse of `lift_composition_entity`: push an ancestor-owned entity down to one or more target descendants and soft-delete the ancestor's copy. A new local id is minted on each target; attached state (assertions, jira mappings, risk acceptances) on the ancestor's entity is duplicated to every target. Bumps version on the ancestor + every target descendant; returns `{split_id, ancestor_model, descendant_models, applied_duplications, split_event}` — the `split_event` block matches the audit pack's `split_history` entry. |
 
 ### Compliance
 

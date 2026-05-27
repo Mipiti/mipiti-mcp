@@ -92,6 +92,8 @@ from mipiti_mcp.server import (
     reject_reconciliation_candidate,
     unreject_reconciliation_candidate,
     list_reconciliation_rejections,
+    lift_composition_entity,
+    split_composition_entity,
     get_control_objective,
     get_asset,
     get_attacker,
@@ -463,6 +465,38 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "unreject_reconciliation_candidate": {"ok": True},
         "list_reconciliation_rejections": {
             "model_id": "tm-001", "flag_enabled": True, "rejections": [],
+        },
+        "lift_composition_entity": {
+            "lift_id": "lift-001",
+            "lca_model": {"id": "tm-lca", "assets": [{"id": "A1"}]},
+            "descendant_a_model": {"id": "tm-da", "assets": []},
+            "descendant_b_model": {"id": "tm-db", "assets": []},
+            "applied_migrations": [],
+            "lift_event": {
+                "lift_id": "lift-001",
+                "kind": "assets",
+                "source_model_ids": ["tm-da", "tm-db"],
+                "source_entity_ids": ["A1", "A1"],
+                "lca_model_id": "tm-lca",
+                "new_entity_id": "A1",
+            },
+        },
+        "split_composition_entity": {
+            "split_id": "split-001",
+            "ancestor_model": {"id": "tm-anc", "assets": []},
+            "descendant_models": [
+                {"id": "tm-d1", "assets": [{"id": "A1"}]},
+                {"id": "tm-d2", "assets": [{"id": "A1"}]},
+            ],
+            "applied_duplications": [],
+            "split_event": {
+                "split_id": "split-001",
+                "kind": "assets",
+                "ancestor_model_id": "tm-anc",
+                "source_entity_id": "A1",
+                "target_descendants": ["tm-d1", "tm-d2"],
+                "new_entity_ids": {"tm-d1": "A1", "tm-d2": "A1"},
+            },
         },
         "get_control_objective": {
             "model_id": "tm-001", "model_version": 1,
@@ -3207,4 +3241,452 @@ class TestListReconciliationRejections:
             with pytest.raises(ToolError, match="404"):
                 await list_reconciliation_rejections(
                     server_version="0", model_id="tm-missing",
+                )
+
+
+class TestLiftCompositionEntity:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+        envelope = {
+            "lift_id": "lift-XYZ",
+            "lca_model": {"id": "tm-lca", "assets": [{"id": "A1"}]},
+            "descendant_a_model": {"id": "tm-da", "assets": []},
+            "descendant_b_model": {"id": "tm-db", "assets": []},
+            "applied_migrations": [
+                {"kind": "assets", "from": "tm-da#A1", "to": "tm-lca#A1"},
+            ],
+            "lift_event": {
+                "lift_id": "lift-XYZ",
+                "kind": "assets",
+                "source_model_ids": ["tm-da", "tm-db"],
+                "source_entity_ids": ["A1", "A1"],
+                "lca_model_id": "tm-lca",
+                "new_entity_id": "A1",
+                "acknowledged_subtrees": [],
+                "field_resolutions": {},
+                "attached_state_migrations": [],
+            },
+        }
+        mock = _mock_client(
+            lift_composition_entity=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await lift_composition_entity(
+                server_version="0",
+                model_id="tm-ctx",
+                kind="assets",
+                local_id_a="A1",
+                local_id_b="A1",
+                descendant_a_id="tm-da",
+                descendant_b_id="tm-db",
+                lca_model_id="tm-lca",
+            )
+        assert result == envelope
+        mock.lift_composition_entity.assert_awaited_once_with(
+            "tm-ctx",
+            "assets",
+            "A1",
+            "A1",
+            "tm-da",
+            "tm-db",
+            "tm-lca",
+            lca_descendant_ids=None,
+            acknowledged_third_party_subtrees=None,
+            field_resolutions=None,
+            attached_state_resolutions=None,
+            skip_overapplication_gate=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_optional_args_forwarded(self) -> None:
+        # The route accepts a rich set of operator-confirmation knobs.
+        # When the agent supplies them, they all reach the client layer
+        # unchanged so the server can run conflict re-detection +
+        # over-application gating with the same data the operator saw.
+        mock = _mock_client()
+        with _patch_client(mock):
+            await lift_composition_entity(
+                server_version="0",
+                model_id="tm-ctx",
+                kind="components",
+                local_id_a="C1",
+                local_id_b="C1",
+                descendant_a_id="tm-da",
+                descendant_b_id="tm-db",
+                lca_model_id="tm-lca",
+                lca_descendant_ids=["tm-da", "tm-db", "tm-dc"],
+                acknowledged_third_party_subtrees=["tm-dc"],
+                field_resolutions={"description": "keep_both"},
+                attached_state_resolutions={"state:assertions/AS1": "keep_b"},
+                skip_overapplication_gate=True,
+            )
+        mock.lift_composition_entity.assert_awaited_once_with(
+            "tm-ctx",
+            "components",
+            "C1",
+            "C1",
+            "tm-da",
+            "tm-db",
+            "tm-lca",
+            lca_descendant_ids=["tm-da", "tm-db", "tm-dc"],
+            acknowledged_third_party_subtrees=["tm-dc"],
+            field_resolutions={"description": "keep_both"},
+            attached_state_resolutions={"state:assertions/AS1": "keep_b"},
+            skip_overapplication_gate=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_kinds_all_accepted(self) -> None:
+        mock = _mock_client()
+        for kind in ("assets", "attackers", "components"):
+            with _patch_client(mock):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind=kind,
+                    local_id_a="X1",
+                    local_id_b="X1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+
+    @pytest.mark.asyncio
+    async def test_invalid_kind_rejected_preflight(self) -> None:
+        # Lift, like reconciliation, is restricted to the three entity
+        # kinds the composition layer reconciles; trust boundaries +
+        # assumptions are out-of-scope at the route layer.
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="kind must be one of"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="trust_boundaries",
+                    local_id_a="TB1",
+                    local_id_b="TB1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+        mock.lift_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_local_id_a_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="local_id_a is required"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="",
+                    local_id_b="A1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+        mock.lift_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_local_id_b_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="local_id_b is required"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+        mock.lift_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_descendant_a_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="descendant_a_id is required"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="A1",
+                    descendant_a_id="",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+        mock.lift_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_descendant_b_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="descendant_b_id is required"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="A1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="",
+                    lca_model_id="tm-lca",
+                )
+        mock.lift_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_lca_model_id_rejected_preflight(self) -> None:
+        # The server can derive the strict LCA from the two descendants,
+        # but the tool surface still requires an explicit choice so the
+        # agent / operator commits to a target ancestor before applying.
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="lca_model_id is required"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="A1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="",
+                )
+        mock.lift_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_400_stale_resolutions_surfaces_clean_tool_error(self) -> None:
+        # Server returns 400 when conflict re-detection finds keys not
+        # covered by the operator's resolution map.
+        mock = _mock_client(
+            lift_composition_entity=AsyncMock(
+                side_effect=_http_error(
+                    400,
+                    "Conflict resolutions are stale or incomplete.",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="400"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="A1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+
+    @pytest.mark.asyncio
+    async def test_404_model_missing_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            lift_composition_entity=AsyncMock(
+                side_effect=_http_error(404, "Threat model not found.", method="POST"),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-missing",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="A1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            lift_composition_entity=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await lift_composition_entity(
+                    server_version="0",
+                    model_id="tm-ctx",
+                    kind="assets",
+                    local_id_a="A1",
+                    local_id_b="A1",
+                    descendant_a_id="tm-da",
+                    descendant_b_id="tm-db",
+                    lca_model_id="tm-lca",
+                )
+
+
+class TestSplitCompositionEntity:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+        envelope = {
+            "split_id": "split-XYZ",
+            "ancestor_model": {"id": "tm-anc", "assets": []},
+            "descendant_models": [
+                {"id": "tm-d1", "assets": [{"id": "A1"}]},
+                {"id": "tm-d2", "assets": [{"id": "A1"}]},
+            ],
+            "applied_duplications": [
+                {"kind": "assets", "from": "tm-anc#A1", "to": "tm-d1#A1"},
+                {"kind": "assets", "from": "tm-anc#A1", "to": "tm-d2#A1"},
+            ],
+            "split_event": {
+                "split_id": "split-XYZ",
+                "kind": "assets",
+                "ancestor_model_id": "tm-anc",
+                "source_entity_id": "A1",
+                "target_descendants": ["tm-d1", "tm-d2"],
+                "new_entity_ids": {"tm-d1": "A1", "tm-d2": "A1"},
+                "attached_state_duplications": [],
+            },
+        }
+        mock = _mock_client(
+            split_composition_entity=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await split_composition_entity(
+                server_version="0",
+                model_id="tm-anc",
+                kind="assets",
+                ancestor_local_id="A1",
+                target_descendants=["tm-d1", "tm-d2"],
+            )
+        assert result == envelope
+        mock.split_composition_entity.assert_awaited_once_with(
+            "tm-anc", "assets", "A1", ["tm-d1", "tm-d2"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_kinds_all_accepted(self) -> None:
+        mock = _mock_client()
+        for kind in ("assets", "attackers", "components"):
+            with _patch_client(mock):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind=kind,
+                    ancestor_local_id="X1",
+                    target_descendants=["tm-d1"],
+                )
+
+    @pytest.mark.asyncio
+    async def test_invalid_kind_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="kind must be one of"):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind="trust_boundaries",
+                    ancestor_local_id="TB1",
+                    target_descendants=["tm-d1"],
+                )
+        mock.split_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_ancestor_local_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="ancestor_local_id is required"):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind="assets",
+                    ancestor_local_id="",
+                    target_descendants=["tm-d1"],
+                )
+        mock.split_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_target_descendants_rejected_preflight(self) -> None:
+        # A split with zero targets is structurally meaningless: there's
+        # nowhere for the ancestor's entity to land before the soft-delete.
+        # The tool refuses pre-flight to save a server round-trip.
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="target_descendants is required"):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind="assets",
+                    ancestor_local_id="A1",
+                    target_descendants=[],
+                )
+        mock.split_composition_entity.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_400_structural_refusal_surfaces_clean_tool_error(self) -> None:
+        # Server returns 400 when the split itself is structurally
+        # refused (e.g. the entity is referenced by an attached state
+        # element whose duplication isn't supported).
+        mock = _mock_client(
+            split_composition_entity=AsyncMock(
+                side_effect=_http_error(
+                    400,
+                    "Split refused: entity not present on ancestor.",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="400"):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind="assets",
+                    ancestor_local_id="A1",
+                    target_descendants=["tm-d1"],
+                )
+
+    @pytest.mark.asyncio
+    async def test_404_target_missing_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            split_composition_entity=AsyncMock(
+                side_effect=_http_error(
+                    404, "Target descendant tm-missing not found.",
+                    method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind="assets",
+                    ancestor_local_id="A1",
+                    target_descendants=["tm-missing"],
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            split_composition_entity=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await split_composition_entity(
+                    server_version="0",
+                    model_id="tm-anc",
+                    kind="assets",
+                    ancestor_local_id="A1",
+                    target_descendants=["tm-d1"],
                 )

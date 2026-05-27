@@ -9,7 +9,7 @@ import contextvars
 import json
 import os
 import time
-from typing import Any, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from anyio import BrokenResourceError, ClosedResourceError
 from fastmcp import Context, FastMCP
@@ -2253,6 +2253,199 @@ async def list_reconciliation_rejections(
     try:
         return _dump(
             await _get_client().list_reconciliation_rejections(model_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def lift_composition_entity(
+    server_version: str,
+    model_id: str,
+    kind: str,
+    local_id_a: str,
+    local_id_b: str,
+    descendant_a_id: str,
+    descendant_b_id: str,
+    lca_model_id: str,
+    lca_descendant_ids: Optional[List[str]] = None,
+    acknowledged_third_party_subtrees: Optional[List[str]] = None,
+    field_resolutions: Optional[Dict[str, str]] = None,
+    attached_state_resolutions: Optional[Dict[str, str]] = None,
+    skip_overapplication_gate: bool = False,
+) -> dict:
+    """Promote a shared-anchor entity from two sibling descendants to
+    their lowest common ancestor. Mutates state across three models.
+
+    The operator has confirmed (via the composition lift-candidate view)
+    that the entity ``local_id_a`` on ``descendant_a_id`` and the entity
+    ``local_id_b`` on ``descendant_b_id`` are the same logical thing
+    and should be modeled once on the LCA. The route's ``model_id`` is
+    the operator's current context model — typically the LCA, but the
+    server accepts any ancestor of both descendants.
+
+    Conflict resolution. The server re-detects field-level and
+    attached-state conflicts against current live state before
+    applying. If new conflicts have surfaced since the operator's last
+    candidate fetch, the call returns 400 with the missing conflict
+    keys; refresh ``composition_lift_candidates`` and resubmit with
+    resolutions covering every key. Each entry in ``field_resolutions``
+    / ``attached_state_resolutions`` is ``"keep_a"`` | ``"keep_b"`` |
+    ``"keep_both"`` (union for list/set fields; falls back to B for
+    scalars).
+
+    Over-application gate. The lift extends visibility to every
+    descendant of the LCA, not just the two source descendants. The
+    server runs an over-application gate that refuses lifts touching
+    descendants outside an acknowledged set; pass
+    ``acknowledged_third_party_subtrees`` to acknowledge specific
+    subtrees, or ``skip_overapplication_gate=True`` to override
+    entirely after explicit operator confirmation.
+
+    Each affected model (LCA + both descendants) bumps version and
+    emits a ``model_refined`` activity event; a structured
+    ``lift_applied`` event with the full ``lift_event`` payload lands
+    on the LCA. The audit pack surfaces this under ``lift_history``.
+
+    Args:
+        model_id: Operator's context model — the model whose composition
+            view surfaced the candidate. Treated as a route anchor only;
+            doesn't have to be the LCA.
+        kind: Entity kind — one of ``"assets"``, ``"attackers"``,
+            ``"components"``.
+        local_id_a: Local id of the entity on ``descendant_a_id``.
+        local_id_b: Local id of the entity on ``descendant_b_id``.
+        descendant_a_id: First source descendant model id.
+        descendant_b_id: Second source descendant model id.
+        lca_model_id: Target ancestor model id (the LCA, or any
+            ancestor higher up the chain).
+        lca_descendant_ids: Optional snapshot of the LCA's descendant
+            set used by the over-application gate. Omit to let the
+            server compute it via BFS.
+        acknowledged_third_party_subtrees: Optional list of subtree
+            roots the operator has acknowledged as in-scope for the
+            lift.
+        field_resolutions: Optional per-field resolution map (e.g.
+            ``{"description": "keep_both", "tags": "keep_a"}``).
+        attached_state_resolutions: Optional per-state-key resolution
+            map (e.g. ``{"state:assertions/AS3": "keep_b"}``).
+        skip_overapplication_gate: When True, bypass the gate after
+            explicit operator confirmation. Default False.
+
+    Returns::
+
+        {"lift_id": str,
+         "lca_model": <ThreatModel>,
+         "descendant_a_model": <ThreatModel>,
+         "descendant_b_model": <ThreatModel>,
+         "applied_migrations": [...],
+         "lift_event": {...}}
+
+    Errors: 400 if required fields are missing, no LCA exists, conflict
+    resolutions are stale, or the lift is structurally refused
+    (eligibility / over-application gate); 404 if the route model or
+    either source descendant is missing; 503 if
+    ``TREE_COMPOSITION_ENABLED`` is off.
+    """
+    if kind not in _RECONCILIATION_KINDS:
+        raise ToolError(
+            "kind must be one of 'assets', 'attackers', 'components'.",
+        )
+    if not local_id_a or not local_id_a.strip():
+        raise ToolError("local_id_a is required and must be non-empty.")
+    if not local_id_b or not local_id_b.strip():
+        raise ToolError("local_id_b is required and must be non-empty.")
+    if not descendant_a_id or not descendant_a_id.strip():
+        raise ToolError("descendant_a_id is required and must be non-empty.")
+    if not descendant_b_id or not descendant_b_id.strip():
+        raise ToolError("descendant_b_id is required and must be non-empty.")
+    if not lca_model_id or not lca_model_id.strip():
+        raise ToolError("lca_model_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().lift_composition_entity(
+                model_id,
+                kind,
+                local_id_a,
+                local_id_b,
+                descendant_a_id,
+                descendant_b_id,
+                lca_model_id,
+                lca_descendant_ids=lca_descendant_ids,
+                acknowledged_third_party_subtrees=acknowledged_third_party_subtrees,
+                field_resolutions=field_resolutions,
+                attached_state_resolutions=attached_state_resolutions,
+                skip_overapplication_gate=skip_overapplication_gate,
+            ),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def split_composition_entity(
+    server_version: str,
+    model_id: str,
+    kind: str,
+    ancestor_local_id: str,
+    target_descendants: List[str],
+) -> dict:
+    """Push an ancestor-owned entity down to one or more descendants
+    and soft-delete the ancestor's copy. Mutates state across the
+    ancestor + every target descendant.
+
+    Inverse of ``lift_composition_entity``. Use when an entity that
+    currently lives on an ancestor is in fact descendant-specific and
+    should be modeled separately per descendant — the operator chooses
+    which descendants take a copy. A new local id is minted on each
+    target; attached state on the ancestor's entity (assertions, jira
+    mappings, risk acceptances, etc.) is duplicated to every target.
+
+    The route's ``model_id`` IS the ancestor (the entity being split
+    lives on it). Each affected model (ancestor + every target
+    descendant) bumps version and emits a ``model_refined`` activity
+    event; a structured ``split_applied`` event with the full
+    ``split_event`` payload lands on the ancestor. The audit pack
+    surfaces this under ``split_history``.
+
+    Args:
+        model_id: Ancestor model id — the entity to split lives here.
+        kind: Entity kind — one of ``"assets"``, ``"attackers"``,
+            ``"components"``.
+        ancestor_local_id: Local id of the entity on the ancestor.
+        target_descendants: Non-empty list of descendant model ids that
+            should each take a copy.
+
+    Returns::
+
+        {"split_id": str,
+         "ancestor_model": <ThreatModel>,
+         "descendant_models": [<ThreatModel>, ...],
+         "applied_duplications": [...],
+         "split_event": {...}}
+
+    Errors: 400 if required fields are missing or the split is
+    structurally refused; 404 if the ancestor or any target descendant
+    is missing; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    """
+    if kind not in _RECONCILIATION_KINDS:
+        raise ToolError(
+            "kind must be one of 'assets', 'attackers', 'components'.",
+        )
+    if not ancestor_local_id or not ancestor_local_id.strip():
+        raise ToolError("ancestor_local_id is required and must be non-empty.")
+    if not target_descendants:
+        raise ToolError(
+            "target_descendants is required and must be a non-empty list.",
+        )
+    try:
+        return _dump(
+            await _get_client().split_composition_entity(
+                model_id,
+                kind,
+                ancestor_local_id,
+                target_descendants,
+            ),
         )
     except Exception as exc:
         raise _api_error(exc) from exc

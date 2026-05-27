@@ -823,6 +823,113 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def lift_composition_entity(
+        self,
+        model_id: str,
+        kind: str,
+        local_id_a: str,
+        local_id_b: str,
+        descendant_a_id: str,
+        descendant_b_id: str,
+        lca_model_id: str,
+        *,
+        lca_descendant_ids: list[str] | None = None,
+        acknowledged_third_party_subtrees: list[str] | None = None,
+        field_resolutions: dict[str, str] | None = None,
+        attached_state_resolutions: dict[str, str] | None = None,
+        skip_overapplication_gate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/composition/lift.
+
+        Promote a shared-anchor entity from two sibling descendants to
+        their lowest common ancestor. The route's ``model_id`` is the
+        operator's context model (the model whose composition view
+        surfaced the candidate) — it doesn't have to be the LCA.
+
+        The server re-detects conflicts against current live state and
+        refuses if new conflicts surfaced that aren't covered by the
+        operator's ``field_resolutions`` / ``attached_state_resolutions``.
+        It also re-runs the over-application gate against the LCA's
+        descendant set; pass ``skip_overapplication_gate=True`` after
+        explicit operator acknowledgement.
+
+        Returns ``{"lift_id": str, "lca_model": <ThreatModel>,
+        "descendant_a_model": <ThreatModel>,
+        "descendant_b_model": <ThreatModel>,
+        "applied_migrations": [...], "lift_event": {...}}``. The
+        ``lift_event`` block matches the structured activity payload the
+        audit pack surfaces under ``lift_history``.
+
+        Errors: 400 if required fields are missing, the kind isn't in
+        ``{assets, attackers, components}``, no LCA exists, conflict
+        resolutions are stale, or the lift itself is structurally
+        refused; 404 if the route model or either source descendant is
+        missing; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+        """
+        body: dict = {
+            "kind": kind,
+            "local_id_a": local_id_a,
+            "local_id_b": local_id_b,
+            "descendant_a_id": descendant_a_id,
+            "descendant_b_id": descendant_b_id,
+            "lca_model_id": lca_model_id,
+        }
+        if lca_descendant_ids is not None:
+            body["lca_descendant_ids"] = list(lca_descendant_ids)
+        if acknowledged_third_party_subtrees is not None:
+            body["acknowledged_third_party_subtrees"] = list(
+                acknowledged_third_party_subtrees,
+            )
+        if field_resolutions is not None:
+            body["field_resolutions"] = dict(field_resolutions)
+        if attached_state_resolutions is not None:
+            body["attached_state_resolutions"] = dict(attached_state_resolutions)
+        if skip_overapplication_gate:
+            body["skip_overapplication_gate"] = True
+        return await self._post(
+            f"/api/models/{model_id}/composition/lift",
+            body,
+        )
+
+    async def split_composition_entity(
+        self,
+        model_id: str,
+        kind: str,
+        ancestor_local_id: str,
+        target_descendants: list[str],
+    ) -> dict:
+        """POST /api/models/{model_id}/composition/split.
+
+        Push an ancestor-owned entity to one or more descendants,
+        soft-deleting the ancestor's copy. The route's ``model_id`` IS
+        the ancestor (the entity being split lives on it).
+
+        Each affected model (ancestor + every target descendant) bumps
+        version and emits a generic ``model_refined`` activity event;
+        the structured ``split_event`` block is emitted on the ancestor
+        only.
+
+        Returns ``{"split_id": str, "ancestor_model": <ThreatModel>,
+        "descendant_models": [<ThreatModel>, ...],
+        "applied_duplications": [...], "split_event": {...}}``. The
+        ``split_event`` block matches the structured activity payload
+        the audit pack surfaces under ``split_history``.
+
+        Errors: 400 if required fields are missing, the kind isn't in
+        ``{assets, attackers, components}``, or the split itself is
+        structurally refused; 404 if the ancestor or any target
+        descendant is missing; 503 if ``TREE_COMPOSITION_ENABLED`` is
+        off.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/composition/split",
+            {
+                "kind": kind,
+                "ancestor_local_id": ancestor_local_id,
+                "target_descendants": list(target_descendants),
+            },
+        )
+
     async def get_control_objective(self, model_id: str, co_id: str) -> dict:
         """Get a single control objective with its composer verdict."""
         resp = await self._get_client().get(
