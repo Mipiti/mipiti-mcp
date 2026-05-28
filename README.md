@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->110<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->114<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -193,6 +193,10 @@ Views over the *effective* model — own entities composed with everything inher
 | `list_reconciliation_rejections` | List the persisted rejections on a model in `rejected_at` ascending order — the same set the candidate detector consults to filter the active queue. Use to render a rejected section in a triage view or to find the surrogate id needed by `unreject_reconciliation_candidate`. |
 | `lift_composition_entity` | Mutating. Promote a shared-anchor entity from two sibling descendants to their lowest common ancestor: each source's copy is soft-deleted and the inherited entity becomes canonical for every descendant of the LCA. Server re-detects field-level and attached-state conflicts against current live state; pass `field_resolutions` / `attached_state_resolutions` keyed by the conflict keys returned in the 400 detail. Server also runs an over-application gate against the LCA's descendant set; pass `acknowledged_third_party_subtrees` to acknowledge extra reach or `skip_overapplication_gate=true` to override after explicit operator confirmation. Bumps version on the LCA + both source descendants; returns `{lift_id, lca_model, descendant_a_model, descendant_b_model, applied_migrations, lift_event}` — the `lift_event` block matches the audit pack's `lift_history` entry. |
 | `split_composition_entity` | Mutating. Inverse of `lift_composition_entity`: push an ancestor-owned entity down to one or more target descendants and soft-delete the ancestor's copy. A new local id is minted on each target; attached state (assertions, jira mappings, risk acceptances) on the ancestor's entity is duplicated to every target. Bumps version on the ancestor + every target descendant; returns `{split_id, ancestor_model, descendant_models, applied_duplications, split_event}` — the `split_event` block matches the audit pack's `split_history` entry. |
+| `preview_undo_lift_composition` | Read-only. Compute the inverse plan (or divergence refusal) for a prior `lift_applied` event WITHOUT mutating state. Returns `{plan, refusal}` — exactly one is non-null. Surface this to the operator before calling `undo_lift_composition_event` so the confirmation step shows the state operations the apply would commit, or the enumerated reasons the divergence detector would refuse. |
+| `undo_lift_composition_event` | Mutating. Apply the inverse of a previous `lift_applied` event. Re-runs the divergence detector immediately before applying and refuses with 409 + a structured refusal block (`detail.refusal.reasons`) when state has materially evolved since the forward lift. On success, persists the inverse state operations across the LCA + every affected source descendant and emits a structured `lift_undone` activity event citing `original_event_id` so the audit pack chains undo to its forward. Returns `{undone_event_id, original_event_id, applied_state_ops, models: {lca_model, source_descendant_models}}`. |
+| `preview_undo_split_composition` | Read-only. Counterpart to `preview_undo_lift_composition` for splits. Same `{plan, refusal}` shape; the plan block carries the split-specific inverse operations (restore at the ancestor, tombstone the duplicated copies on every target descendant). |
+| `undo_split_composition_event` | Mutating. Mirror of `undo_lift_composition_event` for splits. Same divergence-detector contract — refuses with 409 + structured refusal block when state has evolved. On success, restores the ancestor's entity, tombstones the duplicated copies on every target descendant, and emits a structured `split_undone` activity event citing `original_event_id`. Returns `{undone_event_id, original_event_id, applied_state_ops, models: {ancestor_model, descendant_models}}`. |
 
 ### Compliance
 

@@ -1364,3 +1364,114 @@ async def test_split_composition_entity_pins_path_and_body(
     }
     assert "Idempotency-Key" in route.calls.last.request.headers
     await client.close()
+
+
+# ------------------------------------------------------------------
+# Composition undo (lift / split) — URL contract pins
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_preview_lift_undo_pins_path(mock_env: None) -> None:
+    """Pin the literal GET path for the lift-undo preview route. Read-only,
+    so no Idempotency-Key contract; the body is just a passthrough of
+    the backend's ``{plan, refusal}`` envelope."""
+    envelope = {
+        "plan": {
+            "kind": "lift",
+            "original_event_id": "lift-001",
+            "state_ops": [],
+        },
+        "refusal": None,
+    }
+    route = respx.get(
+        f"{_BASE}/api/models/tm-lca/composition/lift/lift-001/undo/preview",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.preview_lift_undo("tm-lca", "lift-001")
+    assert out == envelope
+    assert route.called
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_undo_lift_pins_path_and_idempotency_key(mock_env: None) -> None:
+    """Pin the literal POST path for the lift-undo apply route. Mutating,
+    so the Idempotency-Key header rides on every call so retries
+    deduplicate server-side."""
+    envelope = {
+        "undone_event_id": "undo-001",
+        "original_event_id": "lift-001",
+        "applied_state_ops": [],
+        "models": {
+            "lca_model": {"id": "tm-lca", "assets": []},
+            "source_descendant_models": [
+                {"id": "tm-da", "assets": [{"id": "A1"}]},
+                {"id": "tm-db", "assets": [{"id": "A1"}]},
+            ],
+        },
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-lca/composition/lift/lift-001/undo",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.undo_lift("tm-lca", "lift-001")
+    assert out == envelope
+    assert route.called
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    # No body on the apply call — the event id in the URL is the only input.
+    assert route.calls.last.request.content in (b"", b"null")
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_preview_split_undo_pins_path(mock_env: None) -> None:
+    """Pin the literal GET path for the split-undo preview route."""
+    envelope = {
+        "plan": {
+            "kind": "split",
+            "original_event_id": "split-001",
+            "state_ops": [],
+        },
+        "refusal": None,
+    }
+    route = respx.get(
+        f"{_BASE}/api/models/tm-anc/composition/split/split-001/undo/preview",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.preview_split_undo("tm-anc", "split-001")
+    assert out == envelope
+    assert route.called
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_undo_split_pins_path_and_idempotency_key(mock_env: None) -> None:
+    """Pin the literal POST path for the split-undo apply route. Same
+    Idempotency-Key contract as the lift-undo apply path."""
+    envelope = {
+        "undone_event_id": "undo-002",
+        "original_event_id": "split-001",
+        "applied_state_ops": [],
+        "models": {
+            "ancestor_model": {"id": "tm-anc", "assets": [{"id": "A1"}]},
+            "descendant_models": [
+                {"id": "tm-d1", "assets": []},
+                {"id": "tm-d2", "assets": []},
+            ],
+        },
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-anc/composition/split/split-001/undo",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.undo_split("tm-anc", "split-001")
+    assert out == envelope
+    assert route.called
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    assert route.calls.last.request.content in (b"", b"null")
+    await client.close()

@@ -930,6 +930,86 @@ class MipitiClient:
             },
         )
 
+    async def preview_lift_undo(self, model_id: str, lift_id: str) -> dict:
+        """GET /api/models/{model_id}/composition/lift/{lift_id}/undo/preview.
+
+        Compute + return the inverse-plan summary OR the divergence
+        refusal for a prior ``lift_applied`` event WITHOUT applying.
+        Used by the confirmation flow so the operator sees what an
+        undo would do before committing.
+
+        Body shape: ``{"plan": <UndoPlan> | null, "refusal":
+        <UndoRefusal> | null}`` — exactly one is non-null. The plan
+        block carries the inverse state operations (tombstone /
+        restore / CO rewrites) the apply step would commit; the
+        refusal block carries the enumerated divergence reasons when
+        state has materially evolved.
+
+        Errors: 404 if the cited event doesn't exist or belongs to a
+        different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/lift/{lift_id}/undo/preview",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def undo_lift(self, model_id: str, lift_id: str) -> dict:
+        """POST /api/models/{model_id}/composition/lift/{lift_id}/undo.
+
+        Apply the inverse of a previous ``lift_applied`` event. Runs
+        the divergence detector immediately before applying; refuses
+        loudly when state has materially evolved.
+
+        Returns ``{"undone_event_id": str, "original_event_id": str,
+        "applied_state_ops": [...], "models": {"lca_model":
+        <ThreatModel>, "source_descendant_models": [<ThreatModel>,
+        ...]}}`` on success. The ``undone_event_id`` matches the
+        ``lift_undone`` structured activity event the audit pack
+        chains back to the original lift via ``original_event_id``.
+
+        Errors: 409 with ``detail = {message, refusal: {reasons:
+        [...]}}`` when the divergence detector refuses; 404 if the
+        cited event doesn't exist or belongs to a different model;
+        400 on payload / event-type mismatch; 503 if
+        ``TREE_COMPOSITION_ENABLED`` is off.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/composition/lift/{lift_id}/undo",
+        )
+
+    async def preview_split_undo(self, model_id: str, split_id: str) -> dict:
+        """GET /api/models/{model_id}/composition/split/{split_id}/undo/preview.
+
+        Preview counterpart for split undo. Same ``{plan, refusal}``
+        shape as ``preview_lift_undo``; the plan block carries the
+        split-specific inverse operations (restore at ancestor,
+        tombstone target copies) instead of the lift mirrors.
+        """
+        resp = await self._get_client().get(
+            f"/api/models/{model_id}/composition/split/{split_id}/undo/preview",
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def undo_split(self, model_id: str, split_id: str) -> dict:
+        """POST /api/models/{model_id}/composition/split/{split_id}/undo.
+
+        Apply the inverse of a previous ``split_applied`` event.
+
+        Returns ``{"undone_event_id": str, "original_event_id": str,
+        "applied_state_ops": [...], "models": {"ancestor_model":
+        <ThreatModel>, "descendant_models": [<ThreatModel>, ...]}}``
+        on success.
+
+        Errors: same shape as ``undo_lift`` — 409 on divergence
+        refusal, 404 on missing event, 400 on type mismatch, 503 on
+        flag off.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/composition/split/{split_id}/undo",
+        )
+
     async def get_control_objective(self, model_id: str, co_id: str) -> dict:
         """Get a single control objective with its composer verdict."""
         resp = await self._get_client().get(

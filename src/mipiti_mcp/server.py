@@ -2531,6 +2531,205 @@ async def split_composition_entity(
 
 
 @mcp.tool()
+async def preview_undo_lift_composition(
+    server_version: str,
+    model_id: str,
+    lift_id: str,
+) -> dict:
+    """Preview the inverse plan (or divergence refusal) for a prior
+    ``lift_applied`` event WITHOUT mutating any state.
+
+    Read-only counterpart to ``undo_lift_composition_event``. Used by
+    the confirmation flow so the operator sees what an undo would do
+    before committing — either the inverse state operations the apply
+    step will commit (tombstone the lifted LCA entity, restore the
+    source descendants' copies, rewrite CO references), or the
+    enumerated reasons the divergence detector refuses the undo.
+
+    Args:
+        model_id: The model whose composition view originated the
+            lift. Must match the ``threat_model_id`` carried by the
+            cited activity event; the server rejects with 404 when a
+            caller tries to undo a sibling model's lift through a
+            different model's URL.
+        lift_id: Either the surrogate id of the ``lift_applied``
+            activity event, or the structured ``lift_id`` carried in
+            the event's payload — both lookups are supported.
+
+    Returns::
+
+        {"plan": <UndoPlan> | null,
+         "refusal": <UndoRefusal> | null}
+
+    Exactly one of ``plan`` / ``refusal`` is non-null. The plan block
+    carries the inverse state operations; the refusal block carries
+    the enumerated divergence reasons when state has materially
+    evolved since the forward lift.
+
+    Errors: 404 if the cited event doesn't exist or belongs to a
+    different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not lift_id or not lift_id.strip():
+        raise ToolError("lift_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().preview_lift_undo(model_id, lift_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def undo_lift_composition_event(
+    server_version: str,
+    model_id: str,
+    lift_id: str,
+) -> dict:
+    """Apply the inverse of a previous ``lift_applied`` event.
+
+    Re-runs the divergence detector immediately before applying and
+    refuses with 409 + the structured refusal block when state has
+    materially evolved since the forward lift (assertions submitted on
+    the lifted entity, downstream COs added that reference it, the
+    entity edited, etc.). On success, persists the inverse state
+    operations across the LCA + every affected source descendant and
+    emits a structured ``lift_undone`` activity event citing
+    ``original_event_id`` so the audit pack can chain undo to its
+    forward.
+
+    Args:
+        model_id: The model whose composition view originated the
+            lift. Must match the cited event's ``threat_model_id`` —
+            the server rejects cross-model citations with 404.
+        lift_id: Either the surrogate id of the ``lift_applied``
+            activity event, or the structured ``lift_id`` carried in
+            the event payload.
+
+    Returns::
+
+        {"undone_event_id": str,
+         "original_event_id": str,
+         "applied_state_ops": [...],
+         "models": {"lca_model": <ThreatModel>,
+                    "source_descendant_models": [<ThreatModel>, ...]}}
+
+    Errors: 409 with ``detail = {message, refusal: {reasons: [...]}}``
+    when the divergence detector refuses; 404 if the cited event
+    doesn't exist or belongs to a different model; 400 on payload /
+    event-type mismatch; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+
+    Operator pattern: call ``preview_undo_lift_composition`` first,
+    surface the plan or refusal to the operator, and only call this
+    tool after explicit confirmation.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not lift_id or not lift_id.strip():
+        raise ToolError("lift_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().undo_lift(model_id, lift_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def preview_undo_split_composition(
+    server_version: str,
+    model_id: str,
+    split_id: str,
+) -> dict:
+    """Preview the inverse plan (or divergence refusal) for a prior
+    ``split_applied`` event WITHOUT mutating any state.
+
+    Counterpart to ``preview_undo_lift_composition`` for splits. Same
+    ``{plan, refusal}`` shape; the plan block carries the
+    split-specific inverse operations (restore at the ancestor,
+    tombstone the duplicated copies on every target descendant)
+    instead of the lift mirrors.
+
+    Args:
+        model_id: The ancestor model whose split is being previewed.
+            Must match the cited event's ``threat_model_id``.
+        split_id: Either the surrogate id of the ``split_applied``
+            activity event, or the structured ``split_id`` carried in
+            the event payload.
+
+    Returns::
+
+        {"plan": <UndoPlan> | null,
+         "refusal": <UndoRefusal> | null}
+
+    Errors: 404 if the cited event doesn't exist or belongs to a
+    different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not split_id or not split_id.strip():
+        raise ToolError("split_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().preview_split_undo(model_id, split_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def undo_split_composition_event(
+    server_version: str,
+    model_id: str,
+    split_id: str,
+) -> dict:
+    """Apply the inverse of a previous ``split_applied`` event.
+
+    Mirror of ``undo_lift_composition_event`` for splits. Re-runs the
+    divergence detector before applying and refuses with 409 + a
+    structured refusal block when state has materially evolved since
+    the forward split. On success, restores the ancestor's entity,
+    tombstones the duplicated copies on every target descendant,
+    persists across all affected models, and emits a structured
+    ``split_undone`` activity event citing ``original_event_id``.
+
+    Args:
+        model_id: The ancestor model whose split is being undone.
+            Must match the cited event's ``threat_model_id``.
+        split_id: Either the surrogate id of the ``split_applied``
+            activity event, or the structured ``split_id`` carried in
+            the event payload.
+
+    Returns::
+
+        {"undone_event_id": str,
+         "original_event_id": str,
+         "applied_state_ops": [...],
+         "models": {"ancestor_model": <ThreatModel>,
+                    "descendant_models": [<ThreatModel>, ...]}}
+
+    Errors: same shape as ``undo_lift_composition_event`` — 409 on
+    divergence refusal, 404 on missing event, 400 on type mismatch,
+    503 when ``TREE_COMPOSITION_ENABLED`` is off.
+
+    Operator pattern: call ``preview_undo_split_composition`` first,
+    surface the plan or refusal to the operator, and only call this
+    tool after explicit confirmation.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not split_id or not split_id.strip():
+        raise ToolError("split_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().undo_split(model_id, split_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_control_objective(
     server_version: str,
     model_id: str,
