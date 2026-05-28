@@ -434,7 +434,12 @@ assumption holds. Provide `attested_by`, `statement`, and `expires_at` \
 **Assumption types**: Two types, set via `assumption_type` in `add_assumption`:
 - `non_applicability` — entity is not applicable to the feature. Requires CI \
 verification (submit assertions + run mipiti-verify). Manual attestation is \
-rejected. Auto-created during generation for flagged entities.
+rejected. Originates from the taxonomy-classification step (which judges the \
+feature against the closed 17-primitive taxonomy) or from operator-authored \
+declarations. Generation-time validation failures on individual assets / \
+attackers do NOT auto-create non-applicability assumptions; entities that \
+exhaust the validation loop's retries receive a `quality_warning` field for \
+the operator to review.
 - `external` (default) — responsibility handled by a third party \
 that cannot be CI-verified against the codebase (e.g., vendor SLAs, \
 infrastructure isolation, customer CI hardening). Allows manual attestation \
@@ -465,6 +470,80 @@ still valid; re-attest after restoring
 controls for affected COs and retires the assumption linkage
 4. Accept risk — use the Mipiti web interface (no MCP tool available for \
 risk acceptance)
+
+## Composition (recursive-tree multi-model)
+
+Threat models can compose hierarchically — a child model inherits assets, \
+attackers, components, trust boundaries, and baseline controls from its \
+parent (and transitively from ancestors). With composition enabled, the \
+effective model = own ⊕ inherited; the platform computes effective control \
+objectives, coverage, compliance, reachability, attack paths, and finding \
+inheritance over that composed view.
+
+**When to use**: a child model that shares a security baseline with its \
+parent (e.g., a feature built on top of a multi-tenant platform that already \
+has auth / MFA / RBAC / KMS controls). Composition lets the child operator \
+focus on the feature's delta while the parent's controls credit the child \
+automatically.
+
+### Reading the composed view
+
+Start with the overview, then drill in:
+- `get_composition_overview` — flag state, tree position, own-vs-inherited \
+counts, reconciliation badge. Cheapest call (~1-2KB). Use first.
+- `composition_entities` — full own + inherited entity set per kind.
+- `composition_control_objectives` — effective CO list (classified own / \
+cross / inherited).
+- `composition_coverage` — effective coverage / compliance numbers.
+- `composition_reachability` — composed reachability verdicts.
+- `composition_attack_paths` — AttackPath references resolved against the \
+effective entity set (paths spanning inherited entities resolve cleanly).
+
+### Reconciliation — surfaced cross-tree duplicates
+
+When the same entity is authored on both the child and an ancestor (e.g., \
+both name an "API Gateway" component), the detector surfaces it as a \
+reconciliation candidate. Two tiers:
+- `certain` — identical name AND identical structural refs (same trust \
+boundary / asset attachments). Auto-merge eligible.
+- `heuristic` — identical name only; structural refs differ. Triage needed.
+
+Tools:
+- `composition_reconciliation` — paginated candidate list with names, \
+source-model titles, and reasons.
+- `reject_reconciliation_candidate` — record "these are NOT duplicates"; \
+the detector filters the pair out of future queues, durable at org scope.
+- `unreject_reconciliation_candidate` — undo a rejection.
+- `list_reconciliation_rejections` — rejected pairs for a model.
+
+### Mutations — lift and split
+
+When the operator confirms a duplicate should be reconciled, lift it to \
+the lowest common ancestor (LCA). Inverse: split an ancestor entity down \
+to specific descendants when the entity isn't shared after all.
+- `lift_composition_entity` — promote shared-anchor entity from two \
+descendants to their LCA. Carries operator confirmations (LCA, third-party \
+subtree acknowledgements, field-resolutions, attached-state resolutions, \
+optional over-application-gate override). Emits `lift_applied`; audit pack \
+surfaces under `lift_history`.
+- `split_composition_entity` — push an ancestor entity down to operator- \
+chosen descendants. Emits `split_applied`; audit pack `split_history`.
+
+### Undo with divergence detection
+
+Both lift and split mutations are reversible. The divergence detector \
+refuses the undo with enumerated reasons if state has continued to evolve \
+since the mutation (e.g., entity edited after lift, re-lifted further up, \
+descendant collision, attached-state mutation, model deletion).
+- `preview_undo_lift_composition` / `preview_undo_split_composition` — \
+read-only; returns `{plan, refusal}`. Always preview FIRST.
+- `undo_lift_composition_event` / `undo_split_composition_event` — apply \
+the inverse mutation. Emits `lift_undone` / `split_undone` citing \
+`original_event_id`.
+
+**Operator pattern**: preview → inspect plan or refusal-reasons → if clean \
+proceed with apply; if refused, surface the enumerated reasons (operator \
+decides whether to edit the divergence manually or accept it).
 
 """
 
