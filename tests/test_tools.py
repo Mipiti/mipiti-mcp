@@ -94,6 +94,10 @@ from mipiti_mcp.server import (
     list_reconciliation_rejections,
     lift_composition_entity,
     split_composition_entity,
+    preview_undo_lift_composition,
+    undo_lift_composition_event,
+    preview_undo_split_composition,
+    undo_split_composition_event,
     get_control_objective,
     get_asset,
     get_attacker,
@@ -496,6 +500,46 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                 "source_entity_id": "A1",
                 "target_descendants": ["tm-d1", "tm-d2"],
                 "new_entity_ids": {"tm-d1": "A1", "tm-d2": "A1"},
+            },
+        },
+        "preview_lift_undo": {
+            "plan": {
+                "kind": "lift",
+                "original_event_id": "lift-001",
+                "state_ops": [],
+            },
+            "refusal": None,
+        },
+        "undo_lift": {
+            "undone_event_id": "undo-001",
+            "original_event_id": "lift-001",
+            "applied_state_ops": [],
+            "models": {
+                "lca_model": {"id": "tm-lca", "assets": []},
+                "source_descendant_models": [
+                    {"id": "tm-da", "assets": [{"id": "A1"}]},
+                    {"id": "tm-db", "assets": [{"id": "A1"}]},
+                ],
+            },
+        },
+        "preview_split_undo": {
+            "plan": {
+                "kind": "split",
+                "original_event_id": "split-001",
+                "state_ops": [],
+            },
+            "refusal": None,
+        },
+        "undo_split": {
+            "undone_event_id": "undo-002",
+            "original_event_id": "split-001",
+            "applied_state_ops": [],
+            "models": {
+                "ancestor_model": {"id": "tm-anc", "assets": [{"id": "A1"}]},
+                "descendant_models": [
+                    {"id": "tm-d1", "assets": []},
+                    {"id": "tm-d2", "assets": []},
+                ],
             },
         },
         "get_control_objective": {
@@ -3689,4 +3733,490 @@ class TestSplitCompositionEntity:
                     kind="assets",
                     ancestor_local_id="A1",
                     target_descendants=["tm-d1"],
+                )
+
+
+class TestPreviewUndoLiftComposition:
+    @pytest.mark.asyncio
+    async def test_happy_path_plan_returned(self) -> None:
+        envelope = {
+            "plan": {
+                "kind": "lift",
+                "original_event_id": "lift-XYZ",
+                "state_ops": [
+                    {"op": "tombstone", "model_id": "tm-lca", "kind": "assets", "id": "A1"},
+                    {"op": "restore", "model_id": "tm-da", "kind": "assets", "id": "A1"},
+                ],
+            },
+            "refusal": None,
+        }
+        mock = _mock_client(
+            preview_lift_undo=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await preview_undo_lift_composition(
+                server_version="0",
+                model_id="tm-lca",
+                lift_id="lift-XYZ",
+            )
+        assert result == envelope
+        mock.preview_lift_undo.assert_awaited_once_with("tm-lca", "lift-XYZ")
+
+    @pytest.mark.asyncio
+    async def test_happy_path_refusal_returned(self) -> None:
+        # The detector refusal block is returned without any
+        # transformation so the agent can surface the structured
+        # reasons to the operator.
+        envelope = {
+            "plan": None,
+            "refusal": {
+                "reasons": [
+                    {"code": "downstream_assertion_present",
+                     "model_id": "tm-da",
+                     "details": "AS1 was submitted after the lift."},
+                ],
+            },
+        }
+        mock = _mock_client(
+            preview_lift_undo=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await preview_undo_lift_composition(
+                server_version="0",
+                model_id="tm-lca",
+                lift_id="lift-XYZ",
+            )
+        assert result == envelope
+        assert result["refusal"]["reasons"][0]["code"] == "downstream_assertion_present"
+
+    @pytest.mark.asyncio
+    async def test_empty_model_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="model_id is required"):
+                await preview_undo_lift_composition(
+                    server_version="0",
+                    model_id="",
+                    lift_id="lift-XYZ",
+                )
+        mock.preview_lift_undo.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_lift_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="lift_id is required"):
+                await preview_undo_lift_composition(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="",
+                )
+        mock.preview_lift_undo.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_404_missing_event_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            preview_lift_undo=AsyncMock(
+                side_effect=_http_error(
+                    404, "Event lift-missing not found.", method="GET",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await preview_undo_lift_composition(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="lift-missing",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            preview_lift_undo=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="GET",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await preview_undo_lift_composition(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="lift-XYZ",
+                )
+
+
+class TestUndoLiftCompositionEvent:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+        envelope = {
+            "undone_event_id": "undo-001",
+            "original_event_id": "lift-XYZ",
+            "applied_state_ops": [
+                {"op": "tombstone", "model_id": "tm-lca", "kind": "assets", "id": "A1"},
+            ],
+            "models": {
+                "lca_model": {"id": "tm-lca", "version": 5, "assets": []},
+                "source_descendant_models": [
+                    {"id": "tm-da", "version": 7, "assets": [{"id": "A1"}]},
+                    {"id": "tm-db", "version": 7, "assets": [{"id": "A1"}]},
+                ],
+            },
+        }
+        mock = _mock_client(
+            undo_lift=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await undo_lift_composition_event(
+                server_version="0",
+                model_id="tm-lca",
+                lift_id="lift-XYZ",
+            )
+        assert result == envelope
+        mock.undo_lift.assert_awaited_once_with("tm-lca", "lift-XYZ")
+
+    @pytest.mark.asyncio
+    async def test_empty_model_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="model_id is required"):
+                await undo_lift_composition_event(
+                    server_version="0",
+                    model_id="",
+                    lift_id="lift-XYZ",
+                )
+        mock.undo_lift.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_lift_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="lift_id is required"):
+                await undo_lift_composition_event(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="   ",
+                )
+        mock.undo_lift.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_409_divergence_surfaces_refusal_reasons(self) -> None:
+        # The 409 body carries the structured refusal block under
+        # ``detail``; the tool surfaces it via the standard API-error
+        # path so the agent can present the reasons unchanged.
+        import httpx
+        req = httpx.Request("POST", "https://api/x")
+        resp = httpx.Response(
+            409,
+            request=req,
+            json={
+                "detail": {
+                    "message": (
+                        "Lift undo refused: state has diverged "
+                        "since the lift was applied."
+                    ),
+                    "refusal": {
+                        "reasons": [
+                            {"code": "downstream_assertion_present",
+                             "model_id": "tm-da"},
+                            {"code": "co_added_after_event",
+                             "model_id": "tm-lca"},
+                        ],
+                    },
+                },
+            },
+        )
+        err = httpx.HTTPStatusError("409", request=req, response=resp)
+        mock = _mock_client(undo_lift=AsyncMock(side_effect=err))
+        with _patch_client(mock):
+            with pytest.raises(ToolError) as excinfo:
+                await undo_lift_composition_event(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="lift-XYZ",
+                )
+        msg = str(excinfo.value)
+        assert "409" in msg
+        # Refusal reasons must appear verbatim so the agent renders
+        # them to the operator without parsing the wrapper text.
+        assert "downstream_assertion_present" in msg
+        assert "co_added_after_event" in msg
+
+    @pytest.mark.asyncio
+    async def test_404_missing_event_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            undo_lift=AsyncMock(
+                side_effect=_http_error(
+                    404, "Event lift-missing not found.", method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await undo_lift_composition_event(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="lift-missing",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            undo_lift=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await undo_lift_composition_event(
+                    server_version="0",
+                    model_id="tm-lca",
+                    lift_id="lift-XYZ",
+                )
+
+
+class TestPreviewUndoSplitComposition:
+    @pytest.mark.asyncio
+    async def test_happy_path_plan_returned(self) -> None:
+        envelope = {
+            "plan": {
+                "kind": "split",
+                "original_event_id": "split-XYZ",
+                "state_ops": [
+                    {"op": "restore", "model_id": "tm-anc",
+                     "kind": "assets", "id": "A1"},
+                ],
+            },
+            "refusal": None,
+        }
+        mock = _mock_client(
+            preview_split_undo=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await preview_undo_split_composition(
+                server_version="0",
+                model_id="tm-anc",
+                split_id="split-XYZ",
+            )
+        assert result == envelope
+        mock.preview_split_undo.assert_awaited_once_with("tm-anc", "split-XYZ")
+
+    @pytest.mark.asyncio
+    async def test_happy_path_refusal_returned(self) -> None:
+        envelope = {
+            "plan": None,
+            "refusal": {
+                "reasons": [
+                    {"code": "target_entity_edited",
+                     "model_id": "tm-d1",
+                     "details": "Description was edited after the split."},
+                ],
+            },
+        }
+        mock = _mock_client(
+            preview_split_undo=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await preview_undo_split_composition(
+                server_version="0",
+                model_id="tm-anc",
+                split_id="split-XYZ",
+            )
+        assert result["refusal"]["reasons"][0]["code"] == "target_entity_edited"
+
+    @pytest.mark.asyncio
+    async def test_empty_model_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="model_id is required"):
+                await preview_undo_split_composition(
+                    server_version="0",
+                    model_id="",
+                    split_id="split-XYZ",
+                )
+        mock.preview_split_undo.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_split_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="split_id is required"):
+                await preview_undo_split_composition(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="",
+                )
+        mock.preview_split_undo.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_404_missing_event_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            preview_split_undo=AsyncMock(
+                side_effect=_http_error(
+                    404, "Event split-missing not found.", method="GET",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await preview_undo_split_composition(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="split-missing",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            preview_split_undo=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="GET",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await preview_undo_split_composition(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="split-XYZ",
+                )
+
+
+class TestUndoSplitCompositionEvent:
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+        envelope = {
+            "undone_event_id": "undo-002",
+            "original_event_id": "split-XYZ",
+            "applied_state_ops": [
+                {"op": "restore", "model_id": "tm-anc",
+                 "kind": "assets", "id": "A1"},
+                {"op": "tombstone", "model_id": "tm-d1",
+                 "kind": "assets", "id": "A1"},
+            ],
+            "models": {
+                "ancestor_model": {"id": "tm-anc", "version": 8,
+                                    "assets": [{"id": "A1"}]},
+                "descendant_models": [
+                    {"id": "tm-d1", "version": 6, "assets": []},
+                    {"id": "tm-d2", "version": 6, "assets": []},
+                ],
+            },
+        }
+        mock = _mock_client(
+            undo_split=AsyncMock(return_value=envelope),
+        )
+        with _patch_client(mock):
+            result = await undo_split_composition_event(
+                server_version="0",
+                model_id="tm-anc",
+                split_id="split-XYZ",
+            )
+        assert result == envelope
+        mock.undo_split.assert_awaited_once_with("tm-anc", "split-XYZ")
+
+    @pytest.mark.asyncio
+    async def test_empty_model_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="model_id is required"):
+                await undo_split_composition_event(
+                    server_version="0",
+                    model_id="",
+                    split_id="split-XYZ",
+                )
+        mock.undo_split.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_split_id_rejected_preflight(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="split_id is required"):
+                await undo_split_composition_event(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="",
+                )
+        mock.undo_split.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_409_divergence_surfaces_refusal_reasons(self) -> None:
+        import httpx
+        req = httpx.Request("POST", "https://api/x")
+        resp = httpx.Response(
+            409,
+            request=req,
+            json={
+                "detail": {
+                    "message": (
+                        "Split undo refused: state has diverged "
+                        "since the split was applied."
+                    ),
+                    "refusal": {
+                        "reasons": [
+                            {"code": "target_entity_edited",
+                             "model_id": "tm-d1"},
+                        ],
+                    },
+                },
+            },
+        )
+        err = httpx.HTTPStatusError("409", request=req, response=resp)
+        mock = _mock_client(undo_split=AsyncMock(side_effect=err))
+        with _patch_client(mock):
+            with pytest.raises(ToolError) as excinfo:
+                await undo_split_composition_event(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="split-XYZ",
+                )
+        msg = str(excinfo.value)
+        assert "409" in msg
+        assert "target_entity_edited" in msg
+
+    @pytest.mark.asyncio
+    async def test_404_missing_event_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            undo_split=AsyncMock(
+                side_effect=_http_error(
+                    404, "Event split-missing not found.", method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="404"):
+                await undo_split_composition_event(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="split-missing",
+                )
+
+    @pytest.mark.asyncio
+    async def test_503_flag_off_surfaces_clean_tool_error(self) -> None:
+        mock = _mock_client(
+            undo_split=AsyncMock(
+                side_effect=_http_error(
+                    503,
+                    "Composition is not enabled on this instance.",
+                    method="POST",
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="503"):
+                await undo_split_composition_event(
+                    server_version="0",
+                    model_id="tm-anc",
+                    split_id="split-XYZ",
                 )
