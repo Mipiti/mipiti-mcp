@@ -354,6 +354,19 @@ class MipitiClient:
         data = await self._patch(f"/api/models/{model_id}", {"title": name})
         return RenameResult.model_validate(data)
 
+    async def set_model_parent(self, model_id: str, parent_id: str | None) -> dict:
+        """Set or clear a model's parent in the recursive tree.
+
+        Mirrors ``PUT /api/models/{model_id}/parent``. Pass ``parent_id=None``
+        (or an empty string) to clear the parent and make the model a root.
+        Returns ``{model_id, parent_id, children}``.
+        """
+        data = await self._put(
+            f"/api/models/{model_id}/parent",
+            {"parent_id": parent_id or None},
+        )
+        return data
+
     async def delete_model(self, model_id: str) -> None:
         await self._delete(f"/api/models/{model_id}")
 
@@ -635,16 +648,31 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def composition_entities(self, model_id: str) -> dict:
+    async def composition_entities(
+        self,
+        model_id: str,
+        page: int = 1,
+        page_size: int = 100,
+        kind: str | None = None,
+    ) -> dict:
         """Effective entity set (own ⊕ inherited) keyed by kind.
 
         Returns ``{model_id, flag_enabled, kinds: {trust_boundaries: [...],
-        components: [...], assets: [...], attackers: [...], ...}}``. Each
-        entry carries ``{kind, qualified_id, owner_model_id, owner_title,
-        origin, entity}``.
+        components: [...], assets: [...], attackers: [...], ...},
+        totals, page, page_size}``. Each entry carries ``{kind,
+        qualified_id, owner_model_id, owner_title, origin, entity}``.
+
+        ``page`` / ``page_size`` (default 100) paginate within each kind
+        bucket. ``kind`` limits the response to a single bucket (e.g.
+        ``"attackers"``); other buckets come back empty but their
+        ``totals`` entry stays accurate.
         """
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if kind is not None:
+            params["kind"] = kind
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/entities",
+            params=params,
         )
         resp.raise_for_status()
         return resp.json()
@@ -661,27 +689,49 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def composition_coverage(self, model_id: str) -> dict:
+    async def composition_coverage(
+        self,
+        model_id: str,
+        page: int = 1,
+        page_size: int = 100,
+        origin: str | None = None,
+    ) -> dict:
         """Effective coverage rollup with credited inheritance.
 
         Per CO: ``{co_qid, is_covered, own_credit, inherited_credit,
         contributing_controls: [{control_id, owner_model_id, origin,
         is_verified, mitigation_group}, ...]}``.
+
+        ``page`` / ``page_size`` (default 100) paginate. ``origin``
+        (``"own" | "cross" | "inherited"``) filters the contributing
+        controls per CO to that provenance.
         """
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if origin is not None:
+            params["origin"] = origin
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/coverage",
+            params=params,
         )
         resp.raise_for_status()
         return resp.json()
 
-    async def composition_reachability(self, model_id: str) -> dict:
+    async def composition_reachability(
+        self,
+        model_id: str,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict:
         """Per-CO reachability verdicts over the composed effective topology.
 
         Returns ``{model_id, flag_enabled, verdicts: [{co_qid, asset_qid,
-        attacker_qid, kind, reason}, ...]}``.
+        attacker_qid, kind, reason}, ...], total, page, page_size}``.
+
+        ``page`` / ``page_size`` (default 100) paginate.
         """
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/reachability",
+            params={"page": page, "page_size": page_size},
         )
         resp.raise_for_status()
         return resp.json()

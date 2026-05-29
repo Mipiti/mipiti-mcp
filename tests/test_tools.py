@@ -68,6 +68,7 @@ from mipiti_mcp.server import (
     remove_attacker,
     remove_evidence,
     rename_threat_model,
+    set_threat_model_parent,
     select_compliance_frameworks,
     select_system_compliance_frameworks,
     submit_assertions,
@@ -131,6 +132,9 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "list_models": [ModelSummary.model_validate(m) for m in SAMPLE_MODELS_LIST],
         "get_model": _tm,
         "rename_model": RenameResult(id="tm-001", title="New"),
+        "set_model_parent": {
+            "model_id": "tm-001", "parent_id": "tm-parent", "children": [],
+        },
         "delete_model": None,
         "start_export_model": "job_export_csv",
         "start_export_model_full": "job_export_full",
@@ -885,6 +889,32 @@ class TestDeleteThreatModel:
             result = await delete_threat_model(server_version="0", model_id="tm-001")
         assert result["deleted"] is True
         mock.delete_model.assert_awaited_once()
+
+
+class TestSetThreatModelParent:
+    @pytest.mark.asyncio
+    async def test_set_parent(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await set_threat_model_parent(
+                server_version="0", model_id="tm-001", parent_id="tm-parent",
+            )
+        assert result["model_id"] == "tm-001"
+        assert result["parent_id"] == "tm-parent"
+        mock.set_model_parent.assert_awaited_once_with("tm-001", "tm-parent")
+
+    @pytest.mark.asyncio
+    async def test_clear_parent(self) -> None:
+        mock = _mock_client(set_model_parent=AsyncMock(return_value={
+            "model_id": "tm-001", "parent_id": None, "children": [],
+        }))
+        with _patch_client(mock):
+            result = await set_threat_model_parent(
+                server_version="0", model_id="tm-001", parent_id=None,
+            )
+        assert result["model_id"] == "tm-001"
+        assert result["parent_id"] is None
+        mock.set_model_parent.assert_awaited_once_with("tm-001", None)
 
 
 class TestExportThreatModelArchive:
@@ -2521,7 +2551,9 @@ class TestListEffectiveEntities:
         assert result["flag_enabled"] is True
         assert result["kinds"]["assets"][0]["qualified_id"] == "tm-001::A1"
         assert result["kinds"]["assets"][0]["origin"] == "own"
-        mock.composition_entities.assert_awaited_once_with("tm-001")
+        mock.composition_entities.assert_awaited_once_with(
+            "tm-001", page=1, page_size=100, kind=None,
+        )
 
     @pytest.mark.asyncio
     async def test_flag_off_returns_empty_kinds(self) -> None:
@@ -2599,7 +2631,9 @@ class TestGetEffectiveCoverage:
         assert row["own_credit"] == 1.0
         assert row["inherited_credit"] == 0.0
         assert row["contributing_controls"][0]["control_id"] == "CTRL-01"
-        mock.composition_coverage.assert_awaited_once_with("tm-001")
+        mock.composition_coverage.assert_awaited_once_with(
+            "tm-001", page=1, page_size=100, origin=None,
+        )
 
     @pytest.mark.asyncio
     async def test_flag_off_returns_empty(self) -> None:
@@ -2637,7 +2671,9 @@ class TestGetReachVerdicts:
         v = result["verdicts"][0]
         assert v["co_qid"] == "tm-001::CO1"
         assert v["kind"] in {"reachable", "unreachable", "indeterminate"}
-        mock.composition_reachability.assert_awaited_once_with("tm-001")
+        mock.composition_reachability.assert_awaited_once_with(
+            "tm-001", page=1, page_size=100,
+        )
 
     @pytest.mark.asyncio
     async def test_flag_off_returns_empty(self) -> None:

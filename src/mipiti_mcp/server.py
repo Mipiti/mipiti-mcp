@@ -1162,6 +1162,43 @@ async def rename_threat_model(server_version: str, model_id: str, name: str) -> 
 
 
 @mcp.tool()
+async def set_threat_model_parent(
+    server_version: str,
+    model_id: str,
+    parent_id: Optional[str] = None,
+) -> dict:
+    """Set or clear a model's parent in the recursive ThreatModel tree.
+
+    Wraps ``PUT /api/models/{model_id}/parent``. The backend validates
+    workspace ownership, prevents cycles (proposed parent cannot be a
+    descendant of this model), and enforces the ``MAX_TREE_DEPTH``
+    ceiling. Composition + inheritance read paths use this edge to walk
+    the ancestor chain.
+
+    Args:
+        model_id: ID of the threat model whose parent is being set.
+        parent_id: ID of the parent model. Pass ``null`` (or omit) to
+            clear the parent and make this model a root.
+
+    Returns:
+        ``{model_id, parent_id, children}`` — the updated tree view of
+        this node, including the new parent edge and the current child
+        list.
+
+    Raises (surfaces as ToolError with the backend status code):
+        400 — invalid (e.g. self-parent, cross-workspace, depth exceeded);
+        404 — model or parent not found;
+        409 — cycle (proposed parent is already a descendant);
+        503 — persistence unavailable or recursive tree feature disabled.
+    """
+    try:
+        result = await _get_client().set_model_parent(model_id, parent_id)
+        return result
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def delete_threat_model(server_version: str, model_id: str) -> dict:
     """Delete a threat model and all associated data. This cannot be undone.
 
@@ -1856,6 +1893,9 @@ async def get_composition_overview(
 async def list_effective_entities(
     server_version: str,
     model_id: str,
+    page: int = 1,
+    page_size: int = 100,
+    kind: Optional[str] = None,
 ) -> dict:
     """Effective entity set (own ⊕ inherited) keyed by kind.
 
@@ -1870,6 +1910,14 @@ async def list_effective_entities(
     ``get_effective_coverage`` to see how inherited topology contributes
     to coverage credit.
 
+    Pagination: ``page`` (1-indexed, default 1) + ``page_size`` (default
+    100, max 500) slice each kind bucket. The response also includes
+    ``totals`` per kind so callers can decide what to page through next.
+
+    Filter: ``kind`` (single value, e.g. ``"attackers"``) returns only
+    that bucket — other buckets come back empty but their totals stay
+    accurate so callers can plan follow-up reads.
+
     Return shape::
 
         {
@@ -1879,6 +1927,8 @@ async def list_effective_entities(
               owner_title, origin, entity}, ...],
             components: [...], assets: [...], attackers: [...], ...
           },
+          totals: {trust_boundaries: int, components: int, ...},
+          page, page_size,
         }
 
     When composition is disabled on the backend, ``kinds`` is returned
@@ -1886,9 +1936,15 @@ async def list_effective_entities(
 
     Args:
         model_id: ID of the threat model.
+        page: 1-indexed page number (default 1).
+        page_size: Items per page within each kind (default 100, max 500).
+        kind: Restrict to a single bucket (e.g. ``"attackers"``). Other
+            kinds come back empty but ``totals`` stays accurate.
     """
     try:
-        return _dump(await _get_client().composition_entities(model_id))
+        return _dump(await _get_client().composition_entities(
+            model_id, page=page, page_size=page_size, kind=kind,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1937,6 +1993,9 @@ async def list_effective_control_objectives(
 async def get_effective_coverage(
     server_version: str,
     model_id: str,
+    page: int = 1,
+    page_size: int = 100,
+    origin: Optional[str] = None,
 ) -> dict:
     """Effective coverage rollup with credited inheritance.
 
@@ -1948,6 +2007,14 @@ async def get_effective_coverage(
     reflects ``TREE_COMPOSITION_ENABLED`` math, not the per-model
     coverage shown by ``get_verification_report``.
 
+    Pagination: ``page`` (1-indexed, default 1) + ``page_size`` (default
+    100, max 500). ``total`` is returned for the full CO count.
+
+    Filter: ``origin`` ∈ ``{"own", "cross", "inherited"}`` slices the
+    contributing-controls list per CO to that provenance — useful when
+    an agent only needs to see what the focal model contributes vs
+    what it inherits.
+
     Return shape::
 
         {
@@ -1958,6 +2025,7 @@ async def get_effective_coverage(
                origin, is_verified, mitigation_group}, ...]},
             ...
           ],
+          total, page, page_size,
         }
 
     When composition is disabled on the backend, ``coverage`` is empty
@@ -1965,9 +2033,15 @@ async def get_effective_coverage(
 
     Args:
         model_id: ID of the threat model.
+        page: 1-indexed page number (default 1).
+        page_size: COs per page (default 100, max 500).
+        origin: Filter contributing controls per CO to a single
+            provenance: ``"own"``, ``"cross"``, or ``"inherited"``.
     """
     try:
-        return _dump(await _get_client().composition_coverage(model_id))
+        return _dump(await _get_client().composition_coverage(
+            model_id, page=page, page_size=page_size, origin=origin,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1976,6 +2050,8 @@ async def get_effective_coverage(
 async def get_reach_verdicts(
     server_version: str,
     model_id: str,
+    page: int = 1,
+    page_size: int = 100,
 ) -> dict:
     """Per-CO reachability verdicts over the *composed* effective topology.
 
@@ -1985,6 +2061,9 @@ async def get_reach_verdicts(
     references. Use this when the model is a child on the composition
     tree and you need reach state that reflects the ancestor topology,
     not just the local model document.
+
+    Pagination: ``page`` (1-indexed, default 1) + ``page_size`` (default
+    100, max 500). ``total`` is returned for the full verdict count.
 
     Return shape::
 
@@ -1996,6 +2075,7 @@ async def get_reach_verdicts(
              reason: <structural label>},
             ...
           ],
+          total, page, page_size,
         }
 
     When composition is disabled on the backend, ``verdicts`` is empty
@@ -2004,9 +2084,13 @@ async def get_reach_verdicts(
 
     Args:
         model_id: ID of the threat model.
+        page: 1-indexed page number (default 1).
+        page_size: Verdicts per page (default 100, max 500).
     """
     try:
-        return _dump(await _get_client().composition_reachability(model_id))
+        return _dump(await _get_client().composition_reachability(
+            model_id, page=page, page_size=page_size,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
