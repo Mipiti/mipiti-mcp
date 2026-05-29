@@ -1475,3 +1475,107 @@ async def test_undo_split_pins_path_and_idempotency_key(mock_env: None) -> None:
     assert "Idempotency-Key" in route.calls.last.request.headers
     assert route.calls.last.request.content in (b"", b"null")
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_set_parent_sets_id(mock_env: None) -> None:
+    payload = dict(SAMPLE_THREAT_MODEL, version=2)
+    route = respx.patch(
+        f"{_BASE}/api/models/tm-001/parent",
+    ).mock(return_value=httpx.Response(200, json=payload))
+    client = MipitiClient()
+    out = await client.set_parent("tm-001", "tm-parent")
+    assert out.id == "tm-001"
+    assert out.version == 2
+    assert route.called
+    assert json.loads(route.calls.last.request.content) == {"parent_id": "tm-parent"}
+    assert "Idempotency-Key" in route.calls.last.request.headers
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_set_parent_clears_with_none(mock_env: None) -> None:
+    payload = dict(SAMPLE_THREAT_MODEL, version=3)
+    route = respx.patch(
+        f"{_BASE}/api/models/tm-001/parent",
+    ).mock(return_value=httpx.Response(200, json=payload))
+    client = MipitiClient()
+    out = await client.set_parent("tm-001", None)
+    assert out.id == "tm-001"
+    assert route.called
+    assert json.loads(route.calls.last.request.content) == {"parent_id": None}
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_entities_forwards_pagination_and_kind(
+    mock_env: None,
+) -> None:
+    payload = {
+        "model_id": "tm-001", "flag_enabled": True,
+        "kinds": {"attackers": []},
+        "total": 0, "page": 2, "page_size": 25,
+    }
+    route = respx.get(f"{_BASE}/api/models/tm-001/composition/entities").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    out = await client.composition_entities(
+        "tm-001", page=2, page_size=25, kind="attackers",
+    )
+    assert out["page"] == 2
+    assert route.called
+    request = route.calls.last.request
+    assert request.url.params.get("page") == "2"
+    assert request.url.params.get("page_size") == "25"
+    assert request.url.params.get("kind") == "attackers"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_coverage_forwards_pagination_and_origin(
+    mock_env: None,
+) -> None:
+    payload = {
+        "model_id": "tm-001", "flag_enabled": True, "coverage": [],
+        "total": 0, "page": 1, "page_size": 50,
+    }
+    route = respx.get(f"{_BASE}/api/models/tm-001/composition/coverage").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    await client.composition_coverage(
+        "tm-001", page=1, page_size=50, origin="inherited",
+    )
+    request = route.calls.last.request
+    assert request.url.params.get("page") == "1"
+    assert request.url.params.get("page_size") == "50"
+    assert request.url.params.get("origin") == "inherited"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_composition_reachability_forwards_pagination_and_kind_filter(
+    mock_env: None,
+) -> None:
+    payload = {
+        "model_id": "tm-001", "flag_enabled": True, "verdicts": [],
+        "total": 0, "page": 3, "page_size": 10,
+    }
+    route = respx.get(f"{_BASE}/api/models/tm-001/composition/reachability").mock(
+        return_value=httpx.Response(200, json=payload),
+    )
+    client = MipitiClient()
+    await client.composition_reachability(
+        "tm-001", page=3, page_size=10, kind_filter="indeterminate",
+    )
+    request = route.calls.last.request
+    assert request.url.params.get("page") == "3"
+    assert request.url.params.get("page_size") == "10"
+    assert request.url.params.get("kind_filter") == "indeterminate"
+    await client.close()
