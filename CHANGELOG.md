@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `server_version` validator no longer bypassable via empty string. The previous shape (`if client_version and client_version != _SERVER_VERSION:`) short-circuited when an agent omitted the field, defeating the pin's safety guarantee (tool catalog + parameter schemas can change between submodule pointer bumps; the server must refuse stale calls). Empty string now rejects alongside any mismatch. Five new tests pin the staleness-rejection path so a future short-circuit reopens-the-bypass change breaks CI loudly.
+- Staleness-rejection message now describes the empirically-verified recovery sequence in Claude Code (exit + `claude mcp remove` + resume + exit + `claude mcp add` + reauth + resume). The earlier wording ("Reconnect your MCP client (e.g., run /mcp in Claude Code and reconnect)") was misleading: a `/mcp` reconnect / reauth / disable+re-enable does not refresh tool descriptions in the live session — only a full server-config teardown does.
+
 ### Added
 
 - `set_threat_model_parent(model_id, parent_id)` MCP tool wrapping `PATCH /api/models/{id}/parent`. Sets (or clears, with `parent_id=None`) a model's position on the recursive composition tree so child models inherit topology, control objectives, and other entities from their ancestors. Server rejects cycles and over-deep chains with HTTP 400; bumps the model version on success. Returns the updated threat model.

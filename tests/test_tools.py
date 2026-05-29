@@ -4319,3 +4319,99 @@ class TestUndoSplitCompositionEvent:
                     model_id="tm-anc",
                     split_id="split-XYZ",
                 )
+
+
+class TestVersionCheckMiddleware:
+    """Cover the staleness-rejection path of ``VersionCheckMiddleware``.
+
+    The middleware exists so the server can refuse calls under a stale
+    tool catalog (renamed params, new required fields, removed tools).
+    A bypass via empty ``server_version`` defeats that guarantee — the
+    test below pins both the mismatch-rejection and the empty-rejection
+    paths so any future short-circuit (e.g. ``if client_version and ...``)
+    breaks CI loudly instead of silently re-opening the bypass.
+    """
+
+    def _make_context(self, server_version):
+        # Minimal stub matching the ``context.message.arguments`` shape
+        # the middleware reads.
+        class _Msg:
+            arguments = {"server_version": server_version}
+        class _Ctx:
+            message = _Msg()
+        return _Ctx()
+
+    @pytest.mark.asyncio
+    async def test_matching_sha_passes_through(self) -> None:
+        from mipiti_mcp.server import VersionCheckMiddleware, _SERVER_VERSION
+        mw = VersionCheckMiddleware()
+        called = AsyncMock(return_value="ok")
+        result = await mw.on_call_tool(self._make_context(_SERVER_VERSION), called)
+        called.assert_awaited_once()
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_stale_sha_rejected_with_update_message(self) -> None:
+        from mipiti_mcp.server import (
+            VersionCheckMiddleware,
+            _INSTRUCTIONS_UPDATE_MESSAGE,
+        )
+        mw = VersionCheckMiddleware()
+        called = AsyncMock()
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                self._make_context("stale-sha-0000"), called,
+            )
+        called.assert_not_awaited()
+        assert _INSTRUCTIONS_UPDATE_MESSAGE in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_empty_string_rejected_too(self) -> None:
+        """Empty ``server_version`` must not bypass the check.
+
+        Earlier shape was ``if client_version and client_version != _SV:``
+        — the leading truthiness check let an agent skip the safety
+        guarantee by sending ``server_version=""``. This test pins the
+        rejection so the bypass cannot reappear silently.
+        """
+        from mipiti_mcp.server import (
+            VersionCheckMiddleware,
+            _INSTRUCTIONS_UPDATE_MESSAGE,
+        )
+        mw = VersionCheckMiddleware()
+        called = AsyncMock()
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(self._make_context(""), called)
+        called.assert_not_awaited()
+        assert _INSTRUCTIONS_UPDATE_MESSAGE in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_missing_server_version_arg_rejected_too(self) -> None:
+        """No ``server_version`` key at all is treated the same as empty."""
+        from mipiti_mcp.server import VersionCheckMiddleware
+        mw = VersionCheckMiddleware()
+        # Build a context whose arguments dict has no server_version key.
+        class _Msg:
+            arguments = {"model_id": "tm-X"}
+        class _Ctx:
+            message = _Msg()
+        called = AsyncMock()
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(_Ctx(), called)
+        called.assert_not_awaited()
+
+    def test_update_message_does_not_anchor_on_one_client_name(self) -> None:
+        """The update message MUST give the operator a recoverable path
+        without hardcoding a specific MCP server name. ``Mipiti`` is the
+        default (from public docs) but the message must explicitly tell
+        the operator to substitute if they used a different name."""
+        from mipiti_mcp.server import _INSTRUCTIONS_UPDATE_MESSAGE
+        # Default name appears as a worked example.
+        assert "Mipiti" in _INSTRUCTIONS_UPDATE_MESSAGE
+        # And the message explicitly covers non-default cases.
+        assert "substitute" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
+        # The full teardown sequence — not just "reconnect".
+        assert "exit" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
+        assert "claude mcp remove" in _INSTRUCTIONS_UPDATE_MESSAGE
+        assert "claude mcp add" in _INSTRUCTIONS_UPDATE_MESSAGE
+        assert "reauthenticate" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
