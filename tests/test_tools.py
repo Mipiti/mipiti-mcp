@@ -68,6 +68,7 @@ from mipiti_mcp.server import (
     remove_attacker,
     remove_evidence,
     rename_threat_model,
+    set_threat_model_parent,
     select_compliance_frameworks,
     select_system_compliance_frameworks,
     submit_assertions,
@@ -131,6 +132,7 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "list_models": [ModelSummary.model_validate(m) for m in SAMPLE_MODELS_LIST],
         "get_model": _tm,
         "rename_model": RenameResult(id="tm-001", title="New"),
+        "set_parent": _tm,
         "delete_model": None,
         "start_export_model": "job_export_csv",
         "start_export_model_full": "job_export_full",
@@ -875,6 +877,52 @@ class TestRenameThreatModel:
             result = await rename_threat_model(server_version="0", model_id="tm-001", name="New Name")
         assert result["title"] == "New"
         mock.rename_model.assert_awaited_once_with("tm-001", "New Name")
+
+
+class TestSetThreatModelParent:
+    @pytest.mark.asyncio
+    async def test_sets_parent(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await set_threat_model_parent(
+                server_version="0",
+                model_id="tm-001",
+                parent_id="tm-parent",
+            )
+        assert result["id"] == "tm-001"
+        mock.set_parent.assert_awaited_once_with("tm-001", "tm-parent")
+
+    @pytest.mark.asyncio
+    async def test_clears_parent_with_none(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await set_threat_model_parent(
+                server_version="0",
+                model_id="tm-001",
+                parent_id=None,
+            )
+        assert result["id"] == "tm-001"
+        mock.set_parent.assert_awaited_once_with("tm-001", None)
+
+    @pytest.mark.asyncio
+    async def test_surfaces_api_error(self) -> None:
+        import httpx
+        request = httpx.Request("PATCH", "https://api/x")
+        response = httpx.Response(400, request=request, text="cycle detected")
+        mock = _mock_client(
+            set_parent=AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "400", request=request, response=response,
+                ),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await set_threat_model_parent(
+                    server_version="0",
+                    model_id="tm-001",
+                    parent_id="tm-descendant",
+                )
 
 
 class TestDeleteThreatModel:
@@ -2521,7 +2569,9 @@ class TestListEffectiveEntities:
         assert result["flag_enabled"] is True
         assert result["kinds"]["assets"][0]["qualified_id"] == "tm-001::A1"
         assert result["kinds"]["assets"][0]["origin"] == "own"
-        mock.composition_entities.assert_awaited_once_with("tm-001")
+        mock.composition_entities.assert_awaited_once_with(
+            "tm-001", page=1, page_size=100, kind=None,
+        )
 
     @pytest.mark.asyncio
     async def test_flag_off_returns_empty_kinds(self) -> None:
@@ -2546,6 +2596,21 @@ class TestListEffectiveEntities:
                 await list_effective_entities(
                     server_version="0", model_id="tm-missing",
                 )
+
+    @pytest.mark.asyncio
+    async def test_forwards_pagination_and_kind(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_effective_entities(
+                server_version="0",
+                model_id="tm-001",
+                page=3,
+                page_size=25,
+                kind="attackers",
+            )
+        mock.composition_entities.assert_awaited_once_with(
+            "tm-001", page=3, page_size=25, kind="attackers",
+        )
 
 
 class TestListEffectiveControlObjectives:
@@ -2599,7 +2664,9 @@ class TestGetEffectiveCoverage:
         assert row["own_credit"] == 1.0
         assert row["inherited_credit"] == 0.0
         assert row["contributing_controls"][0]["control_id"] == "CTRL-01"
-        mock.composition_coverage.assert_awaited_once_with("tm-001")
+        mock.composition_coverage.assert_awaited_once_with(
+            "tm-001", page=1, page_size=100, origin=None,
+        )
 
     @pytest.mark.asyncio
     async def test_flag_off_returns_empty(self) -> None:
@@ -2624,6 +2691,21 @@ class TestGetEffectiveCoverage:
                     server_version="0", model_id="tm-missing",
                 )
 
+    @pytest.mark.asyncio
+    async def test_forwards_pagination_and_origin(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await get_effective_coverage(
+                server_version="0",
+                model_id="tm-001",
+                page=2,
+                page_size=50,
+                origin="inherited",
+            )
+        mock.composition_coverage.assert_awaited_once_with(
+            "tm-001", page=2, page_size=50, origin="inherited",
+        )
+
 
 class TestGetReachVerdicts:
     @pytest.mark.asyncio
@@ -2637,7 +2719,9 @@ class TestGetReachVerdicts:
         v = result["verdicts"][0]
         assert v["co_qid"] == "tm-001::CO1"
         assert v["kind"] in {"reachable", "unreachable", "indeterminate"}
-        mock.composition_reachability.assert_awaited_once_with("tm-001")
+        mock.composition_reachability.assert_awaited_once_with(
+            "tm-001", page=1, page_size=100, kind_filter=None,
+        )
 
     @pytest.mark.asyncio
     async def test_flag_off_returns_empty(self) -> None:
@@ -2661,6 +2745,21 @@ class TestGetReachVerdicts:
                 await get_reach_verdicts(
                     server_version="0", model_id="tm-missing",
                 )
+
+    @pytest.mark.asyncio
+    async def test_forwards_pagination_and_kind_filter(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await get_reach_verdicts(
+                server_version="0",
+                model_id="tm-001",
+                page=4,
+                page_size=10,
+                kind_filter="indeterminate",
+            )
+        mock.composition_reachability.assert_awaited_once_with(
+            "tm-001", page=4, page_size=10, kind_filter="indeterminate",
+        )
 
 
 class TestListEffectiveAttackPaths:

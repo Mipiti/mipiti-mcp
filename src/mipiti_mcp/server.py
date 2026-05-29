@@ -130,6 +130,9 @@ default; use `include_cos=True` to include them).
 - `rename_threat_model` — rename a model (metadata only, no new version). \
 Model titles must be unique within a workspace (case-insensitive); pick a \
 distinct name on the first try to avoid a 409 retry.
+- `set_threat_model_parent` — wire a model under (or detach it from) a \
+parent on the recursive composition tree. Pass `parent_id=None` to clear. \
+Server rejects cycles and over-deep chains; bumps version on success.
 - `delete_threat_model` — permanently delete a model and all its data.
 - `export_threat_model` — download as PDF, HTML, or CSV.
 - `export_threat_model_archive` — download the self-contained JSON audit \
@@ -1162,6 +1165,39 @@ async def rename_threat_model(server_version: str, model_id: str, name: str) -> 
 
 
 @mcp.tool()
+async def set_threat_model_parent(
+    server_version: str,
+    model_id: str,
+    parent_id: str | None,
+) -> dict:
+    """Set (or clear) a model's parent on the recursive composition tree.
+
+    The composition substrate (Layer 0) builds an ancestor chain from
+    each model's ``parent_id`` so child models inherit topology, control
+    objectives, and other entities from their ancestors. Use this tool
+    when wiring a child model under a platform / system / shared-services
+    ancestor, or when re-rooting a model after a re-org.
+
+    Pass ``parent_id=None`` to clear the parent (the model becomes a
+    tree root). The server rejects cycles (you cannot make a descendant
+    your parent) and over-deep chains (depth bounded by
+    ``MAX_TREE_DEPTH``) with HTTP 400. Bumps the model version on
+    success.
+
+    Returns the updated threat model.
+
+    Args:
+        model_id: ID of the threat model whose parent is being set.
+        parent_id: ID of the new parent model, or ``None`` to clear.
+    """
+    try:
+        result = await _get_client().set_parent(model_id, parent_id)
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def delete_threat_model(server_version: str, model_id: str) -> dict:
     """Delete a threat model and all associated data. This cannot be undone.
 
@@ -1856,6 +1892,9 @@ async def get_composition_overview(
 async def list_effective_entities(
     server_version: str,
     model_id: str,
+    page: int = 1,
+    page_size: int = 100,
+    kind: str | None = None,
 ) -> dict:
     """Effective entity set (own ⊕ inherited) keyed by kind.
 
@@ -1879,16 +1918,34 @@ async def list_effective_entities(
               owner_title, origin, entity}, ...],
             components: [...], assets: [...], attackers: [...], ...
           },
+          total, page, page_size,
         }
 
     When composition is disabled on the backend, ``kinds`` is returned
     with every kind mapped to an empty list and ``flag_enabled: false``.
 
+    Omitting ``page`` / ``page_size`` defaults to ``page=1,
+    page_size=100`` — the response is paginated and no longer returns
+    every entity in a single call.
+
     Args:
         model_id: ID of the threat model.
+        page: 1-indexed page number (default ``1``).
+        page_size: entries per page (default ``100``).
+        kind: optional single entity kind to restrict the response to
+            (e.g. ``"attackers"``, ``"assets"``, ``"components"``,
+            ``"trust_boundaries"``). When omitted, all kinds are
+            returned.
     """
     try:
-        return _dump(await _get_client().composition_entities(model_id))
+        return _dump(
+            await _get_client().composition_entities(
+                model_id,
+                page=page,
+                page_size=page_size,
+                kind=kind,
+            ),
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1937,6 +1994,9 @@ async def list_effective_control_objectives(
 async def get_effective_coverage(
     server_version: str,
     model_id: str,
+    page: int = 1,
+    page_size: int = 100,
+    origin: str | None = None,
 ) -> dict:
     """Effective coverage rollup with credited inheritance.
 
@@ -1958,16 +2018,33 @@ async def get_effective_coverage(
                origin, is_verified, mitigation_group}, ...]},
             ...
           ],
+          total, page, page_size,
         }
 
     When composition is disabled on the backend, ``coverage`` is empty
     and ``flag_enabled: false``.
 
+    Omitting ``page`` / ``page_size`` defaults to ``page=1,
+    page_size=100`` — the response is paginated and no longer returns
+    every coverage row in a single call.
+
     Args:
         model_id: ID of the threat model.
+        page: 1-indexed page number (default ``1``).
+        page_size: coverage rows per page (default ``100``).
+        origin: filter coverage rows by contributing-control origin —
+            one of ``"own" | "cross" | "inherited"``. When omitted,
+            rows with any origin mix are returned.
     """
     try:
-        return _dump(await _get_client().composition_coverage(model_id))
+        return _dump(
+            await _get_client().composition_coverage(
+                model_id,
+                page=page,
+                page_size=page_size,
+                origin=origin,
+            ),
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1976,6 +2053,9 @@ async def get_effective_coverage(
 async def get_reach_verdicts(
     server_version: str,
     model_id: str,
+    page: int = 1,
+    page_size: int = 100,
+    kind_filter: str | None = None,
 ) -> dict:
     """Per-CO reachability verdicts over the *composed* effective topology.
 
@@ -1996,17 +2076,36 @@ async def get_reach_verdicts(
              reason: <structural label>},
             ...
           ],
+          total, page, page_size,
         }
 
     When composition is disabled on the backend, ``verdicts`` is empty
     and ``flag_enabled: false`` — fall back to ``get_reachability_verdicts``
     for the per-model derivation.
 
+    Omitting ``page`` / ``page_size`` defaults to ``page=1,
+    page_size=100`` — the response is paginated and no longer returns
+    every verdict in a single call.
+
     Args:
         model_id: ID of the threat model.
+        page: 1-indexed page number (default ``1``).
+        page_size: verdicts per page (default ``100``).
+        kind_filter: restrict verdicts to one kind — one of
+            ``"reachable" | "unreachable" | "indeterminate"``. Named
+            ``kind_filter`` (not ``kind``) to disambiguate from the
+            verdict object's own ``kind`` field. When omitted, all
+            verdict kinds are returned.
     """
     try:
-        return _dump(await _get_client().composition_reachability(model_id))
+        return _dump(
+            await _get_client().composition_reachability(
+                model_id,
+                page=page,
+                page_size=page_size,
+                kind_filter=kind_filter,
+            ),
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 

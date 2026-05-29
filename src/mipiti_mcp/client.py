@@ -354,6 +354,21 @@ class MipitiClient:
         data = await self._patch(f"/api/models/{model_id}", {"title": name})
         return RenameResult.model_validate(data)
 
+    async def set_parent(
+        self, model_id: str, parent_id: str | None,
+    ) -> ThreatModel:
+        """Set (or clear) a model's parent on the recursive composition tree.
+
+        Calls ``PATCH /api/models/{model_id}/parent``. ``parent_id=None``
+        clears the parent. The backend rejects cycles and over-deep chains
+        with 400. Bumps the model version on success.
+        """
+        data = await self._patch(
+            f"/api/models/{model_id}/parent",
+            {"parent_id": parent_id},
+        )
+        return ThreatModel.model_validate(data)
+
     async def delete_model(self, model_id: str) -> None:
         await self._delete(f"/api/models/{model_id}")
 
@@ -635,16 +650,30 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def composition_entities(self, model_id: str) -> dict:
+    async def composition_entities(
+        self,
+        model_id: str,
+        page: int = 1,
+        page_size: int = 100,
+        kind: str | None = None,
+    ) -> dict:
         """Effective entity set (own ⊕ inherited) keyed by kind.
 
         Returns ``{model_id, flag_enabled, kinds: {trust_boundaries: [...],
-        components: [...], assets: [...], attackers: [...], ...}}``. Each
-        entry carries ``{kind, qualified_id, owner_model_id, owner_title,
-        origin, entity}``.
+        components: [...], assets: [...], attackers: [...], ...}, total,
+        page, page_size}``. Each entry carries ``{kind, qualified_id,
+        owner_model_id, owner_title, origin, entity}``.
+
+        ``page`` / ``page_size`` paginate the entries (defaults
+        ``page=1, page_size=100``). ``kind`` restricts to a single entity
+        kind (e.g. ``"attackers"``).
         """
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if kind:
+            params["kind"] = kind
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/entities",
+            params=params,
         )
         resp.raise_for_status()
         return resp.json()
@@ -661,27 +690,58 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def composition_coverage(self, model_id: str) -> dict:
+    async def composition_coverage(
+        self,
+        model_id: str,
+        page: int = 1,
+        page_size: int = 100,
+        origin: str | None = None,
+    ) -> dict:
         """Effective coverage rollup with credited inheritance.
 
         Per CO: ``{co_qid, is_covered, own_credit, inherited_credit,
         contributing_controls: [{control_id, owner_model_id, origin,
         is_verified, mitigation_group}, ...]}``.
+
+        ``page`` / ``page_size`` paginate the coverage rows (defaults
+        ``page=1, page_size=100``). ``origin`` filters by contributing-
+        control origin — one of ``"own" | "cross" | "inherited"``.
         """
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if origin:
+            params["origin"] = origin
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/coverage",
+            params=params,
         )
         resp.raise_for_status()
         return resp.json()
 
-    async def composition_reachability(self, model_id: str) -> dict:
+    async def composition_reachability(
+        self,
+        model_id: str,
+        page: int = 1,
+        page_size: int = 100,
+        kind_filter: str | None = None,
+    ) -> dict:
         """Per-CO reachability verdicts over the composed effective topology.
 
         Returns ``{model_id, flag_enabled, verdicts: [{co_qid, asset_qid,
         attacker_qid, kind, reason}, ...]}``.
+
+        ``page`` / ``page_size`` paginate the verdicts (defaults
+        ``page=1, page_size=100``). ``kind_filter`` restricts the result
+        to one verdict kind — one of
+        ``"reachable" | "unreachable" | "indeterminate"``. Named
+        ``kind_filter`` (not ``kind``) to disambiguate from the verdict's
+        own ``kind`` field.
         """
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if kind_filter:
+            params["kind_filter"] = kind_filter
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/reachability",
+            params=params,
         )
         resp.raise_for_status()
         return resp.json()
