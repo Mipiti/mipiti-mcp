@@ -34,8 +34,12 @@ _SERVER_VERSION = os.environ["SERVER_VERSION"]
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
-    "Reconnect your MCP client to get the latest capabilities "
-    "(e.g., run /mcp in Claude Code and reconnect)."
+    "Tool descriptions are pinned per session — a soft reconnect, reauth, or "
+    "/mcp toggle does NOT refresh them. The MCP server config must be torn "
+    "down and re-added. In Claude Code: exit the session, run "
+    "`claude mcp remove Mipiti` (substitute the name you used when adding "
+    "if different), resume the session, exit again, run your original "
+    "`claude mcp add ...` command, reauthenticate, then resume."
 )
 
 _INSTRUCTIONS_BASE = """\
@@ -691,7 +695,13 @@ class VersionCheckMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         args = (context.message.arguments or {}) if context.message and hasattr(context.message, "arguments") else {}
         client_version = args.get("server_version", "")
-        if client_version and client_version != _SERVER_VERSION:
+        # Empty client_version is treated as stale (rejected) — the prior
+        # ``if client_version and ...`` guard let agents bypass the safety
+        # check by omitting the field. The pin exists so the server can
+        # refuse calls under a stale tool catalog (renamed params, new
+        # required fields, removed tools); a bypass via empty defeats
+        # that guarantee.
+        if client_version != _SERVER_VERSION:
             from fastmcp.exceptions import ToolError
             raise ToolError(_INSTRUCTIONS_UPDATE_MESSAGE)
         return await call_next(context)
