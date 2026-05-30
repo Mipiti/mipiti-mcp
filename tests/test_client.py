@@ -1481,7 +1481,7 @@ async def test_undo_split_pins_path_and_idempotency_key(mock_env: None) -> None:
 @respx.mock
 async def test_set_parent_sets_id(mock_env: None) -> None:
     payload = dict(SAMPLE_THREAT_MODEL, version=2)
-    route = respx.patch(
+    route = respx.put(
         f"{_BASE}/api/models/tm-001/parent",
     ).mock(return_value=httpx.Response(200, json=payload))
     client = MipitiClient()
@@ -1489,6 +1489,7 @@ async def test_set_parent_sets_id(mock_env: None) -> None:
     assert out.id == "tm-001"
     assert out.version == 2
     assert route.called
+    assert route.calls.last.request.method == "PUT"
     assert json.loads(route.calls.last.request.content) == {"parent_id": "tm-parent"}
     assert "Idempotency-Key" in route.calls.last.request.headers
     await client.close()
@@ -1498,13 +1499,14 @@ async def test_set_parent_sets_id(mock_env: None) -> None:
 @respx.mock
 async def test_set_parent_clears_with_none(mock_env: None) -> None:
     payload = dict(SAMPLE_THREAT_MODEL, version=3)
-    route = respx.patch(
+    route = respx.put(
         f"{_BASE}/api/models/tm-001/parent",
     ).mock(return_value=httpx.Response(200, json=payload))
     client = MipitiClient()
     out = await client.set_parent("tm-001", None)
     assert out.id == "tm-001"
     assert route.called
+    assert route.calls.last.request.method == "PUT"
     assert json.loads(route.calls.last.request.content) == {"parent_id": None}
     await client.close()
 

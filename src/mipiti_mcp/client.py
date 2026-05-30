@@ -359,11 +359,11 @@ class MipitiClient:
     ) -> ThreatModel:
         """Set (or clear) a model's parent on the recursive composition tree.
 
-        Calls ``PATCH /api/models/{model_id}/parent``. ``parent_id=None``
+        Calls ``PUT /api/models/{model_id}/parent``. ``parent_id=None``
         clears the parent. The backend rejects cycles and over-deep chains
         with 400. Bumps the model version on success.
         """
-        data = await self._patch(
+        data = await self._put(
             f"/api/models/{model_id}/parent",
             {"parent_id": parent_id},
         )
