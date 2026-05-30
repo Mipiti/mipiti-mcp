@@ -208,6 +208,7 @@ class MipitiClient:
         messages: list[dict[str, str]],
         model_id: str | None = None,
         force_generate: bool = False,
+        parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         """POST /api/model/stream, consume SSE events, return final payload.
@@ -226,6 +227,8 @@ class MipitiClient:
             body["model_id"] = model_id
         if force_generate:
             body["force_generate"] = True
+        if parent_id:
+            body["parent_id"] = parent_id
 
         # Generate a fresh Idempotency-Key for this stream request. The
         # streaming endpoint handles caching directly (the global middleware
@@ -295,6 +298,7 @@ class MipitiClient:
         self,
         feature_description: str,
         force_generate: bool = False,
+        parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> GenerateResult | dict:
         """Returns a ``GenerateResult`` on normal generation, OR a raw
@@ -302,10 +306,16 @@ class MipitiClient:
         the backend short-circuited because similar models already
         exist in the workspace. Pass ``force_generate=True`` to skip
         the similarity check and force a new generation.
+
+        When ``parent_id`` is provided, the backend wires the new model
+        under that parent on the recursive composition tree, so it
+        inherits topology and participates in delta / inherited-credit
+        composition.
         """
         data = await self._stream_model(
             [{"role": "user", "content": feature_description}],
             force_generate=force_generate,
+            parent_id=parent_id,
             on_progress=on_progress,
         )
         if isinstance(data, dict) and "similar_models" in data:
@@ -781,28 +791,37 @@ class MipitiClient:
         kind: str,
         own_qid: str,
         inherited_qid: str,
+        confirm_heuristic: bool = False,
     ) -> dict:
         """POST /api/models/{model_id}/composition/reconciliation/apply-match.
 
         Mutating. Soft-deletes the descendant's own duplicate entity so
         the inherited entity becomes the canonical surface for the
         effective-model resolver. The server re-validates the candidate
-        against current live state and refuses heuristic-tier matches.
+        against current live state.
+
+        By default heuristic-tier matches are refused; pass
+        ``confirm_heuristic=True`` to acknowledge the structural
+        divergence and apply a heuristic-tier candidate anyway.
 
         Returns the post-mutation model envelope:
         ``{"model": <ThreatModel>, "controls_carried": int,
         "controls_orphaned": int, "orphaned_control_ids": [str, ...]}``.
 
-        Errors: 400 if the candidate is stale or heuristic-tier;
-        404 if the model is missing; 503 if composition is disabled.
+        Errors: 400 if the candidate is stale, or heuristic-tier
+        without ``confirm_heuristic``; 404 if the model is missing;
+        503 if composition is disabled.
         """
+        body: dict[str, Any] = {
+            "kind": kind,
+            "own_qid": own_qid,
+            "inherited_qid": inherited_qid,
+        }
+        if confirm_heuristic:
+            body["confirm_heuristic"] = True
         return await self._post(
             f"/api/models/{model_id}/composition/reconciliation/apply-match",
-            {
-                "kind": kind,
-                "own_qid": own_qid,
-                "inherited_qid": inherited_qid,
-            },
+            body,
         )
 
     async def reject_reconciliation_candidate(
