@@ -320,7 +320,9 @@ assessment also includes:
 the linked boundary assumption), `expired_attestation` (renew an expired \
 attestation), `unassessed` (generate controls or create an assumption), \
 `asset_absent` (asset is not applicable — skip this CO), \
-`attacker_irrelevant` (attack surface is not applicable — skip this CO).
+`attacker_irrelevant` (attack surface is not applicable — skip this CO), \
+`coverage_gap` (controls are implemented but do not span the CO's full \
+threat — add controls to close the gap, or dismiss/accept if intentional).
 - `asset_status` / `attacker_status` — verification status of the \
 asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs \
@@ -340,7 +342,13 @@ predicate via `add_assumption` instead of generating controls. \
 `asset_absent` → the asset is not applicable. No action \
 needed — skip controls for this CO. \
 `attacker_irrelevant` → the attack surface is not applicable. No action \
-needed — skip controls for this CO.
+needed — skip controls for this CO. \
+`coverage_gap` → the controls are implemented but leave part of the CO's \
+threat unaddressed. Inspect the linked `coverage_gap` finding via \
+`list_findings` for the uncovered aspects + suggested control, add controls \
+(`regenerate_controls` / `import_controls`) and submit assertions; if it's a \
+false positive `dismiss` the finding, or if intentional record a risk \
+acceptance / assumption.
 
 ## Gap discovery
 
@@ -394,6 +402,24 @@ flow:
 Never apply remediation without preview. The platform does not \
 enforce this — it's the agent's responsibility to surface the change \
 before committing.
+
+**Diagnose-and-hand-off findings.** Some finding kinds have NO automatic \
+remediation handler (`preview_finding_remediation` / \
+`apply_finding_remediation` return 422) — they describe a gap for you to \
+resolve directly with the control tools, then submit assertions / \
+`update_finding`: \
+`coverage_gap` (the CO's controls do not span its full threat → add the \
+missing controls via `regenerate_controls` / `import_controls`, or `dismiss` \
+if a false positive, or record a risk acceptance / assumption if \
+intentional), \
+`control_mechanism` (an existing control's mechanism is wrong and could not \
+be corrected automatically → edit, split, or remove it; the finding's \
+details list the control's full CO-set so you see the blast radius before \
+changing a shared control), \
+`misclassified_defense_in_depth` (a defense-in-depth control is load-bearing \
+for a CO's coverage → promote it into that CO's mitigation group via \
+`set_mitigation_groups`). Do not call `apply_finding_remediation` for these \
+kinds.
 
 ## Project setup
 
