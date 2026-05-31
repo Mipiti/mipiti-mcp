@@ -594,6 +594,50 @@ async def test_stream_generate(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_stream_generate_forwards_parent_id(mock_env: None) -> None:
+    """parent_id reaches the /api/model/stream body so the backend wires
+    the new model under the parent on the composition tree."""
+    sse_payload = _build_sse_bytes([
+        ("result", {"type": "result", "markdown": "# Model", "csv": "", "threat_model": SAMPLE_THREAT_MODEL, "model_id": "tm-001", "version": 1}),
+    ])
+    route = respx.post("https://test.api.mipiti.io/api/model/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_payload,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    client = MipitiClient()
+    result = await client.generate_threat_model(
+        "Child service", parent_id="tm-parent",
+    )
+    assert result.threat_model.id == "tm-001"
+    body = json.loads(route.calls.last.request.content)
+    assert body["parent_id"] == "tm-parent"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_generate_omits_parent_id_when_absent(mock_env: None) -> None:
+    """Without parent_id the body carries no parent_id key (flat model)."""
+    sse_payload = _build_sse_bytes([
+        ("result", {"type": "result", "markdown": "# Model", "csv": "", "threat_model": SAMPLE_THREAT_MODEL, "model_id": "tm-001", "version": 1}),
+    ])
+    route = respx.post("https://test.api.mipiti.io/api/model/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_payload,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    client = MipitiClient()
+    await client.generate_threat_model("Flat service")
+    body = json.loads(route.calls.last.request.content)
+    assert "parent_id" not in body
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_stream_chat_response(mock_env: None) -> None:
     sse_payload = _build_sse_bytes([
         ("intent", {"type": "intent", "intent": "query"}),
@@ -1139,6 +1183,39 @@ async def test_apply_certain_reconciliation_match_pins_path_and_body(
     # Idempotency-Key header is always set on mutating requests so retry
     # safely deduplicates server-side.
     assert "Idempotency-Key" in route.calls.last.request.headers
+    # Default path: confirm_heuristic is omitted entirely.
+    assert "confirm_heuristic" not in body
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_apply_certain_reconciliation_match_forwards_confirm_heuristic(
+    mock_env: None,
+) -> None:
+    """confirm_heuristic=True reaches the apply-match body so the backend
+    applies a heuristic-tier candidate despite its structural divergence."""
+    envelope = {
+        "model": {"id": "tm-001", "assets": []},
+        "controls_carried": 0,
+        "controls_orphaned": 0,
+        "orphaned_control_ids": [],
+    }
+    route = respx.post(
+        f"{_BASE}/api/models/tm-001/composition/reconciliation/apply-match",
+    ).mock(return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    await client.apply_certain_reconciliation_match(
+        "tm-001", "attackers", "child:T1", "parent:T1",
+        confirm_heuristic=True,
+    )
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "attackers",
+        "own_qid": "child:T1",
+        "inherited_qid": "parent:T1",
+        "confirm_heuristic": True,
+    }
     await client.close()
 
 

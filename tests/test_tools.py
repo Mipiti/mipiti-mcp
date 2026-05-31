@@ -647,6 +647,36 @@ class TestGenerateThreatModel:
         call_kwargs = mock.generate_threat_model.await_args.kwargs
         assert call_kwargs.get("force_generate") is True
 
+    @pytest.mark.asyncio
+    async def test_parent_id_is_forwarded_to_client(self) -> None:
+        """The `parent_id` tool arg must reach the client so the backend
+        wires the new model under the parent on the composition tree."""
+        mock = _mock_client()
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await generate_threat_model(
+                server_version="0",
+                feature_description="Child service",
+                ctx=ctx,
+                parent_id="tm-parent",
+            )
+        call_kwargs = mock.generate_threat_model.await_args.kwargs
+        assert call_kwargs.get("parent_id") == "tm-parent"
+
+    @pytest.mark.asyncio
+    async def test_parent_id_defaults_to_none(self) -> None:
+        """Omitting parent_id forwards None — the model is created flat."""
+        mock = _mock_client()
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await generate_threat_model(
+                server_version="0",
+                feature_description="Flat service",
+                ctx=ctx,
+            )
+        call_kwargs = mock.generate_threat_model.await_args.kwargs
+        assert call_kwargs.get("parent_id") is None
+
 
 class TestRefineThreatModel:
     @pytest.mark.asyncio
@@ -750,7 +780,9 @@ class TestProgressChannelClosed:
     async def test_generate_returns_result_when_channel_closed(self) -> None:
         from anyio import ClosedResourceError
 
-        async def _client_call(_desc, force_generate=False, on_progress=None):
+        async def _client_call(
+            _desc, force_generate=False, parent_id=None, on_progress=None,
+        ):
             if on_progress is not None:
                 await on_progress(1.0, 5.0, "Working")
             _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
@@ -2892,6 +2924,27 @@ class TestApplyCertainReconciliationMatch:
         assert result == envelope
         mock.apply_certain_reconciliation_match.assert_awaited_once_with(
             "tm-001", "assets", "child:A1", "parent:A1",
+            confirm_heuristic=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_confirm_heuristic_is_forwarded_to_client(self) -> None:
+        """The `confirm_heuristic` tool arg must reach the client so the
+        backend applies a heuristic-tier candidate despite its
+        structural divergence."""
+        mock = _mock_client()
+        with _patch_client(mock):
+            await apply_certain_reconciliation_match(
+                server_version="0",
+                model_id="tm-001",
+                kind="attackers",
+                own_qid="child:T1",
+                inherited_qid="parent:T1",
+                confirm_heuristic=True,
+            )
+        mock.apply_certain_reconciliation_match.assert_awaited_once_with(
+            "tm-001", "attackers", "child:T1", "parent:T1",
+            confirm_heuristic=True,
         )
 
     @pytest.mark.asyncio

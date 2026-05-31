@@ -910,6 +910,7 @@ async def generate_threat_model(
     feature_description: str,
     ctx: Context,
     force: bool = False,
+    parent_id: str | None = None,
 ) -> dict:
     """Generate a complete threat model from a feature description.
 
@@ -942,6 +943,11 @@ async def generate_threat_model(
         force: Skip the similar-model detection and always create a
             new model. Default False — the check fires unless the
             operator / agent has explicit reason to bypass it.
+        parent_id: Optional ID of an existing model to wire the new
+            model under as a child on the recursive composition tree.
+            The child then inherits the parent's topology and
+            participates in composition (delta / inherited control
+            credit). Default None — the model is created flat.
 
     Return shape (normal generation):
         ``{"model_id", "version", "title", "asset_count",
@@ -966,6 +972,7 @@ async def generate_threat_model(
         result = await _get_client().generate_threat_model(
             feature_description,
             force_generate=force,
+            parent_id=parent_id,
             on_progress=on_progress,
         )
         # Emit a final 100% notification aligned with the sequence's total.
@@ -2223,15 +2230,17 @@ async def apply_certain_reconciliation_match(
     kind: str,
     own_qid: str,
     inherited_qid: str,
+    confirm_heuristic: bool = False,
 ) -> dict:
     """Apply a certain-tier reconciliation candidate. Mutates state.
 
     Soft-deletes the descendant's own duplicate entity; the inherited
     entity becomes the canonical surface for the effective-model
     resolver. Use after surveying candidates via
-    ``list_reconciliation_candidates`` and only for candidates with
-    ``tier: "certain"`` — heuristic-tier candidates need operator
-    review of the structural divergence and are refused server-side.
+    ``list_reconciliation_candidates``. Certain-tier candidates apply
+    directly; heuristic-tier candidates need operator review of the
+    structural divergence and are refused server-side unless
+    ``confirm_heuristic=True`` is passed to acknowledge the divergence.
 
     The server re-validates the candidate against current live state
     before applying; if the model has moved since the candidate was
@@ -2248,6 +2257,10 @@ async def apply_certain_reconciliation_match(
             ``"child:A1"``).
         inherited_qid: Qualified id of the canonical entity on the
             ancestor (e.g. ``"parent:A1"``).
+        confirm_heuristic: Acknowledge and apply a heuristic-tier
+            candidate despite its structural divergence. Default False
+            — heuristic-tier matches are refused server-side without
+            this flag. Leave False for certain-tier candidates.
 
     Returns the post-mutation model envelope::
 
@@ -2256,9 +2269,9 @@ async def apply_certain_reconciliation_match(
          "controls_orphaned": int,
          "orphaned_control_ids": [str, ...]}
 
-    Errors: 400 on heuristic-tier or stale candidates; 404 if the
-    model isn't found; 503 if ``TREE_COMPOSITION_ENABLED`` is off on
-    the backend.
+    Errors: 400 on stale candidates, or heuristic-tier candidates
+    without ``confirm_heuristic``; 404 if the model isn't found; 503
+    if ``TREE_COMPOSITION_ENABLED`` is off on the backend.
     """
     if kind not in _RECONCILIATION_KINDS:
         raise ToolError(
@@ -2281,6 +2294,7 @@ async def apply_certain_reconciliation_match(
         return _dump(
             await _get_client().apply_certain_reconciliation_match(
                 model_id, kind, own_qid, inherited_qid,
+                confirm_heuristic=confirm_heuristic,
             ),
         )
     except Exception as exc:
