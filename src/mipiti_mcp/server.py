@@ -322,7 +322,12 @@ attestation), `unassessed` (generate controls or create an assumption), \
 `asset_absent` (asset is not applicable — skip this CO), \
 `attacker_irrelevant` (attack surface is not applicable — skip this CO), \
 `coverage_gap` (controls are implemented but do not span the CO's full \
-threat — add controls to close the gap, or dismiss/accept if intentional).
+threat — add controls to close the gap, or dismiss/accept if intentional), \
+`insufficient_by_design` (the controls *defined* for the CO's mitigation \
+group would not mitigate the objective even if fully implemented — a design \
+gap, not an implementation gap; redesign or add controls so the group can \
+span the threat). `insufficient_by_design` is more binding than \
+`missing_controls` and takes precedence over it.
 - `asset_status` / `attacker_status` — verification status of the \
 asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs \
@@ -348,7 +353,17 @@ threat unaddressed. Inspect the linked `coverage_gap` finding via \
 `list_findings` for the uncovered aspects + suggested control, add controls \
 (`regenerate_controls` / `import_controls`) and submit assertions; if it's a \
 false positive `dismiss` the finding, or if intentional record a risk \
-acceptance / assumption.
+acceptance / assumption. \
+`insufficient_by_design` → the controls *defined* for the CO's mitigation \
+group would not mitigate the objective even if fully implemented. Do NOT \
+just implement the defined controls — that will not help. Inspect the linked \
+`insufficient_by_design` finding via `list_findings` for the rationale, then \
+redesign or ADD controls to the mitigation group (`regenerate_controls` / \
+`import_controls`, then `set_mitigation_groups`) so the group can actually \
+span the objective's threat, and submit assertions; if it's a false positive \
+`dismiss` the finding, or if intentional record a risk acceptance / \
+assumption. (Contrast with `missing_controls`, where the defined controls \
+*would* mitigate the CO and you simply implement them and submit assertions.)
 
 ## Gap discovery
 
@@ -412,6 +427,12 @@ resolve directly with the control tools, then submit assertions / \
 missing controls via `regenerate_controls` / `import_controls`, or `dismiss` \
 if a false positive, or record a risk acceptance / assumption if \
 intentional), \
+`insufficient_by_design` (the controls *defined* for the CO's mitigation \
+group would not mitigate it even if fully implemented → do NOT just \
+implement the defined controls; redesign or add controls to the mitigation \
+group via `regenerate_controls` / `import_controls` + `set_mitigation_groups` \
+so the group can span the threat, or `dismiss` if a false positive, or \
+record a risk acceptance / assumption if intentional), \
 `control_mechanism` (an existing control's mechanism is wrong and could not \
 be corrected automatically → edit, split, or remove it; the finding's \
 details list the control's full CO-set so you see the blast radius before \
