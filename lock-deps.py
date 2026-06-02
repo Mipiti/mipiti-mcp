@@ -49,8 +49,12 @@ def strip_self_reference(path: Path) -> None:
 def main() -> None:
     # Target 3.11 (our requires-python floor) so the lock is valid on the
     # lowest supported interpreter and transitive deps that only ship on
-    # older Pythons are still resolved.
-    common = ["--generate-hashes", "--strip-extras", "--python-version=3.11"]
+    # older Pythons are still resolved. --universal resolves across all
+    # platforms so platform-conditional transitives (e.g. keyring's Linux-only
+    # SecretStorage/jeepney, Windows pywin32-ctypes) are pinned with hashes —
+    # required for --require-hashes installs on a CI platform other than the
+    # one the lock was compiled on.
+    common = ["--universal", "--generate-hashes", "--strip-extras", "--python-version=3.11"]
 
     print("Compiling requirements.lock ...")
     run([*common, "-o", "requirements.lock", "pyproject.toml"])
