@@ -22,16 +22,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install build
+      - name: Install build tools (hash-pinned)
+        run: pip install --require-hashes -r requirements-build.lock
 
       - name: Build package
         run: python -m build
 
       - name: Verify package
-        run: |
-          pip install twine
-          twine check dist/*
+        run: twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # v1.13.0
