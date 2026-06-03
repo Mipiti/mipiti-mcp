@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->115<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->122<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -197,6 +197,20 @@ Views over the *effective* model — own entities composed with everything inher
 | `undo_lift_composition_event` | Mutating. Apply the inverse of a previous `lift_applied` event. Re-runs the divergence detector immediately before applying and refuses with 409 + a structured refusal block (`detail.refusal.reasons`) when state has materially evolved since the forward lift. On success, persists the inverse state operations across the LCA + every affected source descendant and emits a structured `lift_undone` activity event citing `original_event_id` so the audit pack chains undo to its forward. Returns `{undone_event_id, original_event_id, applied_state_ops, models: {lca_model, source_descendant_models}}`. |
 | `preview_undo_split_composition` | Read-only. Counterpart to `preview_undo_lift_composition` for splits. Same `{plan, refusal}` shape; the plan block carries the split-specific inverse operations (restore at the ancestor, tombstone the duplicated copies on every target descendant). |
 | `undo_split_composition_event` | Mutating. Mirror of `undo_lift_composition_event` for splits. Same divergence-detector contract — refuses with 409 + structured refusal block when state has evolved. On success, restores the ancestor's entity, tombstones the duplicated copies on every target descendant, and emits a structured `split_undone` activity event citing `original_event_id`. Returns `{undone_event_id, original_event_id, applied_state_ops, models: {ancestor_model, descendant_models}}`. |
+
+### Cross-model dependencies (delegation)
+
+Declared reliance edges (distinct from the parent/composition tree, which is containment): a model depends on a control implemented in *another* model — for systems built on shared services (auth, logging, shared data) rather than sub-parts. The target is always a provider *control* (credit terminates at a proven mechanism); the provider must be in the same workspace (cross-tenant delegation is prohibited). Backend-gated by `RECURSIVE_TREE_ENABLED`; credit effects further gated by `FOUNDATION_DELEGATION_ENABLED`.
+
+| Tool | Description |
+|------|-------------|
+| `declare_foundation` | Mark a shared-service model as a foundation that advertises specific controls (`provides`) other models can delegate to. A capability advertises a control, never an objective. |
+| `create_reliance` | Declare a single dependency. `delegated` (consumer has no local control for an objective; provider handles it — pass `source_objective_id`) or `relied_upon` (consumer keeps its own control but its validity depends on the provider's — pass `source_control_id`). Enters `draft`; runs LLM semantic validation. |
+| `confirm_reliance` | Promote a draft edge to active — the credit-soundness gate. Refused unless validation returned `valid`; a `partial`/mode-mismatch is never silently credited. |
+| `delete_reliance` | Remove a reliance edge. |
+| `list_reliance` | A model's dependency edges (as consumer) plus who relies on it (as provider — the blast radius before changing its controls). |
+| `propose_attach_foundation` | Read-only. Propose which of a consumer's objectives each foundation capability covers (scored). Feed the chosen subset to `attach_foundation`. |
+| `attach_foundation` | Bulk-create draft delegation edges for the selected (objective, provider control) pairs. Each runs LLM validation; none credits until confirmed. |
 
 ### Compliance
 
