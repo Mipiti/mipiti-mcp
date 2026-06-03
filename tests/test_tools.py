@@ -69,6 +69,13 @@ from mipiti_mcp.server import (
     remove_evidence,
     rename_threat_model,
     set_threat_model_parent,
+    attach_foundation,
+    confirm_reliance,
+    create_reliance,
+    declare_foundation,
+    delete_reliance,
+    list_reliance,
+    propose_attach_foundation,
     select_compliance_frameworks,
     select_system_compliance_frameworks,
     submit_assertions,
@@ -569,6 +576,14 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                                            "deleted": False, "exclusion": None}},
         "get_control": {"model_id": "tm-001", "model_version": 1,
                          "control": {"id": "CTRL-01", "description": "test"}},
+        # Reliance / delegation (Foundation primitive)
+        "declare_foundation": {"model_id": "tm-001"},
+        "list_reliance": {"model_id": "tm-001", "as_consumer": [], "as_provider": []},
+        "create_reliance": {"id": "rel_1", "status": "draft"},
+        "confirm_reliance": {"id": "rel_1", "status": "active"},
+        "delete_reliance": None,
+        "propose_attach_foundation": {"proposals": []},
+        "attach_foundation": {"created": [], "failed": []},
     }
 
     for name, default_val in defaults.items():
@@ -954,6 +969,93 @@ class TestSetThreatModelParent:
                     server_version="0",
                     model_id="tm-001",
                     parent_id="tm-descendant",
+                )
+
+
+class TestReliance:
+    @pytest.mark.asyncio
+    async def test_declare_foundation(self) -> None:
+        mock = _mock_client(
+            declare_foundation=AsyncMock(return_value={"model_id": "tm-001"}),
+        )
+        with _patch_client(mock):
+            result = await declare_foundation(
+                server_version="0", model_id="tm-001",
+                provides=[{"control_id": "CTRL-01", "capability_label": "validates tokens"}],
+            )
+        assert result["model_id"] == "tm-001"
+        mock.declare_foundation.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_reliance_delegated(self) -> None:
+        mock = _mock_client(
+            create_reliance=AsyncMock(return_value={"id": "rel_1", "status": "draft"}),
+        )
+        with _patch_client(mock):
+            result = await create_reliance(
+                server_version="0", model_id="tm-001",
+                provider_model_id="prov", provider_control_id="CTRL-A",
+                mode="delegated", source_objective_id="CO1",
+            )
+        assert result["status"] == "draft"
+        mock.create_reliance.assert_awaited_once_with(
+            "tm-001", "prov", "CTRL-A", "delegated", "CO1", "",
+        )
+
+    @pytest.mark.asyncio
+    async def test_confirm_reliance(self) -> None:
+        mock = _mock_client(
+            confirm_reliance=AsyncMock(return_value={"id": "rel_1", "status": "active"}),
+        )
+        with _patch_client(mock):
+            result = await confirm_reliance(server_version="0", edge_id="rel_1")
+        assert result["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_list_and_delete_reliance(self) -> None:
+        mock = _mock_client(
+            list_reliance=AsyncMock(return_value={"model_id": "tm-001", "as_consumer": [], "as_provider": []}),
+            delete_reliance=AsyncMock(return_value=None),
+        )
+        with _patch_client(mock):
+            listed = await list_reliance(server_version="0", model_id="tm-001")
+            deleted = await delete_reliance(server_version="0", edge_id="rel_1")
+        assert listed["model_id"] == "tm-001"
+        assert deleted["deleted"] is True
+
+    @pytest.mark.asyncio
+    async def test_propose_and_attach_foundation(self) -> None:
+        mock = _mock_client(
+            propose_attach_foundation=AsyncMock(return_value={"proposals": [{"source_objective_id": "CO1"}]}),
+            attach_foundation=AsyncMock(return_value={"created": [{"id": "rel_1"}], "failed": []}),
+        )
+        with _patch_client(mock):
+            proposals = await propose_attach_foundation(
+                server_version="0", model_id="tm-001", foundation_model_id="prov",
+            )
+            attached = await attach_foundation(
+                server_version="0", model_id="tm-001", foundation_model_id="prov",
+                selections=[{"source_objective_id": "CO1", "provider_control_id": "CTRL-A"}],
+            )
+        assert proposals["proposals"][0]["source_objective_id"] == "CO1"
+        assert len(attached["created"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_surfaces_api_error(self) -> None:
+        import httpx
+        request = httpx.Request("POST", "https://api/x")
+        response = httpx.Response(400, request=request, text="cross-tenant delegation is not allowed")
+        mock = _mock_client(
+            create_reliance=AsyncMock(
+                side_effect=httpx.HTTPStatusError("400", request=request, response=response),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await create_reliance(
+                    server_version="0", model_id="tm-001",
+                    provider_model_id="other", provider_control_id="CTRL-X",
+                    mode="delegated", source_objective_id="CO1",
                 )
 
 

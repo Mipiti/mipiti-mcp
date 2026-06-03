@@ -41,3 +41,25 @@ def test_constraint_flow_section_describes_three_steps() -> None:
     assert "add_assumption" in section
     # Forward reference to parent-repo finding behavior must be discoverable.
     assert "framework_binding_asymmetry" in section
+
+
+@pytest.mark.parametrize(
+    "tier,role",
+    [
+        ("pro", "user"),
+        ("developer", "user"),
+    ],
+)
+def test_delegation_section_present(tier: str, role: str) -> None:
+    """The cross-model delegation guidance lives in _INSTRUCTIONS_BASE, so it
+    must reach every tier (it is not gated behind the compliance block)."""
+    text = build_instructions(tier=tier, role=role)
+    assert "Cross-model dependencies (delegation)" in text
+    for tool in (
+        "declare_foundation",
+        "create_reliance",
+        "confirm_reliance",
+        "attach_foundation",
+        "list_reliance",
+    ):
+        assert tool in text
