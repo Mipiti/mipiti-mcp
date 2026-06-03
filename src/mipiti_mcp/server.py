@@ -649,6 +649,13 @@ be in many tags at once.
 Delegation-aware, so a CO mitigated via a verified cross-model delegation reads \
 as covered, consistent with the per-model assessment.
 
+A tag can also be a **compliance / audit scope** spanning several models: \
+`select_tag_compliance_frameworks` selects frameworks for the tag and \
+propagates them to its members; `get_tag_compliance_report` gives cross-model \
+requirement coverage; `export_tag_report` produces the signed auditor HTML \
+(member reports + cross-model dependency graph + attestation status) — the tag \
+equivalents of the system-level compliance report and auditor export.
+
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -1591,6 +1598,70 @@ async def get_tag_risk_view(server_version: str, tag_id: str) -> dict:
     """
     try:
         return await _get_client().get_tag_risk_view(tag_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def select_tag_compliance_frameworks(
+    server_version: str,
+    tag_id: str,
+    framework_ids: list[str],
+) -> dict:
+    """Select compliance frameworks for a tag (scope-level).
+
+    Records the frameworks against the tag and propagates them to each member
+    model — the tag becomes a compliance scope (e.g. an audit boundary) spanning
+    several models, the same capability a system has.
+
+    Args:
+        tag_id: the tag to scope compliance to.
+        framework_ids: framework ids to select (from `list_compliance_frameworks`).
+    """
+    try:
+        return await _get_client().select_tag_compliance_frameworks(tag_id, framework_ids)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_tag_compliance_report(
+    server_version: str,
+    tag_id: str,
+    framework_id: str,
+    level: int = 0,
+) -> dict:
+    """Cross-model compliance coverage report scoped to a tag's members.
+
+    Aggregates requirement coverage across every model the tag contains, the
+    same as a system-level compliance report but over a freely-composed set.
+
+    Args:
+        tag_id: the tag (compliance scope).
+        framework_id: the framework to report on.
+        level: optional framework level filter (0 = all).
+    """
+    try:
+        return await _get_client().get_tag_compliance_report(tag_id, framework_id, level)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def export_tag_report(server_version: str, tag_id: str) -> dict:
+    """Export the signed auditor report for a tag (HTML).
+
+    Aggregates every member model's report plus the cross-model dependency graph
+    and attestation status into one signed HTML document — the tag equivalent of
+    the system auditor export. Returns ``{tag_id, format, content}`` where
+    ``content`` is the HTML body.
+
+    Args:
+        tag_id: the tag to export.
+    """
+    try:
+        content = await _get_client().export_tag(tag_id, "html")
+        return {"tag_id": tag_id, "format": "html", "content": content}
     except Exception as exc:
         raise _api_error(exc) from exc
 

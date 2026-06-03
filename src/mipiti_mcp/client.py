@@ -490,6 +490,32 @@ class MipitiClient:
         """Aggregate per-CO risk rows across a tag's member models."""
         return await self._get(f"/api/tags/{tag_id}/risk-view")
 
+    async def select_tag_compliance_frameworks(
+        self, tag_id: str, framework_ids: list[str],
+    ) -> dict:
+        """Select compliance frameworks for a tag (scope-level), propagating to members."""
+        return await self._post(
+            f"/api/tags/{tag_id}/compliance/frameworks",
+            {"framework_ids": framework_ids},
+        )
+
+    async def get_tag_compliance_report(
+        self, tag_id: str, framework_id: str, level: int = 0,
+    ) -> dict:
+        """Cross-model compliance report scoped to a tag's members."""
+        return await self._get(
+            f"/api/tags/{tag_id}/compliance/{framework_id}/report",
+            params={"level": level},
+        )
+
+    async def export_tag(self, tag_id: str, fmt: str = "html") -> str:
+        """Fetch the signed auditor report (HTML) for a tag. Returns the body text."""
+        resp = await self._get_client().get(
+            f"/api/tags/{tag_id}/export", params={"format": fmt},
+        )
+        resp.raise_for_status()
+        return resp.text
+
     async def start_export_model(self, model_id: str, fmt: str = "csv") -> str:
         """Kick off an async export job and return its job_id.
 

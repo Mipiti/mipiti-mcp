@@ -82,5 +82,8 @@ def test_tags_section_present(tier: str, role: str) -> None:
         "add_model_to_tag",
         "list_tags",
         "get_tag_risk_view",
+        "select_tag_compliance_frameworks",
+        "get_tag_compliance_report",
+        "export_tag_report",
     ):
         assert tool in text
