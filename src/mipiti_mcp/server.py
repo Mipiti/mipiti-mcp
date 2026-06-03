@@ -605,9 +605,11 @@ Distinct from the parent/composition tree (containment): a *reliance* edge \
 declares that one model depends on a control implemented in ANOTHER model — \
 the right tool when a product is built on shared services (auth, logging, a \
 shared datastore) rather than being a sub-part of them. The target is always a \
-provider *control*, so credit terminates at a proven mechanism, and the \
-provider must be in the same workspace (cross-tenant delegation is prohibited). \
-These tools are available when the recursive-tree feature is enabled.
+provider *control*, so credit terminates at a proven mechanism. Reliance is \
+scoped to the current workspace: a consumer can only delegate to provider \
+models in the SAME workspace (these tools don't see models across workspace \
+boundaries), so pick the foundation from this workspace's models. These tools \
+are available when the recursive-tree feature is enabled.
 
 - `declare_foundation` — mark a shared-service model as a foundation that \
 advertises specific controls other models can delegate to.
@@ -1356,10 +1358,11 @@ async def create_reliance(
     - ``relied_upon``: this model has its OWN control whose validity depends on
       the provider's control. Pass ``source_control_id``.
 
-    The provider must be in the same workspace (cross-tenant delegation is
-    prohibited). The edge enters ``draft`` and runs LLM semantic validation; it
-    carries no credit until confirmed via ``confirm_reliance`` (and only when
-    validation returned ``valid``). Returns the created edge.
+    The provider must be a model in the SAME workspace as the consumer (reliance
+    is workspace-scoped and does not reach across workspace boundaries). The edge
+    enters ``draft`` and runs LLM semantic validation; it carries no credit until
+    confirmed via ``confirm_reliance`` (and only when validation returned
+    ``valid``). Returns the created edge.
 
     Args:
         model_id: the consumer model declaring the dependency.

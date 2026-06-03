@@ -200,7 +200,7 @@ Views over the *effective* model — own entities composed with everything inher
 
 ### Cross-model dependencies (delegation)
 
-Declared reliance edges (distinct from the parent/composition tree, which is containment): a model depends on a control implemented in *another* model — for systems built on shared services (auth, logging, shared data) rather than sub-parts. The target is always a provider *control* (credit terminates at a proven mechanism); the provider must be in the same workspace (cross-tenant delegation is prohibited). Backend-gated by `RECURSIVE_TREE_ENABLED`; credit effects further gated by `FOUNDATION_DELEGATION_ENABLED`.
+Declared reliance edges (distinct from the parent/composition tree, which is containment): a model depends on a control implemented in *another* model — for systems built on shared services (auth, logging, shared data) rather than sub-parts. The target is always a provider *control* (credit terminates at a proven mechanism). Reliance is workspace-scoped: a consumer can only delegate to provider models in the same workspace (these tools don't see models across workspace boundaries). Backend-gated by `RECURSIVE_TREE_ENABLED`; credit effects further gated by `FOUNDATION_DELEGATION_ENABLED`.
 
 | Tool | Description |
 |------|-------------|
