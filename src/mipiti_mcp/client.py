@@ -456,6 +456,40 @@ class MipitiClient:
             {"foundation_model_id": foundation_model_id, "selections": selections},
         )
 
+    # --- Tags (Affiliation primitive — overlapping model grouping) ---
+
+    async def list_tags(self) -> dict:
+        """List the workspace's tags."""
+        return await self._get("/api/tags")
+
+    async def create_tag(
+        self, name: str, description: str = "", model_ids: list[str] | None = None,
+    ) -> dict:
+        """Create a tag, optionally seeding it with member models."""
+        return await self._post(
+            "/api/tags",
+            {"name": name, "description": description, "model_ids": model_ids or []},
+        )
+
+    async def delete_tag(self, tag_id: str) -> None:
+        await self._delete(f"/api/tags/{tag_id}")
+
+    async def add_model_to_tag(self, tag_id: str, model_id: str) -> dict:
+        return await self._post(
+            f"/api/tags/{tag_id}/models", {"model_id": model_id},
+        )
+
+    async def remove_model_from_tag(self, tag_id: str, model_id: str) -> None:
+        await self._delete(f"/api/tags/{tag_id}/models/{model_id}")
+
+    async def list_model_tags(self, model_id: str) -> dict:
+        """List every tag a model belongs to (overlapping)."""
+        return await self._get(f"/api/models/{model_id}/tags")
+
+    async def get_tag_risk_view(self, tag_id: str) -> dict:
+        """Aggregate per-CO risk rows across a tag's member models."""
+        return await self._get(f"/api/tags/{tag_id}/risk-view")
+
     async def start_export_model(self, model_id: str, fmt: str = "csv") -> str:
         """Kick off an async export job and return its job_id.
 

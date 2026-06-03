@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->122<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->129<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -211,6 +211,17 @@ Declared reliance edges (distinct from the parent/composition tree, which is con
 | `list_reliance` | A model's dependency edges (as consumer) plus who relies on it (as provider — the blast radius before changing its controls). |
 | `propose_attach_foundation` | Read-only. Propose which of a consumer's objectives each foundation capability covers (scored). Feed the chosen subset to `attach_foundation`. |
 | `attach_foundation` | Bulk-create draft delegation edges for the selected (objective, provider control) pairs. Each runs LLM validation; none credits until confirmed. |
+
+### Tags (grouping)
+
+Overlapping, semantics-free grouping of models (the Affiliation primitive) — for audit scopes, ad-hoc selections, or portfolios. A model may carry many tags; a tag never affects posture or credit.
+
+| Tool | Description |
+|------|-------------|
+| `create_tag` / `delete_tag` | Create or remove a tag (deleting affects the grouping only, not the member models). |
+| `add_model_to_tag` / `remove_model_from_tag` | Manage membership; a model can belong to many tags at once. |
+| `list_tags` / `list_model_tags` | Browse the workspace's tags, or a model's tags. |
+| `get_tag_risk_view` | Aggregate per-CO risk across a tag's members. Delegation-aware (a CO mitigated via a verified cross-model delegation reads as covered). |
 
 ### Compliance
 
