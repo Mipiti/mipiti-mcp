@@ -632,6 +632,23 @@ A delegated objective is credited only while the provider control stays \
 verified; if the provider control regresses or a refined mechanism no longer \
 satisfies the consumer, the edge breaks and a finding is raised on the consumer.
 
+## Tags (grouping)
+
+A *tag* is an overlapping, semantics-free grouping of models — for audit \
+scopes, ad-hoc selections, or portfolios. It is a label, not a relationship: a \
+model may carry MANY tags, and a tag never affects posture or credit (that's \
+what delegation and composition are for). Use tags to organize and to get an \
+aggregate risk view across a chosen set of models.
+
+- `create_tag` / `delete_tag` — create or remove a tag (deleting affects the \
+grouping only, never the member models).
+- `add_model_to_tag` / `remove_model_from_tag` — manage membership; a model can \
+be in many tags at once.
+- `list_tags` / `list_model_tags` — browse tags, or a model's tags.
+- `get_tag_risk_view` — aggregate per-CO risk across a tag's members. \
+Delegation-aware, so a CO mitigated via a verified cross-model delegation reads \
+as covered, consistent with the per-model assessment.
+
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -1461,6 +1478,119 @@ async def attach_foundation(
         return await _get_client().attach_foundation(
             model_id, foundation_model_id, selections,
         )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_tags(server_version: str) -> dict:
+    """List the workspace's tags (the Affiliation primitive).
+
+    A tag is an overlapping, semantics-free grouping of models — for audit
+    scopes, ad-hoc selections, or portfolios. Unlike a system, a model may carry
+    many tags, and a tag never affects posture or credit. Returns ``{tags: [...]}``.
+    """
+    try:
+        return await _get_client().list_tags()
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def create_tag(
+    server_version: str,
+    name: str,
+    description: str = "",
+    model_ids: list[str] | None = None,
+) -> dict:
+    """Create a tag, optionally seeding it with member models.
+
+    Tags group models for viewing/reporting without asserting any relationship
+    between them and without moving credit. Tag names are unique per workspace.
+
+    Args:
+        name: the tag name (unique within the workspace).
+        description: optional description.
+        model_ids: optional initial member model ids.
+    """
+    try:
+        return await _get_client().create_tag(name, description, model_ids or [])
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def delete_tag(server_version: str, tag_id: str) -> dict:
+    """Delete a tag (the grouping only; member models are not affected).
+
+    Args:
+        tag_id: ID of the tag to delete.
+    """
+    try:
+        await _get_client().delete_tag(tag_id)
+        return {"deleted": True, "tag_id": tag_id}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def add_model_to_tag(server_version: str, tag_id: str, model_id: str) -> dict:
+    """Add a model to a tag. A model may belong to many tags (overlapping).
+
+    Args:
+        tag_id: the tag.
+        model_id: the model to add.
+    """
+    try:
+        return await _get_client().add_model_to_tag(tag_id, model_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def remove_model_from_tag(
+    server_version: str, tag_id: str, model_id: str,
+) -> dict:
+    """Remove a model from a tag (the model itself is not deleted).
+
+    Args:
+        tag_id: the tag.
+        model_id: the model to remove.
+    """
+    try:
+        await _get_client().remove_model_from_tag(tag_id, model_id)
+        return {"removed": True, "tag_id": tag_id, "model_id": model_id}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_model_tags(server_version: str, model_id: str) -> dict:
+    """List every tag a model belongs to (overlapping membership).
+
+    Args:
+        model_id: the model whose tags to list.
+    """
+    try:
+        return await _get_client().list_model_tags(model_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_tag_risk_view(server_version: str, tag_id: str) -> dict:
+    """Aggregate per-CO risk rows across a tag's member models.
+
+    The tag-based aggregate posture view. Each row is delegation-aware
+    (``delegation_mitigated`` / ``delegating_controls``), so a CO mitigated via a
+    verified cross-model delegation reads as covered — consistent with the
+    per-model assessment.
+
+    Args:
+        tag_id: the tag to aggregate over.
+    """
+    try:
+        return await _get_client().get_tag_risk_view(tag_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 

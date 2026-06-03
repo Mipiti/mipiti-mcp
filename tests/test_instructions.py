@@ -63,3 +63,24 @@ def test_delegation_section_present(tier: str, role: str) -> None:
         "list_reliance",
     ):
         assert tool in text
+
+
+@pytest.mark.parametrize(
+    "tier,role",
+    [
+        ("pro", "user"),
+        ("developer", "user"),
+    ],
+)
+def test_tags_section_present(tier: str, role: str) -> None:
+    """The Tags (grouping) guidance lives in _INSTRUCTIONS_BASE, so it must
+    reach every tier."""
+    text = build_instructions(tier=tier, role=role)
+    assert "## Tags (grouping)" in text
+    for tool in (
+        "create_tag",
+        "add_model_to_tag",
+        "list_tags",
+        "get_tag_risk_view",
+    ):
+        assert tool in text

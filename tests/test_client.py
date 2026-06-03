@@ -1713,3 +1713,34 @@ async def test_composition_reachability_forwards_pagination_and_kind_filter(
     assert request.url.params.get("page_size") == "10"
     assert request.url.params.get("kind_filter") == "indeterminate"
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tag_crud_and_membership(mock_env: None) -> None:
+    respx.post(f"{_BASE}/api/tags").mock(
+        return_value=httpx.Response(201, json={"id": "tag1", "name": "Scope"}),
+    )
+    respx.get(f"{_BASE}/api/tags").mock(
+        return_value=httpx.Response(200, json={"tags": [{"id": "tag1"}]}),
+    )
+    respx.post(f"{_BASE}/api/tags/tag1/models").mock(
+        return_value=httpx.Response(200, json={"id": "tag1", "model_ids": ["m1"]}),
+    )
+    respx.delete(f"{_BASE}/api/tags/tag1/models/m1").mock(
+        return_value=httpx.Response(200, json={}),
+    )
+    respx.get(f"{_BASE}/api/tags/tag1/risk-view").mock(
+        return_value=httpx.Response(200, json={"tag_id": "tag1", "rows": [], "total": 0}),
+    )
+    client = MipitiClient()
+    created = await client.create_tag("Scope", model_ids=["m1"])
+    assert created["id"] == "tag1"
+    listed = await client.list_tags()
+    assert len(listed["tags"]) == 1
+    added = await client.add_model_to_tag("tag1", "m1")
+    assert added["model_ids"] == ["m1"]
+    await client.remove_model_from_tag("tag1", "m1")
+    rv = await client.get_tag_risk_view("tag1")
+    assert rv["tag_id"] == "tag1"
+    await client.close()

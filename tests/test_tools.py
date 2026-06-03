@@ -76,6 +76,13 @@ from mipiti_mcp.server import (
     delete_reliance,
     list_reliance,
     propose_attach_foundation,
+    add_model_to_tag,
+    create_tag,
+    delete_tag,
+    get_tag_risk_view,
+    list_model_tags,
+    list_tags,
+    remove_model_from_tag,
     select_compliance_frameworks,
     select_system_compliance_frameworks,
     submit_assertions,
@@ -584,6 +591,14 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "delete_reliance": None,
         "propose_attach_foundation": {"proposals": []},
         "attach_foundation": {"created": [], "failed": []},
+        # Tags (Affiliation primitive)
+        "list_tags": {"tags": []},
+        "create_tag": {"id": "tag1", "name": "Scope"},
+        "delete_tag": None,
+        "add_model_to_tag": {"id": "tag1", "model_ids": ["tm-001"]},
+        "remove_model_from_tag": None,
+        "list_model_tags": {"model_id": "tm-001", "tags": []},
+        "get_tag_risk_view": {"tag_id": "tag1", "rows": [], "total": 0},
     }
 
     for name, default_val in defaults.items():
@@ -1057,6 +1072,64 @@ class TestReliance:
                     provider_model_id="other", provider_control_id="CTRL-X",
                     mode="delegated", source_objective_id="CO1",
                 )
+
+
+class TestTags:
+    @pytest.mark.asyncio
+    async def test_create_and_list(self) -> None:
+        mock = _mock_client(
+            create_tag=AsyncMock(return_value={"id": "tag1", "name": "Scope"}),
+            list_tags=AsyncMock(return_value={"tags": [{"id": "tag1"}]}),
+        )
+        with _patch_client(mock):
+            created = await create_tag(server_version="0", name="Scope")
+            listed = await list_tags(server_version="0")
+        assert created["id"] == "tag1"
+        assert len(listed["tags"]) == 1
+        mock.create_tag.assert_awaited_once_with("Scope", "", [])
+
+    @pytest.mark.asyncio
+    async def test_membership(self) -> None:
+        mock = _mock_client(
+            add_model_to_tag=AsyncMock(return_value={"id": "tag1", "model_ids": ["m1"]}),
+            remove_model_from_tag=AsyncMock(return_value=None),
+        )
+        with _patch_client(mock):
+            added = await add_model_to_tag(server_version="0", tag_id="tag1", model_id="m1")
+            removed = await remove_model_from_tag(
+                server_version="0", tag_id="tag1", model_id="m1",
+            )
+        assert "m1" in added["model_ids"]
+        assert removed["removed"] is True
+
+    @pytest.mark.asyncio
+    async def test_delete_and_views(self) -> None:
+        mock = _mock_client(
+            delete_tag=AsyncMock(return_value=None),
+            list_model_tags=AsyncMock(return_value={"model_id": "m1", "tags": []}),
+            get_tag_risk_view=AsyncMock(return_value={"tag_id": "tag1", "total": 0}),
+        )
+        with _patch_client(mock):
+            deleted = await delete_tag(server_version="0", tag_id="tag1")
+            mtags = await list_model_tags(server_version="0", model_id="m1")
+            rv = await get_tag_risk_view(server_version="0", tag_id="tag1")
+        assert deleted["deleted"] is True
+        assert mtags["model_id"] == "m1"
+        assert rv["tag_id"] == "tag1"
+
+    @pytest.mark.asyncio
+    async def test_surfaces_api_error(self) -> None:
+        import httpx
+        request = httpx.Request("POST", "https://api/x")
+        response = httpx.Response(409, request=request, text="duplicate name")
+        mock = _mock_client(
+            create_tag=AsyncMock(
+                side_effect=httpx.HTTPStatusError("409", request=request, response=response),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await create_tag(server_version="0", name="Dup")
 
 
 class TestDeleteThreatModel:
