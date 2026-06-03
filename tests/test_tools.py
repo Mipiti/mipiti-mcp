@@ -83,6 +83,9 @@ from mipiti_mcp.server import (
     list_model_tags,
     list_tags,
     remove_model_from_tag,
+    export_tag_report,
+    get_tag_compliance_report,
+    select_tag_compliance_frameworks,
     select_compliance_frameworks,
     select_system_compliance_frameworks,
     submit_assertions,
@@ -599,6 +602,9 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "remove_model_from_tag": None,
         "list_model_tags": {"model_id": "tm-001", "tags": []},
         "get_tag_risk_view": {"tag_id": "tag1", "rows": [], "total": 0},
+        "select_tag_compliance_frameworks": {"selected": ["soc2"], "propagated_to_models": 1},
+        "get_tag_compliance_report": {"framework_id": "soc2", "requirements": []},
+        "export_tag": "<html>report</html>",
     }
 
     for name, default_val in defaults.items():
@@ -1130,6 +1136,30 @@ class TestTags:
         with _patch_client(mock):
             with pytest.raises(ToolError):
                 await create_tag(server_version="0", name="Dup")
+
+    @pytest.mark.asyncio
+    async def test_compliance_and_export(self) -> None:
+        mock = _mock_client(
+            select_tag_compliance_frameworks=AsyncMock(
+                return_value={"selected": ["soc2"], "propagated_to_models": 2},
+            ),
+            get_tag_compliance_report=AsyncMock(
+                return_value={"framework_id": "soc2", "requirements": []},
+            ),
+            export_tag=AsyncMock(return_value="<html>audit</html>"),
+        )
+        with _patch_client(mock):
+            sel = await select_tag_compliance_frameworks(
+                server_version="0", tag_id="tag1", framework_ids=["soc2"],
+            )
+            rep = await get_tag_compliance_report(
+                server_version="0", tag_id="tag1", framework_id="soc2",
+            )
+            exported = await export_tag_report(server_version="0", tag_id="tag1")
+        assert sel["selected"] == ["soc2"]
+        assert rep["framework_id"] == "soc2"
+        assert exported["format"] == "html"
+        assert "audit" in exported["content"]
 
 
 class TestDeleteThreatModel:

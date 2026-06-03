@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->129<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->132<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -222,6 +222,9 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 | `add_model_to_tag` / `remove_model_from_tag` | Manage membership; a model can belong to many tags at once. |
 | `list_tags` / `list_model_tags` | Browse the workspace's tags, or a model's tags. |
 | `get_tag_risk_view` | Aggregate per-CO risk across a tag's members. Delegation-aware (a CO mitigated via a verified cross-model delegation reads as covered). |
+| `select_tag_compliance_frameworks` | Make a tag a compliance/audit scope: select frameworks for the tag, propagated to its members. |
+| `get_tag_compliance_report` | Cross-model compliance coverage report scoped to a tag's members (the tag equivalent of the system compliance report). |
+| `export_tag_report` | Signed auditor HTML for a tag — member reports + cross-model dependency graph + attestation status (the tag equivalent of the system auditor export). |
 
 ### Compliance
 
