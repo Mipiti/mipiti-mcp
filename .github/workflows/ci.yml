@@ -47,9 +47,25 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install pinned dependencies
         if: steps.changes.outputs.code_changed == 'true'
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --require-hashes -r requirements-all.lock
+          pip install -e . --no-deps
+
+      - name: pip-audit (all runtime lockfiles)
+        if: steps.changes.outputs.code_changed == 'true'
+        # Catches newly-published CVEs against already-pinned versions at
+        # PR time. --disable-pip audits the lockfile directly without a
+        # separate venv install. The audit tool itself is installed
+        # hash-pinned via requirements-audit.lock (consistent with the
+        # other locks) so a swapped pip-audit wheel can't compromise the
+        # audit step.
+        run: |
+          pip install --require-hashes -r requirements-audit.lock
+          pip-audit -r requirements.lock       --disable-pip
+          pip-audit -r requirements-build.lock --disable-pip
+          pip-audit -r requirements-all.lock   --disable-pip
 
       - name: Run tests
         if: steps.changes.outputs.code_changed == 'true'
