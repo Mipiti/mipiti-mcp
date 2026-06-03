@@ -1590,6 +1590,61 @@ async def test_set_parent_clears_with_none(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_create_reliance_posts_edge(mock_env: None) -> None:
+    route = respx.post(f"{_BASE}/api/models/tm-001/reliance").mock(
+        return_value=httpx.Response(201, json={"id": "rel_1", "status": "draft"}),
+    )
+    client = MipitiClient()
+    out = await client.create_reliance(
+        "tm-001", "prov", "CTRL-A", "delegated", source_objective_id="CO1",
+    )
+    assert out["id"] == "rel_1"
+    body = json.loads(route.calls.last.request.content)
+    assert body["provider_control_id"] == "CTRL-A"
+    assert body["mode"] == "delegated"
+    assert body["source_objective_id"] == "CO1"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_and_delete_reliance(mock_env: None) -> None:
+    respx.post(f"{_BASE}/api/reliance/rel_1/confirm").mock(
+        return_value=httpx.Response(200, json={"id": "rel_1", "status": "active"}),
+    )
+    respx.delete(f"{_BASE}/api/reliance/rel_1").mock(
+        return_value=httpx.Response(200, json={"deleted": True}),
+    )
+    client = MipitiClient()
+    confirmed = await client.confirm_reliance("rel_1")
+    assert confirmed["status"] == "active"
+    await client.delete_reliance("rel_1")
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_declare_and_attach_foundation(mock_env: None) -> None:
+    respx.put(f"{_BASE}/api/models/tm-001/foundation").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001"}),
+    )
+    respx.get(
+        f"{_BASE}/api/models/tm-001/attach-foundation/prov/proposals",
+    ).mock(return_value=httpx.Response(200, json={"proposals": []}))
+    respx.post(f"{_BASE}/api/models/tm-001/attach-foundation").mock(
+        return_value=httpx.Response(200, json={"created": [], "failed": []}),
+    )
+    client = MipitiClient()
+    await client.declare_foundation("tm-001", [{"control_id": "CTRL-01"}])
+    props = await client.propose_attach_foundation("tm-001", "prov")
+    assert props == {"proposals": []}
+    attached = await client.attach_foundation("tm-001", "prov", [])
+    assert attached == {"created": [], "failed": []}
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_composition_entities_forwards_pagination_and_kind(
     mock_env: None,
 ) -> None:

@@ -382,6 +382,80 @@ class MipitiClient:
     async def delete_model(self, model_id: str) -> None:
         await self._delete(f"/api/models/{model_id}")
 
+    # --- Reliance / delegation (Foundation primitive) ---
+
+    async def declare_foundation(
+        self,
+        model_id: str,
+        provides: list[dict],
+        visibility: str = "workspace",
+    ) -> dict:
+        """Mark a model as a shared foundation advertising providable controls.
+
+        Calls ``PUT /api/models/{model_id}/foundation``.
+        """
+        return await self._put(
+            f"/api/models/{model_id}/foundation",
+            {"provides": provides, "visibility": visibility},
+        )
+
+    async def list_reliance(self, model_id: str) -> dict:
+        """List cross-model dependency edges for a model (as consumer + provider)."""
+        return await self._get(f"/api/models/{model_id}/reliance")
+
+    async def create_reliance(
+        self,
+        model_id: str,
+        provider_model_id: str,
+        provider_control_id: str,
+        mode: str,
+        source_objective_id: str = "",
+        source_control_id: str = "",
+    ) -> dict:
+        """Declare a cross-model dependency on a provider control.
+
+        Calls ``POST /api/models/{model_id}/reliance``.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/reliance",
+            {
+                "provider_model_id": provider_model_id,
+                "provider_control_id": provider_control_id,
+                "mode": mode,
+                "source_objective_id": source_objective_id,
+                "source_control_id": source_control_id,
+            },
+        )
+
+    async def confirm_reliance(
+        self, edge_id: str, accept_partial_as_relied_upon: bool = False,
+    ) -> dict:
+        """Promote a draft reliance edge to active (post-validation gate)."""
+        return await self._post(
+            f"/api/reliance/{edge_id}/confirm",
+            {"accept_partial_as_relied_upon": accept_partial_as_relied_upon},
+        )
+
+    async def delete_reliance(self, edge_id: str) -> None:
+        await self._delete(f"/api/reliance/{edge_id}")
+
+    async def propose_attach_foundation(
+        self, model_id: str, foundation_model_id: str,
+    ) -> dict:
+        """Propose delegations from a consumer to a foundation (read-only)."""
+        return await self._get(
+            f"/api/models/{model_id}/attach-foundation/{foundation_model_id}/proposals",
+        )
+
+    async def attach_foundation(
+        self, model_id: str, foundation_model_id: str, selections: list[dict],
+    ) -> dict:
+        """Create draft delegation edges for the selected (objective, control) pairs."""
+        return await self._post(
+            f"/api/models/{model_id}/attach-foundation",
+            {"foundation_model_id": foundation_model_id, "selections": selections},
+        )
+
     async def start_export_model(self, model_id: str, fmt: str = "csv") -> str:
         """Kick off an async export job and return its job_id.
 

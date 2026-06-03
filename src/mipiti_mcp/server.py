@@ -599,6 +599,39 @@ the inverse mutation. Emits `lift_undone` / `split_undone` citing \
 proceed with apply; if refused, surface the enumerated reasons (operator \
 decides whether to edit the divergence manually or accept it).
 
+## Cross-model dependencies (delegation)
+
+Distinct from the parent/composition tree (containment): a *reliance* edge \
+declares that one model depends on a control implemented in ANOTHER model — \
+the right tool when a product is built on shared services (auth, logging, a \
+shared datastore) rather than being a sub-part of them. The target is always a \
+provider *control*, so credit terminates at a proven mechanism. Reliance is \
+scoped to the current workspace: a consumer can only delegate to provider \
+models in the SAME workspace (these tools don't see models across workspace \
+boundaries), so pick the foundation from this workspace's models. These tools \
+are available when the recursive-tree feature is enabled.
+
+- `declare_foundation` — mark a shared-service model as a foundation that \
+advertises specific controls other models can delegate to.
+- `propose_attach_foundation` → `attach_foundation` — bulk flow: propose which \
+of a consumer's objectives each foundation capability covers (read-only, \
+scored), then create draft delegation edges for the chosen subset.
+- `create_reliance` — declare a single dependency. `delegated` (consumer has \
+no local control for an objective; the provider handles it — pass \
+`source_objective_id`) or `relied_upon` (consumer keeps its own control but \
+its validity depends on the provider's — pass `source_control_id`).
+- `confirm_reliance` — promote a draft edge to active. Edges run LLM semantic \
+validation on creation and carry NO credit until confirmed, and only when \
+validation returned `valid` (a `partial` or mode-mismatch is refused — never \
+silently credited).
+- `list_reliance` — a model's dependency edges (as consumer) plus who relies on \
+it (as provider — the blast radius before changing its controls).
+- `delete_reliance` — remove an edge.
+
+A delegated objective is credited only while the provider control stays \
+verified; if the provider control regresses or a refined mechanism no longer \
+satisfies the consumer, the edge breaks and a finding is raised on the consumer.
+
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -1257,6 +1290,177 @@ async def set_threat_model_parent(
     try:
         result = await _get_client().set_parent(model_id, parent_id)
         return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def declare_foundation(
+    server_version: str,
+    model_id: str,
+    provides: list[dict],
+    visibility: str = "workspace",
+) -> dict:
+    """Mark a model as a shared foundation that advertises providable controls.
+
+    A foundation is a shared service (auth, logging, a shared datastore) whose
+    controls other models can delegate to. Each entry in ``provides`` advertises
+    one of THIS model's controls as providable:
+    ``{"control_id": "CTRL-07", "capability_label": "Validates session tokens",
+    "description": "..."}``. A capability always advertises a control (a proven
+    mechanism), never an objective. ``visibility`` is "workspace" (default) or
+    "explicit".
+
+    Args:
+        model_id: ID of the model to declare as a foundation.
+        provides: List of advertised-control dicts (control_id required).
+        visibility: "workspace" or "explicit".
+    """
+    try:
+        return await _get_client().declare_foundation(model_id, provides, visibility)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_reliance(server_version: str, model_id: str) -> dict:
+    """List a model's cross-model dependency edges (as consumer and as provider).
+
+    Returns ``{model_id, as_consumer: [...], as_provider: [...]}``. Consumer
+    edges are this model's declared delegations / reliances; provider edges are
+    other models relying on this one (the blast radius if its controls change).
+
+    Args:
+        model_id: ID of the model to inspect.
+    """
+    try:
+        return await _get_client().list_reliance(model_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def create_reliance(
+    server_version: str,
+    model_id: str,
+    provider_model_id: str,
+    provider_control_id: str,
+    mode: str,
+    source_objective_id: str = "",
+    source_control_id: str = "",
+) -> dict:
+    """Declare a cross-model dependency: this model relies on a provider control.
+
+    Two modes (the target is ALWAYS a provider control — credit terminates at a
+    proven mechanism):
+    - ``delegated``: this model does NOT implement an objective locally; it is
+      handled entirely by the provider's control. Pass ``source_objective_id``.
+    - ``relied_upon``: this model has its OWN control whose validity depends on
+      the provider's control. Pass ``source_control_id``.
+
+    The provider must be a model in the SAME workspace as the consumer (reliance
+    is workspace-scoped and does not reach across workspace boundaries). The edge
+    enters ``draft`` and runs LLM semantic validation; it carries no credit until
+    confirmed via ``confirm_reliance`` (and only when validation returned
+    ``valid``). Returns the created edge.
+
+    Args:
+        model_id: the consumer model declaring the dependency.
+        provider_model_id: the model whose control satisfies the dependency.
+        provider_control_id: the provider's control (the credit terminus).
+        mode: "delegated" or "relied_upon".
+        source_objective_id: consumer objective id (required for "delegated").
+        source_control_id: consumer control id (required for "relied_upon").
+    """
+    try:
+        return await _get_client().create_reliance(
+            model_id, provider_model_id, provider_control_id, mode,
+            source_objective_id, source_control_id,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def confirm_reliance(
+    server_version: str,
+    edge_id: str,
+    accept_partial_as_relied_upon: bool = False,
+) -> dict:
+    """Promote a draft reliance edge to active (the credit-soundness gate).
+
+    Refuses unless LLM validation returned ``valid``. A ``partial`` result or a
+    mode mismatch is refused (never silently credited). Returns the updated edge.
+
+    Args:
+        edge_id: ID of the reliance edge to confirm.
+        accept_partial_as_relied_upon: reserved for partial-coverage handling.
+    """
+    try:
+        return await _get_client().confirm_reliance(edge_id, accept_partial_as_relied_upon)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def delete_reliance(server_version: str, edge_id: str) -> dict:
+    """Delete a cross-model reliance edge.
+
+    Args:
+        edge_id: ID of the reliance edge to delete.
+    """
+    try:
+        await _get_client().delete_reliance(edge_id)
+        return {"deleted": True, "edge_id": edge_id}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def propose_attach_foundation(
+    server_version: str,
+    model_id: str,
+    foundation_model_id: str,
+) -> dict:
+    """Propose which of this model's objectives each foundation capability covers.
+
+    Read-only: returns candidate (objective ↔ provider control) pairs with a
+    match score. Nothing is created or credited. Feed the chosen subset to
+    ``attach_foundation``.
+
+    Args:
+        model_id: the consumer model.
+        foundation_model_id: the foundation to delegate to.
+    """
+    try:
+        return await _get_client().propose_attach_foundation(model_id, foundation_model_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def attach_foundation(
+    server_version: str,
+    model_id: str,
+    foundation_model_id: str,
+    selections: list[dict],
+) -> dict:
+    """Create draft delegation edges for selected (objective, control) pairs.
+
+    ``selections`` is a list of ``{"source_objective_id": ..., "provider_control_id": ...}``
+    (typically the operator-confirmed subset of ``propose_attach_foundation``).
+    Each becomes a ``delegated`` draft edge that runs LLM validation; none
+    carries credit until separately confirmed. Returns ``{created, failed}``.
+
+    Args:
+        model_id: the consumer model.
+        foundation_model_id: the foundation to delegate to.
+        selections: list of {source_objective_id, provider_control_id} dicts.
+    """
+    try:
+        return await _get_client().attach_foundation(
+            model_id, foundation_model_id, selections,
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
