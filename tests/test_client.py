@@ -492,6 +492,43 @@ async def test_get_findings_risks(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_list_findings_flat_list(mock_env: None) -> None:
+    """Legacy/flat response shape: a bare list of findings."""
+    respx.get("https://test.api.mipiti.io/api/models/m1/findings").mock(
+        return_value=httpx.Response(200, json=[
+            {"id": "find_001", "control_id": "CTRL-1", "title": "Gap"},
+        ])
+    )
+    client = MipitiClient()
+    findings = await client.list_findings("m1")
+    assert [f.id for f in findings] == ["find_001"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_findings_wrapper_shape(mock_env: None) -> None:
+    """Wrapper response (own + inherited arms) is flattened into the flat-list
+    contract; inherited rows keep their additive ``origin`` key via extra-allow."""
+    respx.get("https://test.api.mipiti.io/api/models/m1/findings").mock(
+        return_value=httpx.Response(200, json={
+            "own": [{"id": "find_own", "control_id": "CTRL-1", "title": "Own gap"}],
+            "inherited": [{
+                "id": "find_inh", "control_id": "CTRL-2", "title": "Inherited gap",
+                "origin": "inherited", "inherited_from_model_id": "parent-1",
+            }],
+        })
+    )
+    client = MipitiClient()
+    findings = await client.list_findings("m1")
+    assert [f.id for f in findings] == ["find_own", "find_inh"]
+    # Additive inheritance metadata survives (extra="allow").
+    assert findings[1].origin == "inherited"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_get_model_risk_view(mock_env: None) -> None:
     route = respx.get(
         "https://test.api.mipiti.io/api/models/tm-001/risk-view"
