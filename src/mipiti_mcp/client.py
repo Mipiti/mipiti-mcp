@@ -1893,6 +1893,14 @@ class MipitiClient:
         if status:
             params["status"] = status
         data = await self._get(f"/api/models/{model_id}/findings", params=params)
+        # The findings endpoint returns either a flat list or a
+        # ``{"own": [...], "inherited": [...]}`` wrapper, depending on whether
+        # the model participates in cross-model inheritance. Flatten both arms
+        # into this tool's flat-list contract; inherited rows are full Finding
+        # payloads with additive ``origin`` / ``inherited_from_*`` keys handled
+        # by ``extra="allow"``.
+        if isinstance(data, dict):
+            data = list(data.get("own", [])) + list(data.get("inherited", []))
         return [Finding.model_validate(f) for f in data]
 
     async def update_finding(
