@@ -2049,12 +2049,15 @@ class MipitiClient:
         description: str,
         crosses: list[str] | None = None,
         passes: list[str] | None = None,
+        sealed: bool | None = None,
     ) -> dict:
         body: dict = {"description": description}
         if crosses:
             body["crosses"] = crosses
         if passes is not None:
             body["passes"] = passes
+        if sealed is not None:
+            body["sealed"] = sealed
         return await self._post(f"/api/models/{model_id}/trust-boundaries", body)
 
     async def edit_trust_boundary(self, model_id: str, tb_id: str, **kwargs) -> dict:

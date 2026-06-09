@@ -5318,6 +5318,7 @@ async def add_trust_boundary(
     server_version: str, model_id: str, description: str,
     crosses: Optional[str] = None,
     passes: Optional[str] = None,
+    sealed: Optional[bool] = None,
 ) -> dict:
     """Add a trust boundary. Creates a new model version.
 
@@ -5330,6 +5331,13 @@ async def add_trust_boundary(
             Omit for the methodology default (passes-everything). Narrowing
             this set is what makes a boundary block specific attacker
             vectors in the deterministic reachability composer.
+        sealed: Optional. Set True to declare the boundary has NO lateral
+            ingress — the only way into its zone is crossing the perimeter
+            (an air-gap / network-segmented enclave). A sealed boundary that
+            blocks the attacker's vector lets reachability decisively rule the
+            asset unreachable instead of indeterminate. Default False (assume a
+            lateral pivot is possible). Set it only when the isolation is real
+            and attestable.
     """
     parsed_crosses = [c.strip() for c in crosses.split(",") if c.strip()] if crosses else []
     parsed_passes = (
@@ -5338,6 +5346,7 @@ async def add_trust_boundary(
     try:
         return await _get_client().add_trust_boundary(
             model_id, description, parsed_crosses or None, parsed_passes,
+            sealed=sealed,
         )
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -5349,6 +5358,7 @@ async def edit_trust_boundary(
     description: Optional[str] = None,
     crosses: Optional[str] = None,
     passes: Optional[str] = None,
+    sealed: Optional[bool] = None,
     change_reason: Optional[str] = None,
 ) -> dict:
     """Edit a trust boundary. Creates a new model version.
@@ -5363,9 +5373,14 @@ async def edit_trust_boundary(
             empty string to set "blocks all"; omit to leave unchanged.
             Reach-relevant — narrowing or widening this set can flip CO
             verdicts.
-        change_reason: Required when ``passes`` actually changes. Captured
-            in the audit trail; documents why the boundary's vector
-            filter was tightened or widened.
+        sealed: New isolation flag. True declares NO lateral ingress (the only
+            way in is crossing the perimeter — an air-gap / segmented enclave),
+            which lets reachability decisively rule the boundary unreachable;
+            False assumes a lateral pivot is possible. Reach-relevant — changing
+            it can flip CO verdicts. Omit to leave unchanged.
+        change_reason: Required when ``passes`` or ``sealed`` actually changes.
+            Captured in the audit trail; documents why the boundary's vector
+            filter was tightened/widened or its isolation claim changed.
     """
     kwargs: dict = {}
     if description is not None:
@@ -5374,6 +5389,8 @@ async def edit_trust_boundary(
         kwargs["crosses"] = [c.strip() for c in crosses.split(",") if c.strip()]
     if passes is not None:
         kwargs["passes"] = [v.strip() for v in passes.split(",") if v.strip()]
+    if sealed is not None:
+        kwargs["sealed"] = sealed
     if change_reason is not None:
         kwargs["change_reason"] = change_reason
     try:
