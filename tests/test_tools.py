@@ -118,6 +118,8 @@ from mipiti_mcp.server import (
     undo_split_composition_event,
     get_control_objective,
     get_asset,
+    add_trust_boundary,
+    edit_trust_boundary,
     get_attacker,
     get_component,
     get_trust_boundary,
@@ -2513,6 +2515,30 @@ class TestPerIdGets:
             )
         assert result["trust_boundary"]["id"] == "TB1"
         assert "Network" in result["trust_boundary"]["passes"]
+
+    @pytest.mark.asyncio
+    async def test_add_trust_boundary_forwards_sealed(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await add_trust_boundary(
+                server_version="0", model_id="tm-001",
+                description="Air-gapped enclave", sealed=True,
+            )
+        mock.add_trust_boundary.assert_awaited_once()
+        assert mock.add_trust_boundary.await_args.kwargs.get("sealed") is True
+
+    @pytest.mark.asyncio
+    async def test_edit_trust_boundary_forwards_sealed(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await edit_trust_boundary(
+                server_version="0", model_id="tm-001", tb_id="TB1",
+                sealed=True, change_reason="network-segmented; no lateral ingress",
+            )
+        mock.edit_trust_boundary.assert_awaited_once()
+        kw = mock.edit_trust_boundary.await_args.kwargs
+        assert kw.get("sealed") is True
+        assert kw.get("change_reason") == "network-segmented; no lateral ingress"
 
     @pytest.mark.asyncio
     async def test_get_assumption(self) -> None:
