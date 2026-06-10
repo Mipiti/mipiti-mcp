@@ -153,7 +153,7 @@ uvx mipiti-mcp
 
 | Tool | Description |
 |------|-------------|
-| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (21 assertion types). |
+| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (<!--ASSERTION_TYPE_COUNT-->28<!--/ASSERTION_TYPE_COUNT--> assertion types). |
 | `list_assertions` / `delete_assertion` | List or delete assertions for a control. |
 | `add_evidence` / `remove_evidence` | Attach auxiliary metadata (docs, links). Evidence is contextual — only assertions prove implementation. |
 | `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |

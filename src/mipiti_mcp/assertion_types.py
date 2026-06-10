@@ -44,6 +44,7 @@ class AssertionTypeSpec:
 
 # -- File path param (reused across many types) --
 _FILE = ParamSpec("file", "File path relative to project root", example="backend/app/auth.py")
+_RTL_FILE = ParamSpec("file", "File path relative to project root", example="rtl/aes_core.sv")
 
 
 ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
@@ -236,6 +237,72 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         description="Run tests matching a pattern and verify they pass. Auto-detects pytest, npm test, cargo test.",
         params=(
             ParamSpec("pattern", "Test name or pattern to match", example="test_auth"),
+        ),
+    ),
+
+    # -- RTL / hardware (Verilog & SystemVerilog) --
+    AssertionTypeSpec(
+        name="module_exists",
+        description="Check that a Verilog/SystemVerilog module (or primitive/program) is declared in a file.",
+        params=(
+            _RTL_FILE,
+            ParamSpec("name", "Module name", example="aes_key_expand"),
+        ),
+    ),
+    AssertionTypeSpec(
+        name="module_instantiated",
+        description="Check that a module directly instantiates another module inside its module...endmodule body.",
+        params=(
+            _RTL_FILE,
+            ParamSpec("parent", "Enclosing module name", example="soc_top"),
+            ParamSpec("child", "Instantiated module name", example="aes_core"),
+        ),
+    ),
+    AssertionTypeSpec(
+        name="port_exists",
+        description="Check that a module declares a port, optionally with a specific direction. Detects ANSI header and non-ANSI body declarations.",
+        params=(
+            _RTL_FILE,
+            ParamSpec("module", "Module name", example="aes_core"),
+            ParamSpec("port", "Port name", example="key_clear"),
+            ParamSpec("direction", "Port direction: input, output, or inout", required=False, example="input"),
+        ),
+    ),
+    AssertionTypeSpec(
+        name="parameter_defined",
+        description="Check that a parameter or localparam is declared, optionally that its assigned value matches a regex (RE2 syntax).",
+        params=(
+            _RTL_FILE,
+            ParamSpec("parameter", "Parameter or localparam name", example="KEY_WIDTH"),
+            ParamSpec("module", "Module to scope the search to (whole file if omitted)", required=False, example="aes_core"),
+            ParamSpec("pattern", "RE2 regex the assigned value must match", required=False, example="256"),
+        ),
+    ),
+    AssertionTypeSpec(
+        name="signal_exists",
+        description="Check that a net or variable (wire, reg, logic, bit) is declared.",
+        params=(
+            _RTL_FILE,
+            ParamSpec("name", "Signal name", example="key_valid"),
+            ParamSpec("module", "Module to scope the search to (whole file if omitted)", required=False, example="aes_core"),
+            ParamSpec("kind", "Declaration kind: wire, reg, logic, or bit", required=False, example="logic"),
+        ),
+    ),
+    AssertionTypeSpec(
+        name="sva_assertion_present",
+        description="Check that a named SystemVerilog assertion is present: a property declaration, or a labelled assert/assume/cover statement.",
+        params=(
+            _RTL_FILE,
+            ParamSpec("name", "Property name or assertion label", example="p_key_cleared_on_reset"),
+        ),
+    ),
+    AssertionTypeSpec(
+        name="register_reset",
+        description="Check that a register is assigned on a reset path. Tier 1 finds an always block that references the reset and assigns the signal; tier 2 uses AI to verify the register resets to a safe, known value.",
+        params=(
+            _RTL_FILE,
+            ParamSpec("signal", "Register/signal name that must be reset", example="key_reg"),
+            ParamSpec("reset", "Reset signal name (common rst/reset names detected if omitted)", required=False, example="rst_n"),
         ),
     ),
 )

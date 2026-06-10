@@ -22,6 +22,14 @@ mcp_tool_count() {
   grep -c '^@mcp.tool' "$REPO_ROOT/src/mipiti_mcp/server.py"
 }
 
+# Assertion type count: number of AssertionTypeSpec entries in the
+# canonical assertion schema. The backend and mipiti-verify consume
+# this same schema, so docs citing "N assertion types" stay in sync
+# with the package by construction.
+assertion_type_count() {
+  grep -c '^    AssertionTypeSpec(' "$REPO_ROOT/src/mipiti_mcp/assertion_types.py"
+}
+
 # Package version (PyPI release tag).
 package_version() {
   grep -E '^version[[:space:]]*=' "$REPO_ROOT/pyproject.toml" \
@@ -32,6 +40,7 @@ package_version() {
 emit_all_counts() {
   cat <<EOF
 mcp_tool_count=$(mcp_tool_count)
+assertion_type_count=$(assertion_type_count)
 package_version="$(package_version)"
 EOF
 }

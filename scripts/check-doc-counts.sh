@@ -29,6 +29,7 @@ while IFS= read -r f; do DOC_FILES+=("$f"); done < <(
 
 declare -A METRICS=(
   [MCP_TOOL_COUNT]=mcp_tool_count
+  [ASSERTION_TYPE_COUNT]=assertion_type_count
   [PACKAGE_VERSION]=package_version
 )
 
