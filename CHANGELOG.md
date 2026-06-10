@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Seven RTL/hardware assertion types in the canonical assertion schema, extending machine-verifiable evidence to Verilog/SystemVerilog sources: `module_exists`, `module_instantiated`, `port_exists`, `parameter_defined`, `signal_exists`, `sva_assertion_present`, and `register_reset`. Mirrors the existing software taxonomy (structure / call-graph / interface / configuration / verification / semantic): `module_exists` and `signal_exists` are the structural existence checks, `module_instantiated` is the call-graph analogue, `port_exists` covers the module interface, `parameter_defined` covers configuration (with an optional RE2 value pattern), `sva_assertion_present` proves a named SystemVerilog assertion exists, and `register_reset` is the two-tier semantic type (tier 1 finds the reset-path assignment; tier 2 evaluates whether the register resets to a safe, known value). The `submit_assertions` docstring picks the new types up automatically via `format_for_docstring()`. Total assertion types: 28.
+- `assertion_type_count` metric in `scripts/canonical-counts.sh` (+ `ASSERTION_TYPE_COUNT` in the doc-count gate), so README mentions of the type count are pinned to the schema instead of hand-maintained.
+
 ### Fixed
 
 - `server_version` validator no longer bypassable via empty string. The previous shape (`if client_version and client_version != _SERVER_VERSION:`) short-circuited when an agent omitted the field, defeating the pin's safety guarantee (tool catalog + parameter schemas can change between submodule pointer bumps; the server must refuse stale calls). Empty string now rejects alongside any mismatch. Five new tests pin the staleness-rejection path so a future short-circuit reopens-the-bypass change breaks CI loudly.
