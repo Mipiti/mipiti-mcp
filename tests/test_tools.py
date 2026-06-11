@@ -93,6 +93,7 @@ from mipiti_mcp.server import (
     refine_control,
     remap_control,
     reevaluate_threat_model_factors,
+    revalidate_threat_model_entities,
     restore_asset,
     restore_attacker,
     update_control_status,
@@ -180,6 +181,7 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                           "controls_carried": 0, "controls_orphaned": 0},
         "remove_attacker": {"model": {"id": "tm-001", "attackers": []},
                             "controls_carried": 0, "controls_orphaned": 0},
+        "revalidate_entities": {"accepted": True, "model": {"id": "tm-001"}},
         "reevaluate_factors": {
             "model_id": "tm-001",
             "assets_reevaluated": 2,
@@ -1527,6 +1529,43 @@ class TestReevaluateThreatModelFactors:
         with _patch_client(mock):
             with pytest.raises(ToolError, match="LLM evaluator unreachable"):
                 await reevaluate_threat_model_factors(
+                    server_version="0", model_id="tm-001",
+                )
+
+
+class TestRevalidateEntities:
+    @pytest.mark.asyncio
+    async def test_tool_is_registered(self) -> None:
+        tool = await server.mcp.get_tool("revalidate_threat_model_entities")
+        assert tool is not None
+        assert tool.name == "revalidate_threat_model_entities"
+
+    @pytest.mark.asyncio
+    async def test_success_returns_envelope(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await revalidate_threat_model_entities(
+                server_version="0", model_id="tm-001",
+            )
+        assert result["accepted"] is True
+        assert result["model"]["id"] == "tm-001"
+        mock.revalidate_entities.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_client_error_wrapped_as_tool_error(self) -> None:
+        import httpx
+        request = httpx.Request("POST", "https://api/revalidate-entities")
+        response = httpx.Response(
+            404, request=request, json={"detail": "Model not found"},
+        )
+        mock = _mock_client(revalidate_entities=AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "404 Not Found", request=request, response=response,
+            ),
+        ))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="Model not found"):
+                await revalidate_threat_model_entities(
                     server_version="0", model_id="tm-001",
                 )
 
