@@ -127,6 +127,12 @@ point*; layer deployment-specific reality on top via `edit_asset` / \
 "capability_prevalence=Commodity — endpoint is public-internet \
 exposed"). The rating-revision audit trail distinguishes platform \
 suggestions from operator overrides.
+- `revalidate_threat_model_entities` — re-run quality validation over an \
+existing model's assets and attackers (a fast first-pass check on every \
+entity, a deeper review only on the ones it flags). Use it to apply \
+validation improvements to an already-generated model or clear stale quality \
+warnings, without regenerating. Non-destructive (it flags rather than \
+deletes) and saves a new version.
 - `get_threat_model` — retrieve a model's full structure (excludes COs by \
 default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
@@ -4202,6 +4208,34 @@ async def reevaluate_threat_model_factors(
         return _dump(await _get_client().reevaluate_factors(
             model_id, change_reason=change_reason,
         ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def revalidate_threat_model_entities(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Re-run quality validation on a threat model's existing assets and
+    attackers, as if they were freshly generated. A fast first-pass check
+    judges every entity; only the ones it flags get a deeper review that
+    confirms them, sharpens their wording, or flags them for you.
+
+    Use this to apply validation improvements to an already-generated model, or
+    to clear stale quality warnings — without regenerating the whole model
+    (which would destroy controls, assertions, and components). It is
+    non-destructive: an entity that should be removed is left in place with a
+    quality warning rather than deleted, so no control objective loses its asset
+    or attacker anchor. The result is saved as a new model version; controls and
+    control objectives carry forward.
+
+    May consume credits for the entities that need the deeper review; a model
+    already in good shape costs nothing. Returns the updated model envelope:
+    ``{"accepted": true, "model": {...}}``.
+    """
+    try:
+        return _dump(await _get_client().revalidate_entities(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 

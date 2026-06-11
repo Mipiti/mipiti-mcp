@@ -1542,6 +1542,27 @@ class MipitiClient:
             f"/api/models/{model_id}/factors/reevaluate", body,
         )
 
+    async def revalidate_entities(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/revalidate-entities.
+
+        Re-runs quality validation over the model's live assets and attackers
+        as if they were freshly generated: a fast first-pass check on every
+        entity, with a deeper review of only the ones it flags (which confirms
+        them, sharpens their wording, or flags them for review). Stale quality
+        warnings are cleared first so previously-flagged entities are re-judged.
+
+        Non-destructive: an entity that should be removed is left in place with
+        a quality warning rather than deleted, so no control objective loses its
+        asset/attacker anchor. The result is saved as a new model version
+        (controls and control objectives carry forward). May consume credits for
+        the entities that need the deeper review.
+
+        Returns the entity-CRUD envelope: ``{"accepted": true, "model": {...}}``.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/revalidate-entities", {},
+        )
+
     # ------------------------------------------------------------------
     # Assurance
     # ------------------------------------------------------------------
