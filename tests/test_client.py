@@ -168,21 +168,17 @@ async def test_remove_evidence(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_add_asset(mock_env: None) -> None:
-    # API returns a wrapper envelope: {"model": ..., "controls_carried": ...}.
-    # Rejection / auto-restore responses are covered in the tool-level
-    # tests in test_tools.py; here we just exercise the client's
-    # happy-path pass-through.
-    respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(
-        return_value=httpx.Response(200, json={
-            "model": {"id": "tm-001", "assets": [{"id": "A3", "name": "Session Store"}]},
-            "controls_carried": 0,
-            "controls_dropped": 0,
-        })
+    # The add now runs as a background job: the client POSTs the -job
+    # endpoint and gets back a {"job_id": ...} handle to poll. Rejection /
+    # auto-restore responses are delivered as the job result and covered in
+    # the tool-level tests in test_tools.py; here we just exercise the
+    # client's happy-path pass-through of the job handle.
+    respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(
+        return_value=httpx.Response(200, json={"job_id": "job-add-asset"})
     )
     client = MipitiClient()
-    result = await client.add_asset("tm-001", name="Session Store")
-    assert result["model"]["assets"][0]["id"] == "A3"
-    assert result["controls_carried"] == 0
+    result = await client.start_add_asset("tm-001", name="Session Store")
+    assert result["job_id"] == "job-add-asset"
     await client.close()
 
 
@@ -893,11 +889,11 @@ class TestIdempotencyKey:
             captured_keys.append(request.headers.get("Idempotency-Key", ""))
             return httpx.Response(200, json={"id": "A1", "name": "ok"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_capture)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_capture)
 
         client = MipitiClient()
-        await client.add_asset("tm-001", name="One")
-        await client.add_asset("tm-001", name="Two")
+        await client.start_add_asset("tm-001", name="One")
+        await client.start_add_asset("tm-001", name="Two")
         await client.close()
 
         assert len(captured_keys) == 2
@@ -929,10 +925,10 @@ class TestIdempotencyKey:
             captured["key"] = request.headers.get("Idempotency-Key", "")
             return httpx.Response(200, json={"id": "A1", "name": "edited"})
 
-        respx.put("https://test.api.mipiti.io/api/models/tm-001/assets/A1").mock(side_effect=_capture)
+        respx.put("https://test.api.mipiti.io/api/models/tm-001/components/CMP1").mock(side_effect=_capture)
 
         client = MipitiClient()
-        await client.edit_asset("tm-001", "A1", name="edited")
+        await client.edit_component("tm-001", "CMP1", name="edited")
         await client.close()
         assert captured["key"]
 
@@ -970,18 +966,15 @@ class TestTransientRetry:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise httpx.ConnectError("network blip")
-            return httpx.Response(200, json={
-                "model": {"id": "tm-001", "assets": [{"id": "A1", "name": "after retry"}]},
-                "controls_carried": 0, "controls_dropped": 0,
-            })
+            return httpx.Response(200, json={"job_id": "job-add-asset"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_flaky)
 
         client = MipitiClient()
-        result = await client.add_asset("tm-001", name="x")
+        result = await client.start_add_asset("tm-001", name="x")
         await client.close()
 
-        assert result["model"]["assets"][0]["name"] == "after retry"
+        assert result["job_id"] == "job-add-asset"
         assert attempts["n"] == 2
         # Both attempts must use the SAME key so the server cache deduplicates
         assert len(captured_keys) == 2
@@ -1003,12 +996,12 @@ class TestTransientRetry:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 return httpx.Response(503, text="Service Unavailable")
-            return httpx.Response(200, json={"id": "A1", "name": "ok"})
+            return httpx.Response(200, json={"job_id": "job-add-asset"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_flaky)
 
         client = MipitiClient()
-        await client.add_asset("tm-001", name="x")
+        await client.start_add_asset("tm-001", name="x")
         await client.close()
         assert attempts["n"] == 2
         assert captured_keys[0] == captured_keys[1]
@@ -1026,11 +1019,11 @@ class TestTransientRetry:
             attempts["n"] += 1
             return httpx.Response(400, json={"detail": "bad input"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_bad_request)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_bad_request)
 
         client = MipitiClient()
         with pytest.raises(httpx.HTTPStatusError):
-            await client.add_asset("tm-001", name="x")
+            await client.start_add_asset("tm-001", name="x")
         await client.close()
         assert attempts["n"] == 1  # no retry
 
@@ -1047,11 +1040,11 @@ class TestTransientRetry:
             attempts["n"] += 1
             raise httpx.ConnectError("permanent")
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_always_fail)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_always_fail)
 
         client = MipitiClient()
         with pytest.raises(httpx.ConnectError, match="permanent"):
-            await client.add_asset("tm-001", name="x")
+            await client.start_add_asset("tm-001", name="x")
         await client.close()
         # Initial attempt + 3 retries = 4 total attempts
         assert attempts["n"] == 4

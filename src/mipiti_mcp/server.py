@@ -3856,6 +3856,7 @@ async def add_asset(
     server_version: str,
     model_id: str,
     name: str,
+    ctx: Context,
     description: str = "",
     security_properties: Optional[str] = None,
     notes: str = "",
@@ -3920,7 +3921,9 @@ async def add_asset(
     if component_ids is not None:
         body["component_ids"] = [c.strip() for c in component_ids.split(",") if c.strip()]
     try:
-        return _dump(await _get_client().add_asset(model_id, **body))
+        client = _get_client()
+        started = await client.start_add_asset(model_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3930,6 +3933,7 @@ async def edit_asset(
     server_version: str,
     model_id: str,
     asset_id: str,
+    ctx: Context,
     name: Optional[str] = None,
     description: Optional[str] = None,
     security_properties: Optional[str] = None,
@@ -4021,7 +4025,9 @@ async def edit_asset(
             "documented reason for the audit trail."
         )
     try:
-        return _dump(await _get_client().edit_asset(model_id, asset_id, **body))
+        client = _get_client()
+        started = await client.start_edit_asset(model_id, asset_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4071,6 +4077,7 @@ async def add_attacker(
     server_version: str,
     model_id: str,
     capability: str,
+    ctx: Context,
     position: str = "",
     archetype: str = "",
     trust_boundary_ids: Optional[str] = None,
@@ -4101,7 +4108,9 @@ async def add_attacker(
     if trust_boundary_ids:
         body["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
     try:
-        return _dump(await _get_client().add_attacker(model_id, **body))
+        client = _get_client()
+        started = await client.start_add_attacker(model_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4111,6 +4120,7 @@ async def edit_attacker(
     server_version: str,
     model_id: str,
     attacker_id: str,
+    ctx: Context,
     capability: Optional[str] = None,
     position: Optional[str] = None,
     archetype: Optional[str] = None,
@@ -4181,7 +4191,9 @@ async def edit_attacker(
             "documented reason for the audit trail."
         )
     try:
-        return _dump(await _get_client().edit_attacker(model_id, attacker_id, **body))
+        client = _get_client()
+        started = await client.start_edit_attacker(model_id, attacker_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 

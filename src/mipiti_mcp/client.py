@@ -1505,8 +1505,13 @@ class MipitiClient:
     # Assets & Attackers
     # ------------------------------------------------------------------
 
-    async def add_asset(self, model_id: str, **kwargs: Any) -> dict:
-        """POST /assets returns one of three response shapes:
+    async def start_add_asset(self, model_id: str, **kwargs: Any) -> dict:
+        """Kick off an asset add as a background job; returns ``{"job_id": ...}``.
+
+        The add is LLM-gated (restore-candidate + factor reasoning), so it runs
+        as a job to keep the work off the backend event loop and the MCP
+        transport warm. The job result is the same envelope the synchronous add
+        returned — one of three shapes:
 
         1. Normal create:
            ``{"model": ThreatModel, "controls_carried": N, ...}``
@@ -1521,14 +1526,16 @@ class MipitiClient:
               "suggestion": "..."}``
 
         HTTP 503 (evaluator unreachable) and 502 (evaluator returned
-        malformed output) both raise via httpx and are caught by the
-        tool wrapper as tool errors. The two are semantically
-        distinct: 503 means retry-with-backoff; 502 means retry-now.
+        malformed output) surface as a failed job; 503 means
+        retry-with-backoff, 502 means retry-now.
         """
-        return await self._post(f"/api/models/{model_id}/assets", kwargs)
+        return await self._post(f"/api/models/{model_id}/assets/add-job", kwargs)
 
-    async def edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
-        """PUT /assets/{id} returns one of two response shapes:
+    async def start_edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
+        """Kick off an asset edit as a background job; returns ``{"job_id": ...}``.
+
+        Runs the LLM-gated edit as a job; the job result is the same envelope
+        the synchronous edit returned — one of two shapes:
 
         1. Accepted edit (or non-identity edit skipped the AI gate):
            ``{"model": ThreatModel, "controls_carried": N, ...}``
@@ -1537,9 +1544,11 @@ class MipitiClient:
               "reason": "...", "per_field": {...}, "suggestion": "..."}``
 
         HTTP 503 (evaluator unreachable) or 502 (evaluator returned
-        malformed output) raise via httpx as distinct signals.
+        malformed output) surface as a failed job with distinct signals.
         """
-        return await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
+        return await self._post(
+            f"/api/models/{model_id}/assets/{asset_id}/edit-job", kwargs,
+        )
 
     async def remove_asset(self, model_id: str, asset_id: str) -> dict:
         """DELETE /assets/{id} soft-deletes. Returns the
@@ -1548,16 +1557,21 @@ class MipitiClient:
         """
         return await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
 
-    async def add_attacker(self, model_id: str, **kwargs: Any) -> dict:
-        """POST /attackers — same three-shape response as add_asset
-        (normal create / auto-restore / similar-rejection) plus 503 on
-        LLM outage."""
-        return await self._post(f"/api/models/{model_id}/attackers", kwargs)
+    async def start_add_attacker(self, model_id: str, **kwargs: Any) -> dict:
+        """Kick off an attacker add as a background job; returns
+        ``{"job_id": ...}``. Same three-shape job result as
+        ``start_add_asset`` (normal create / auto-restore /
+        similar-rejection) plus 503 on LLM outage."""
+        return await self._post(f"/api/models/{model_id}/attackers/add-job", kwargs)
 
-    async def edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
-        """PUT /attackers/{id} — same two-shape response as edit_asset
-        (accepted edit / semantic rejection) plus 503 on LLM outage."""
-        return await self._put(f"/api/models/{model_id}/attackers/{attacker_id}", kwargs)
+    async def start_edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
+        """Kick off an attacker edit as a background job; returns
+        ``{"job_id": ...}``. Same two-shape job result as
+        ``start_edit_asset`` (accepted edit / semantic rejection) plus 503
+        on LLM outage."""
+        return await self._post(
+            f"/api/models/{model_id}/attackers/{attacker_id}/edit-job", kwargs,
+        )
 
     async def remove_attacker(self, model_id: str, attacker_id: str) -> dict:
         """DELETE /attackers/{id} soft-deletes. Returns the envelope
