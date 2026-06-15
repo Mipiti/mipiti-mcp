@@ -1784,62 +1784,65 @@ async def test_tag_crud_and_membership(mock_env: None) -> None:
 
 
 # ------------------------------------------------------------------
-# import_controls: preview -> confirm two-step contract
+# import_controls: preview-job + build + confirm
 # ------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_import_controls_confirm_sends_controls_not_import_id(mock_env: None) -> None:
-    """The confirm endpoint is stateless: it requires the controls list, not an
-    import id (the preview returns no id). import_controls must build the confirm
-    body from the preview's parsed+mapped controls and drop flagged duplicates."""
-    preview = respx.post(
-        "https://test.api.mipiti.io/api/models/tm-1/controls/import",
-    ).mock(return_value=httpx.Response(200, json={
+async def test_start_import_preview_posts_to_preview_job(mock_env: None) -> None:
+    """The preview runs as a background job: parse the structured controls_json
+    into the `controls` array and POST to the preview-job endpoint, returning a
+    job_id to poll. (Avoids a 30s silent request the MCP transport would drop.)"""
+    route = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import/preview-job",
+    ).mock(return_value=httpx.Response(200, json={"job_id": "job-import-1"}))
+
+    client = MipitiClient()
+    out = await client.start_import_preview(
+        "tm-1", controls_json='[{"description": "X", "co_ids": ["CO-1"]}]',
+    )
+    await client.close()
+
+    body = json.loads(route.calls.last.request.read().decode("utf-8"))
+    assert "controls_json" not in body
+    assert body["controls"] == [{"description": "X", "co_ids": ["CO-1"]}]
+    assert out["job_id"] == "job-import-1"
+
+
+def test_build_import_controls_drops_duplicates_and_applies_mappings() -> None:
+    """build_import_controls turns a preview into the confirm payload: applies
+    auto-mapped co_ids/mitigation_group and drops controls flagged as duplicates."""
+    preview = {
         "parsed": [
             {"description": "Sign webhooks", "co_ids": ["CO-1"], "framework_refs": ["ASVS 5.3.1"]},
             {"description": "Dup of existing", "co_ids": ["CO-2"]},
         ],
         "mappings": [{"control_idx": 0, "co_ids": ["CO-1"], "mitigation_group": 1}],
         "duplicates": [{"import_idx": 1, "existing_ctrl_id": "CTRL-9", "match_type": "exact"}],
-        "source_label": "recovered",
-    }))
-    confirm = respx.post(
-        "https://test.api.mipiti.io/api/models/tm-1/controls/import/confirm",
-    ).mock(return_value=httpx.Response(200, json={"imported": 1, "controls": []}))
-
-    client = MipitiClient()
-    result = await client.import_controls("tm-1", free_text="Sign webhooks\nDup", source_label="recovered")
-    await client.close()
-
-    assert preview.called and confirm.called
-    body = json.loads(confirm.calls.last.request.read().decode("utf-8"))
-    assert "import_id" not in body
-    # The duplicate (import_idx 1) is dropped; the mapped control carries its co_ids + group.
-    assert [c["description"] for c in body["controls"]] == ["Sign webhooks"]
-    assert body["controls"][0]["co_ids"] == ["CO-1"]
-    assert body["controls"][0]["mitigation_group"] == 1
-    assert body["source_label"] == "recovered"
-    assert result.imported == 1
+    }
+    controls = MipitiClient.build_import_controls(preview)
+    assert [c["description"] for c in controls] == ["Sign webhooks"]  # dup dropped
+    assert controls[0]["co_ids"] == ["CO-1"]
+    assert controls[0]["mitigation_group"] == 1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_import_controls_json_is_parsed_into_controls_field(mock_env: None) -> None:
-    """The preview endpoint takes a parsed `controls` array, not a JSON string
-    under `controls_json`. An empty parse yields no confirm call."""
-    preview = respx.post(
-        "https://test.api.mipiti.io/api/models/tm-1/controls/import",
-    ).mock(return_value=httpx.Response(200, json={"parsed": [], "mappings": [], "duplicates": []}))
+async def test_import_confirm_posts_controls_list(mock_env: None) -> None:
+    """The stateless confirm step persists the controls list (not an import id)."""
+    route = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import/confirm",
+    ).mock(return_value=httpx.Response(200, json={"imported": 1, "controls": []}))
 
     client = MipitiClient()
-    result = await client.import_controls(
-        "tm-1", controls_json='[{"description": "X", "co_ids": ["CO-1"]}]',
+    result = await client.import_confirm(
+        "tm-1", [{"description": "Sign webhooks", "co_ids": ["CO-1"]}], source_label="recovered",
     )
     await client.close()
 
-    body = json.loads(preview.calls.last.request.read().decode("utf-8"))
-    assert "controls_json" not in body
-    assert body["controls"] == [{"description": "X", "co_ids": ["CO-1"]}]
-    assert result.imported == 0  # nothing parsed -> no confirm POST
+    body = json.loads(route.calls.last.request.read().decode("utf-8"))
+    assert "import_id" not in body
+    assert body["controls"][0]["description"] == "Sign webhooks"
+    assert body["source_label"] == "recovered"
+    assert result.imported == 1

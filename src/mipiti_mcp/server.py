@@ -957,6 +957,35 @@ async def _safe_report_progress(
         pass
 
 
+async def _confirm_import(ctx: Context, controls: list[dict], dup_count: int) -> bool:
+    """Confirm a mutating control import with the user via MCP elicitation.
+
+    Summarizes what will be saved and lets the user approve or cancel in their
+    client (e.g. a terminal prompt). If the client does not support elicitation,
+    proceed — the agent invoked this tool deliberately on the user's behalf.
+    """
+    header = f"About to import {len(controls)} control(s) into the threat model"
+    if dup_count:
+        header += f" ({dup_count} duplicate(s) of existing controls skipped)"
+    lines = [header + ":"]
+    for c in controls[:10]:
+        lines.append(f"  • {str(c.get('description', ''))[:120]}")
+    if len(controls) > 10:
+        lines.append(f"  … and {len(controls) - 10} more")
+    message = "\n".join(lines)
+    try:
+        result = await ctx.elicit(
+            message=message, response_type=["Apply import", "Cancel"],
+        )
+    except Exception:
+        # Client doesn't support elicitation — proceed (agent-initiated).
+        return True
+    return (
+        getattr(result, "action", None) == "accept"
+        and getattr(result, "data", None) == "Apply import"
+    )
+
+
 def _dump(obj: Any) -> dict:
     """Convert Pydantic model or list to dict for MCP tool response.
 
@@ -3634,8 +3663,10 @@ async def import_controls(
 ) -> dict:
     """Import existing security controls into a threat model.
 
-    Accepts structured JSON or free-text. Controls auto-mapped to COs
-    and deduplicated against existing. Takes 10-30 seconds.
+    Accepts structured JSON or free-text. Controls are auto-mapped to COs and
+    deduplicated against existing ones. The parse/map/dedup runs as a background
+    job (polled for progress), then — because this mutates the model — you are
+    asked to confirm before the controls are saved.
 
     Args:
         model_id: ID of the threat model.
@@ -3645,9 +3676,37 @@ async def import_controls(
         auto_map: Auto-map controls to COs using LLM (default: True).
     """
     try:
-        return _dump(await _get_client().import_controls(
+        client = _get_client()
+        # 1. Preview as a background job: parse / auto-map / dedup runs off the
+        #    backend event loop; polling keeps the transport warm.
+        started = await client.start_import_preview(
             model_id, controls_json, free_text, source_label, auto_map,
-        ))
+        )
+        preview = await _await_backend_job(client, started["job_id"], ctx)
+        controls = client.build_import_controls(preview)
+        if not controls:
+            return {
+                "imported": 0,
+                "controls": [],
+                "message": "Nothing to import: no controls were parsed, or all "
+                           "matched controls already in the model.",
+            }
+
+        # 2. Confirm with the user (terminal elicitation) before mutating.
+        dup_count = len(preview.get("duplicates") or [])
+        if not await _confirm_import(ctx, controls, dup_count):
+            return {
+                "imported": 0,
+                "controls": [],
+                "message": f"Import cancelled — {len(controls)} control(s) were "
+                           "not saved.",
+            }
+
+        # 3. Persist (fast, stateless confirm).
+        result = await client.import_confirm(
+            model_id, controls, source_label or preview.get("source_label", ""),
+        )
+        return _dump(result)
     except Exception as exc:
         raise _api_error(exc) from exc
 
