@@ -957,6 +957,35 @@ async def _safe_report_progress(
         pass
 
 
+async def _confirm_import(ctx: Context, controls: list[dict], dup_count: int) -> bool:
+    """Confirm a mutating control import with the user via MCP elicitation.
+
+    Summarizes what will be saved and lets the user approve or cancel in their
+    client (e.g. a terminal prompt). If the client does not support elicitation,
+    proceed — the agent invoked this tool deliberately on the user's behalf.
+    """
+    header = f"About to import {len(controls)} control(s) into the threat model"
+    if dup_count:
+        header += f" ({dup_count} duplicate(s) of existing controls skipped)"
+    lines = [header + ":"]
+    for c in controls[:10]:
+        lines.append(f"  • {str(c.get('description', ''))[:120]}")
+    if len(controls) > 10:
+        lines.append(f"  … and {len(controls) - 10} more")
+    message = "\n".join(lines)
+    try:
+        result = await ctx.elicit(
+            message=message, response_type=["Apply import", "Cancel"],
+        )
+    except Exception:
+        # Client doesn't support elicitation — proceed (agent-initiated).
+        return True
+    return (
+        getattr(result, "action", None) == "accept"
+        and getattr(result, "data", None) == "Apply import"
+    )
+
+
 def _dump(obj: Any) -> dict:
     """Convert Pydantic model or list to dict for MCP tool response.
 
@@ -1990,6 +2019,7 @@ async def refine_control(
     server_version: str,
     model_id: str,
     control_id: str,
+    ctx: Context,
     description: str = "",
     justification: str = "",
     codebase_findings: str = "",
@@ -2030,11 +2060,15 @@ async def refine_control(
     if len(justification.strip()) < 10:
         raise ToolError("justification must be at least 10 characters.")
     try:
-        return _dump(await _get_client().refine_control(
+        client = _get_client()
+        # Runs as a background job (strong-LLM CO sufficiency check); poll it so
+        # the work stays off the backend event loop and the transport stays warm.
+        started = await client.start_refine_control(
             model_id, control_id,
             description.strip(), justification.strip(),
             codebase_findings=codebase_findings.strip(),
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3530,6 +3564,7 @@ async def set_mitigation_groups(
     model_id: str,
     co_id: str,
     groups: str,
+    ctx: Context,
     defense_in_depth: str = "",
     justification: str = "",
 ) -> dict:
@@ -3566,9 +3601,13 @@ async def set_mitigation_groups(
         raise ToolError("justification must be at least 10 characters.")
 
     try:
-        return _dump(await _get_client().set_mitigation_groups(
+        client = _get_client()
+        # Runs as a background job (strong-LLM CO sufficiency check); poll it so
+        # the work stays off the backend event loop and the transport stays warm.
+        started = await client.start_set_mitigation_groups(
             model_id, co_id, parsed_groups, did_list, justification.strip(),
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3634,8 +3673,10 @@ async def import_controls(
 ) -> dict:
     """Import existing security controls into a threat model.
 
-    Accepts structured JSON or free-text. Controls auto-mapped to COs
-    and deduplicated against existing. Takes 10-30 seconds.
+    Accepts structured JSON or free-text. Controls are auto-mapped to COs and
+    deduplicated against existing ones. The parse/map/dedup runs as a background
+    job (polled for progress), then — because this mutates the model — you are
+    asked to confirm before the controls are saved.
 
     Args:
         model_id: ID of the threat model.
@@ -3645,9 +3686,37 @@ async def import_controls(
         auto_map: Auto-map controls to COs using LLM (default: True).
     """
     try:
-        return _dump(await _get_client().import_controls(
+        client = _get_client()
+        # 1. Preview as a background job: parse / auto-map / dedup runs off the
+        #    backend event loop; polling keeps the transport warm.
+        started = await client.start_import_preview(
             model_id, controls_json, free_text, source_label, auto_map,
-        ))
+        )
+        preview = await _await_backend_job(client, started["job_id"], ctx)
+        controls = client.build_import_controls(preview)
+        if not controls:
+            return {
+                "imported": 0,
+                "controls": [],
+                "message": "Nothing to import: no controls were parsed, or all "
+                           "matched controls already in the model.",
+            }
+
+        # 2. Confirm with the user (terminal elicitation) before mutating.
+        dup_count = len(preview.get("duplicates") or [])
+        if not await _confirm_import(ctx, controls, dup_count):
+            return {
+                "imported": 0,
+                "controls": [],
+                "message": f"Import cancelled — {len(controls)} control(s) were "
+                           "not saved.",
+            }
+
+        # 3. Persist (fast, stateless confirm).
+        result = await client.import_confirm(
+            model_id, controls, source_label or preview.get("source_label", ""),
+        )
+        return _dump(result)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3787,6 +3856,7 @@ async def add_asset(
     server_version: str,
     model_id: str,
     name: str,
+    ctx: Context,
     description: str = "",
     security_properties: Optional[str] = None,
     notes: str = "",
@@ -3851,7 +3921,9 @@ async def add_asset(
     if component_ids is not None:
         body["component_ids"] = [c.strip() for c in component_ids.split(",") if c.strip()]
     try:
-        return _dump(await _get_client().add_asset(model_id, **body))
+        client = _get_client()
+        started = await client.start_add_asset(model_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3861,6 +3933,7 @@ async def edit_asset(
     server_version: str,
     model_id: str,
     asset_id: str,
+    ctx: Context,
     name: Optional[str] = None,
     description: Optional[str] = None,
     security_properties: Optional[str] = None,
@@ -3952,7 +4025,9 @@ async def edit_asset(
             "documented reason for the audit trail."
         )
     try:
-        return _dump(await _get_client().edit_asset(model_id, asset_id, **body))
+        client = _get_client()
+        started = await client.start_edit_asset(model_id, asset_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4002,6 +4077,7 @@ async def add_attacker(
     server_version: str,
     model_id: str,
     capability: str,
+    ctx: Context,
     position: str = "",
     archetype: str = "",
     trust_boundary_ids: Optional[str] = None,
@@ -4032,7 +4108,9 @@ async def add_attacker(
     if trust_boundary_ids:
         body["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
     try:
-        return _dump(await _get_client().add_attacker(model_id, **body))
+        client = _get_client()
+        started = await client.start_add_attacker(model_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4042,6 +4120,7 @@ async def edit_attacker(
     server_version: str,
     model_id: str,
     attacker_id: str,
+    ctx: Context,
     capability: Optional[str] = None,
     position: Optional[str] = None,
     archetype: Optional[str] = None,
@@ -4112,7 +4191,9 @@ async def edit_attacker(
             "documented reason for the audit trail."
         )
     try:
-        return _dump(await _get_client().edit_attacker(model_id, attacker_id, **body))
+        client = _get_client()
+        started = await client.start_edit_attacker(model_id, attacker_id, **body)
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4154,6 +4235,7 @@ async def restore_attacker(server_version: str, model_id: str, attacker_id: str)
 async def reevaluate_threat_model_factors(
     server_version: str,
     model_id: str,
+    ctx: Context,
     change_reason: Optional[str] = None,
 ) -> dict:
     """Re-run the LLM factor judgment on every asset and attacker in
@@ -4205,9 +4287,13 @@ async def reevaluate_threat_model_factors(
           for per-entity LLM failures; ``[]`` on the happy path
     """
     try:
-        return _dump(await _get_client().reevaluate_factors(
+        client = _get_client()
+        # Runs as a background job (scales with entity count); poll it so the
+        # work stays off the backend event loop and the transport stays warm.
+        started = await client.start_reevaluate_factors(
             model_id, change_reason=change_reason,
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5156,6 +5242,7 @@ async def apply_finding_remediation(
     server_version: str,
     finding_id: str,
     justification: str,
+    ctx: Context,
 ) -> dict:
     """Apply the remediation for a finding. Mutates state.
 
@@ -5186,9 +5273,14 @@ async def apply_finding_remediation(
             "the remediation ran."
         )
     try:
-        return _dump(await _get_client().apply_finding_remediation(
+        client = _get_client()
+        # Runs as a background job (remediation handler's strong-LLM step scales
+        # with the finding's blast radius); poll it so the work stays off the
+        # backend event loop and the transport stays warm.
+        started = await client.start_apply_finding_remediation(
             finding_id, justification,
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5772,6 +5864,7 @@ async def set_control_assumption_groups(
     model_id: str,
     control_id: str,
     groups: str,
+    ctx: Context,
     justification: str = "",
 ) -> dict:
     """Declaratively set the assumption group structure for a control.
@@ -5832,9 +5925,14 @@ async def set_control_assumption_groups(
         raise ToolError("justification must be at least 10 characters when setting groups.")
 
     try:
-        return _dump(await _get_client().set_control_assumption_groups(
+        client = _get_client()
+        # Runs as a background job (strong-LLM per-group relevance gate); poll it
+        # so the work stays off the backend event loop and the transport stays
+        # warm.
+        started = await client.start_set_control_assumption_groups(
             model_id, control_id, parsed_groups, justification.strip(),
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 

@@ -621,7 +621,7 @@ class MipitiClient:
         )
         return ThreatModel.model_validate(data)
 
-    async def refine_control(
+    async def start_refine_control(
         self,
         model_id: str,
         control_id: str,
@@ -629,21 +629,24 @@ class MipitiClient:
         justification: str,
         codebase_findings: str = "",
     ) -> dict:
+        """Kick off the AI-gated control refinement as a background job.
+
+        The refinement re-evaluates whether every mapped control objective is
+        still satisfied (a strong-LLM call that scales with the control's CO
+        fan-out), so it runs as a job — POSTs the ``-job`` endpoint and returns
+        ``{"job_id": ...}`` to poll rather than holding a synchronous request the
+        MCP transport would drop. The job result is the response envelope
+        (accepted refinement, or ``{accepted: false, reason, per_co}`` on
+        semantic rejection).
+        """
         body: dict[str, str] = {"justification": justification}
         if description:
             body["description"] = description
         if codebase_findings:
             body["codebase_findings"] = codebase_findings
-        resp = await self._request_with_idempotency(
-            "PATCH",
-            f"/api/models/{model_id}/controls/{control_id}/refine",
-            json=body,
+        return await self._post(
+            f"/api/models/{model_id}/controls/{control_id}/refine-job", body,
         )
-        if resp.status_code == 422:
-            # AI evaluator rejected — return body with accepted=false
-            return resp.json()
-        resp.raise_for_status()
-        return resp.json()
 
     async def remap_control(
         self,
@@ -1301,7 +1304,7 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def set_mitigation_groups(
+    async def start_set_mitigation_groups(
         self,
         model_id: str,
         co_id: str,
@@ -1309,18 +1312,23 @@ class MipitiClient:
         defense_in_depth: list[str],
         justification: str,
     ) -> dict:
+        """Kick off the AI-gated mitigation-group authoring as a background job.
+
+        The platform evaluates whether the proposed group structure satisfies
+        the CO (a strong-LLM call), so it runs as a job — POSTs the ``-job``
+        endpoint and returns ``{"job_id": ...}`` to poll rather than holding a
+        synchronous request the MCP transport would drop. The job result is the
+        response envelope.
+        """
         body = {
             "groups": groups,
             "defense_in_depth": defense_in_depth,
             "justification": justification,
         }
-        resp = await self._request_with_idempotency(
-            "PUT",
-            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups",
-            json=body,
+        return await self._post(
+            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups-job",
+            body,
         )
-        resp.raise_for_status()
-        return resp.json()
 
     async def get_control_assumption_groups(
         self, model_id: str, control_id: str,
@@ -1331,24 +1339,29 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def set_control_assumption_groups(
+    async def start_set_control_assumption_groups(
         self,
         model_id: str,
         control_id: str,
         groups: dict,
         justification: str,
     ) -> dict:
+        """Kick off the AI-gated assumption-group authoring as a background job.
+
+        Each non-empty proposed group is evaluated for relevance to the control
+        (a strong-LLM call per group), so it runs as a job — POSTs the ``-job``
+        endpoint and returns ``{"job_id": ...}`` to poll rather than holding a
+        synchronous request the MCP transport would drop. The job result is the
+        response envelope.
+        """
         body = {
             "groups": groups,
             "justification": justification,
         }
-        resp = await self._request_with_idempotency(
-            "PUT",
-            f"/api/models/{model_id}/controls/{control_id}/assumption-groups",
-            json=body,
+        return await self._post(
+            f"/api/models/{model_id}/controls/{control_id}/assumption-groups-job",
+            body,
         )
-        resp.raise_for_status()
-        return resp.json()
 
     async def link_assumption(
         self, model_id: str, assumption_id: str, target_model_id: str,
@@ -1390,15 +1403,18 @@ class MipitiClient:
         )
         return EvidenceActionResult.model_validate(data)
 
-    async def import_controls(
+    async def start_import_preview(
         self,
         model_id: str,
         controls_json: str = "",
         free_text: str = "",
         source_label: str = "",
         auto_map: bool = True,
-    ) -> ImportConfirmResult:
-        # Step 1 — preview: parse, auto-map to control objectives, flag duplicates.
+    ) -> dict:
+        """Kick off the import preview (parse / auto-map / dedup) as a background
+        job. Returns ``{"job_id": ...}`` to poll. The LLM work runs off the
+        backend event loop, and polling keeps the transport warm instead of a
+        10-30s silent request the MCP transport would time out."""
         body: dict[str, Any] = {"auto_map": auto_map}
         if controls_json:
             body["controls"] = json.loads(controls_json)
@@ -1406,19 +1422,22 @@ class MipitiClient:
             body["free_text"] = free_text
         if source_label:
             body["source_label"] = source_label
-        preview = await self._post(f"/api/models/{model_id}/controls/import", body)
+        return await self._post(
+            f"/api/models/{model_id}/controls/import/preview-job", body
+        )
 
-        # Step 2 — confirm: the endpoint is stateless and persists the controls
-        # carried in the request body (it does not echo back an import id). Build
-        # them from the preview's parsed + auto-mapped controls, dropping any the
-        # preview flagged as duplicates of existing controls.
+    @staticmethod
+    def build_import_controls(preview: dict) -> list[dict[str, Any]]:
+        """Turn a preview result into the confirm payload: the parsed +
+        auto-mapped controls, dropping any the preview flagged as duplicates of
+        existing controls."""
         parsed = preview.get("parsed") or []
         duplicate_idxs = {d["import_idx"] for d in (preview.get("duplicates") or [])}
         mitigation_group_by_idx = {
             m["control_idx"]: m.get("mitigation_group")
             for m in (preview.get("mappings") or [])
         }
-        controls = [
+        return [
             {
                 "description": item["description"],
                 "co_ids": item.get("co_ids", []),
@@ -1430,14 +1449,17 @@ class MipitiClient:
             for idx, item in enumerate(parsed)
             if idx not in duplicate_idxs
         ]
-        if not controls:
-            return ImportConfirmResult(imported=0, controls=[])
+
+    async def import_confirm(
+        self,
+        model_id: str,
+        controls: list[dict[str, Any]],
+        source_label: str = "",
+    ) -> ImportConfirmResult:
+        """Persist the reviewed controls — the fast, stateless confirm step."""
         data = await self._post(
             f"/api/models/{model_id}/controls/import/confirm",
-            {
-                "controls": controls,
-                "source_label": source_label or preview.get("source_label", ""),
-            },
+            {"controls": controls, "source_label": source_label},
         )
         return ImportConfirmResult.model_validate(data)
 
@@ -1483,8 +1505,13 @@ class MipitiClient:
     # Assets & Attackers
     # ------------------------------------------------------------------
 
-    async def add_asset(self, model_id: str, **kwargs: Any) -> dict:
-        """POST /assets returns one of three response shapes:
+    async def start_add_asset(self, model_id: str, **kwargs: Any) -> dict:
+        """Kick off an asset add as a background job; returns ``{"job_id": ...}``.
+
+        The add is LLM-gated (restore-candidate + factor reasoning), so it runs
+        as a job to keep the work off the backend event loop and the MCP
+        transport warm. The job result is the same envelope the synchronous add
+        returned — one of three shapes:
 
         1. Normal create:
            ``{"model": ThreatModel, "controls_carried": N, ...}``
@@ -1499,14 +1526,16 @@ class MipitiClient:
               "suggestion": "..."}``
 
         HTTP 503 (evaluator unreachable) and 502 (evaluator returned
-        malformed output) both raise via httpx and are caught by the
-        tool wrapper as tool errors. The two are semantically
-        distinct: 503 means retry-with-backoff; 502 means retry-now.
+        malformed output) surface as a failed job; 503 means
+        retry-with-backoff, 502 means retry-now.
         """
-        return await self._post(f"/api/models/{model_id}/assets", kwargs)
+        return await self._post(f"/api/models/{model_id}/assets/add-job", kwargs)
 
-    async def edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
-        """PUT /assets/{id} returns one of two response shapes:
+    async def start_edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
+        """Kick off an asset edit as a background job; returns ``{"job_id": ...}``.
+
+        Runs the LLM-gated edit as a job; the job result is the same envelope
+        the synchronous edit returned — one of two shapes:
 
         1. Accepted edit (or non-identity edit skipped the AI gate):
            ``{"model": ThreatModel, "controls_carried": N, ...}``
@@ -1515,9 +1544,11 @@ class MipitiClient:
               "reason": "...", "per_field": {...}, "suggestion": "..."}``
 
         HTTP 503 (evaluator unreachable) or 502 (evaluator returned
-        malformed output) raise via httpx as distinct signals.
+        malformed output) surface as a failed job with distinct signals.
         """
-        return await self._put(f"/api/models/{model_id}/assets/{asset_id}", kwargs)
+        return await self._post(
+            f"/api/models/{model_id}/assets/{asset_id}/edit-job", kwargs,
+        )
 
     async def remove_asset(self, model_id: str, asset_id: str) -> dict:
         """DELETE /assets/{id} soft-deletes. Returns the
@@ -1526,49 +1557,48 @@ class MipitiClient:
         """
         return await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
 
-    async def add_attacker(self, model_id: str, **kwargs: Any) -> dict:
-        """POST /attackers — same three-shape response as add_asset
-        (normal create / auto-restore / similar-rejection) plus 503 on
-        LLM outage."""
-        return await self._post(f"/api/models/{model_id}/attackers", kwargs)
+    async def start_add_attacker(self, model_id: str, **kwargs: Any) -> dict:
+        """Kick off an attacker add as a background job; returns
+        ``{"job_id": ...}``. Same three-shape job result as
+        ``start_add_asset`` (normal create / auto-restore /
+        similar-rejection) plus 503 on LLM outage."""
+        return await self._post(f"/api/models/{model_id}/attackers/add-job", kwargs)
 
-    async def edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
-        """PUT /attackers/{id} — same two-shape response as edit_asset
-        (accepted edit / semantic rejection) plus 503 on LLM outage."""
-        return await self._put(f"/api/models/{model_id}/attackers/{attacker_id}", kwargs)
+    async def start_edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
+        """Kick off an attacker edit as a background job; returns
+        ``{"job_id": ...}``. Same two-shape job result as
+        ``start_edit_asset`` (accepted edit / semantic rejection) plus 503
+        on LLM outage."""
+        return await self._post(
+            f"/api/models/{model_id}/attackers/{attacker_id}/edit-job", kwargs,
+        )
 
     async def remove_attacker(self, model_id: str, attacker_id: str) -> dict:
         """DELETE /attackers/{id} soft-deletes. Returns the envelope
         with the attacker now marked ``deleted=True`` in the model."""
         return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
 
-    async def reevaluate_factors(
+    async def start_reevaluate_factors(
         self, model_id: str, change_reason: Optional[str] = None,
     ) -> dict:
-        """POST /api/models/{model_id}/factors/reevaluate.
+        """Kick off the bulk factor re-evaluation as a background job.
 
-        Bulk re-runs the LLM factor judgment on every live asset and
-        attacker in the model. Sequential, per-entity soft-fail: an
-        LLM error on a single entity is surfaced via the response's
-        ``failed_entities`` list and does not abort the loop;
-        successful entities' rating revisions are persisted as they
-        complete. The server raises 503 only when *every* live entity
-        failed (in which case nothing was persisted). The body is
-        optional; when ``change_reason`` is omitted the backend
-        defaults to ``"LLM factor re-evaluation"`` for the audit trail.
-        Soft-deleted entities are skipped.
-
-        Returns the response envelope verbatim:
-        ``{"model_id", "assets_reevaluated", "attackers_reevaluated",
-        "deltas": {"assets": [...], "attackers": [...]},
-        "failed_entities": [{"id", "kind", "reason"}, ...]}``.
-        ``failed_entities`` is ``[]`` on the happy path.
+        Bulk re-runs the LLM factor judgment on every live asset and attacker.
+        It scales with entity count, so it runs as a job (returns
+        ``{"job_id": ...}`` to poll) rather than a long synchronous request the
+        MCP transport would time out. The job result is the response envelope:
+        ``{"model_id", "assets_reevaluated", "attackers_reevaluated", "deltas":
+        {"assets": [...], "attackers": [...]}, "failed_entities": [...]}`` —
+        per-entity soft-fail (a single LLM error surfaces in ``failed_entities``
+        and successful revisions still persist); the job fails only when every
+        live entity failed. Body optional; an omitted ``change_reason`` defaults
+        to ``"LLM factor re-evaluation"``. Soft-deleted entities are skipped.
         """
         body: dict[str, Any] = {}
         if change_reason is not None:
             body["change_reason"] = change_reason
         return await self._post(
-            f"/api/models/{model_id}/factors/reevaluate", body,
+            f"/api/models/{model_id}/factors/reevaluate-job", body,
         )
 
     async def revalidate_entities(self, model_id: str) -> dict:
@@ -1988,23 +2018,27 @@ class MipitiClient:
         """
         return await self._get(f"/api/findings/{finding_id}/remediation/preview")
 
-    async def apply_finding_remediation(
+    async def start_apply_finding_remediation(
         self, finding_id: str, justification: str,
     ) -> dict:
-        """POST /api/findings/{finding_id}/remediation/apply.
+        """POST /api/findings/{finding_id}/remediation/apply-job.
 
         Mutating. Commits the remediation that
-        ``preview_finding_remediation`` showed. ``justification`` is
-        recorded on the audit trail so future reviewers can see why
-        the cleanup was run; the server enforces non-empty.
+        ``preview_finding_remediation`` showed as a background job — the
+        remediation handler runs a strong-LLM step that scales with the
+        finding's blast radius, so it returns ``{"job_id": ...}`` to poll
+        rather than holding a synchronous request the MCP transport would
+        drop. ``justification`` is recorded on the audit trail so future
+        reviewers can see why the cleanup was run; the server enforces
+        non-empty.
 
-        Returns the server envelope verbatim. 404 if the finding
-        doesn't exist; 409 if it is already remediated or dismissed;
-        400 if justification is empty; 422 if the finding's kind has
-        no automatic remediation handler.
+        The job result is the server envelope verbatim. 404 if the finding
+        doesn't exist; 409 if it is already remediated or dismissed; 400 if
+        justification is empty; 422 if the finding's kind has no automatic
+        remediation handler.
         """
         return await self._post(
-            f"/api/findings/{finding_id}/remediation/apply",
+            f"/api/findings/{finding_id}/remediation/apply-job",
             {"justification": justification},
         )
 

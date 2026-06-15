@@ -168,21 +168,17 @@ async def test_remove_evidence(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_add_asset(mock_env: None) -> None:
-    # API returns a wrapper envelope: {"model": ..., "controls_carried": ...}.
-    # Rejection / auto-restore responses are covered in the tool-level
-    # tests in test_tools.py; here we just exercise the client's
-    # happy-path pass-through.
-    respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(
-        return_value=httpx.Response(200, json={
-            "model": {"id": "tm-001", "assets": [{"id": "A3", "name": "Session Store"}]},
-            "controls_carried": 0,
-            "controls_dropped": 0,
-        })
+    # The add now runs as a background job: the client POSTs the -job
+    # endpoint and gets back a {"job_id": ...} handle to poll. Rejection /
+    # auto-restore responses are delivered as the job result and covered in
+    # the tool-level tests in test_tools.py; here we just exercise the
+    # client's happy-path pass-through of the job handle.
+    respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(
+        return_value=httpx.Response(200, json={"job_id": "job-add-asset"})
     )
     client = MipitiClient()
-    result = await client.add_asset("tm-001", name="Session Store")
-    assert result["model"]["assets"][0]["id"] == "A3"
-    assert result["controls_carried"] == 0
+    result = await client.start_add_asset("tm-001", name="Session Store")
+    assert result["job_id"] == "job-add-asset"
     await client.close()
 
 
@@ -202,53 +198,43 @@ async def test_submit_assertions(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_reevaluate_factors_no_change_reason(mock_env: None) -> None:
-    """Default call posts an empty body — the backend falls back to
-    its own default change_reason for the audit trail."""
+async def test_start_reevaluate_factors_no_change_reason(mock_env: None) -> None:
+    """Default call posts an empty body to the job endpoint and returns a
+    job_id; the backend falls back to its own default change_reason."""
     captured: dict[str, dict] = {}
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content.decode())
-        return httpx.Response(200, json={
-            "model_id": "tm-001",
-            "assets_reevaluated": 0,
-            "attackers_reevaluated": 0,
-            "deltas": {"assets": [], "attackers": []},
-        })
+        return httpx.Response(200, json={"job_id": "job-reeval"})
 
-    respx.post(
-        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate",
+    route = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate-job",
     ).mock(side_effect=_capture)
 
     client = MipitiClient()
-    result = await client.reevaluate_factors("tm-001")
-    assert result["model_id"] == "tm-001"
+    result = await client.start_reevaluate_factors("tm-001")
+    assert route.called
+    assert result["job_id"] == "job-reeval"
     assert captured["body"] == {}
     await client.close()
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_reevaluate_factors_with_change_reason(mock_env: None) -> None:
-    """When change_reason is supplied, it is threaded through to the
-    body so the backend records it on every rating revision."""
+async def test_start_reevaluate_factors_with_change_reason(mock_env: None) -> None:
+    """change_reason is threaded through to the job-endpoint body."""
     captured: dict[str, dict] = {}
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content.decode())
-        return httpx.Response(200, json={
-            "model_id": "tm-001",
-            "assets_reevaluated": 1,
-            "attackers_reevaluated": 1,
-            "deltas": {"assets": [], "attackers": []},
-        })
+        return httpx.Response(200, json={"job_id": "job-reeval"})
 
     respx.post(
-        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate",
+        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate-job",
     ).mock(side_effect=_capture)
 
     client = MipitiClient()
-    await client.reevaluate_factors(
+    await client.start_reevaluate_factors(
         "tm-001", change_reason="Re-eval after bug fix",
     )
     assert captured["body"] == {"change_reason": "Re-eval after bug fix"}
@@ -903,11 +889,11 @@ class TestIdempotencyKey:
             captured_keys.append(request.headers.get("Idempotency-Key", ""))
             return httpx.Response(200, json={"id": "A1", "name": "ok"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_capture)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_capture)
 
         client = MipitiClient()
-        await client.add_asset("tm-001", name="One")
-        await client.add_asset("tm-001", name="Two")
+        await client.start_add_asset("tm-001", name="One")
+        await client.start_add_asset("tm-001", name="Two")
         await client.close()
 
         assert len(captured_keys) == 2
@@ -939,10 +925,10 @@ class TestIdempotencyKey:
             captured["key"] = request.headers.get("Idempotency-Key", "")
             return httpx.Response(200, json={"id": "A1", "name": "edited"})
 
-        respx.put("https://test.api.mipiti.io/api/models/tm-001/assets/A1").mock(side_effect=_capture)
+        respx.put("https://test.api.mipiti.io/api/models/tm-001/components/CMP1").mock(side_effect=_capture)
 
         client = MipitiClient()
-        await client.edit_asset("tm-001", "A1", name="edited")
+        await client.edit_component("tm-001", "CMP1", name="edited")
         await client.close()
         assert captured["key"]
 
@@ -980,18 +966,15 @@ class TestTransientRetry:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise httpx.ConnectError("network blip")
-            return httpx.Response(200, json={
-                "model": {"id": "tm-001", "assets": [{"id": "A1", "name": "after retry"}]},
-                "controls_carried": 0, "controls_dropped": 0,
-            })
+            return httpx.Response(200, json={"job_id": "job-add-asset"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_flaky)
 
         client = MipitiClient()
-        result = await client.add_asset("tm-001", name="x")
+        result = await client.start_add_asset("tm-001", name="x")
         await client.close()
 
-        assert result["model"]["assets"][0]["name"] == "after retry"
+        assert result["job_id"] == "job-add-asset"
         assert attempts["n"] == 2
         # Both attempts must use the SAME key so the server cache deduplicates
         assert len(captured_keys) == 2
@@ -1013,12 +996,12 @@ class TestTransientRetry:
             attempts["n"] += 1
             if attempts["n"] == 1:
                 return httpx.Response(503, text="Service Unavailable")
-            return httpx.Response(200, json={"id": "A1", "name": "ok"})
+            return httpx.Response(200, json={"job_id": "job-add-asset"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_flaky)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_flaky)
 
         client = MipitiClient()
-        await client.add_asset("tm-001", name="x")
+        await client.start_add_asset("tm-001", name="x")
         await client.close()
         assert attempts["n"] == 2
         assert captured_keys[0] == captured_keys[1]
@@ -1036,11 +1019,11 @@ class TestTransientRetry:
             attempts["n"] += 1
             return httpx.Response(400, json={"detail": "bad input"})
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_bad_request)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_bad_request)
 
         client = MipitiClient()
         with pytest.raises(httpx.HTTPStatusError):
-            await client.add_asset("tm-001", name="x")
+            await client.start_add_asset("tm-001", name="x")
         await client.close()
         assert attempts["n"] == 1  # no retry
 
@@ -1057,11 +1040,11 @@ class TestTransientRetry:
             attempts["n"] += 1
             raise httpx.ConnectError("permanent")
 
-        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets").mock(side_effect=_always_fail)
+        respx.post("https://test.api.mipiti.io/api/models/tm-001/assets/add-job").mock(side_effect=_always_fail)
 
         client = MipitiClient()
         with pytest.raises(httpx.ConnectError, match="permanent"):
-            await client.add_asset("tm-001", name="x")
+            await client.start_add_asset("tm-001", name="x")
         await client.close()
         # Initial attempt + 3 retries = 4 total attempts
         assert attempts["n"] == 4
@@ -1784,62 +1767,65 @@ async def test_tag_crud_and_membership(mock_env: None) -> None:
 
 
 # ------------------------------------------------------------------
-# import_controls: preview -> confirm two-step contract
+# import_controls: preview-job + build + confirm
 # ------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_import_controls_confirm_sends_controls_not_import_id(mock_env: None) -> None:
-    """The confirm endpoint is stateless: it requires the controls list, not an
-    import id (the preview returns no id). import_controls must build the confirm
-    body from the preview's parsed+mapped controls and drop flagged duplicates."""
-    preview = respx.post(
-        "https://test.api.mipiti.io/api/models/tm-1/controls/import",
-    ).mock(return_value=httpx.Response(200, json={
+async def test_start_import_preview_posts_to_preview_job(mock_env: None) -> None:
+    """The preview runs as a background job: parse the structured controls_json
+    into the `controls` array and POST to the preview-job endpoint, returning a
+    job_id to poll. (Avoids a 30s silent request the MCP transport would drop.)"""
+    route = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import/preview-job",
+    ).mock(return_value=httpx.Response(200, json={"job_id": "job-import-1"}))
+
+    client = MipitiClient()
+    out = await client.start_import_preview(
+        "tm-1", controls_json='[{"description": "X", "co_ids": ["CO-1"]}]',
+    )
+    await client.close()
+
+    body = json.loads(route.calls.last.request.read().decode("utf-8"))
+    assert "controls_json" not in body
+    assert body["controls"] == [{"description": "X", "co_ids": ["CO-1"]}]
+    assert out["job_id"] == "job-import-1"
+
+
+def test_build_import_controls_drops_duplicates_and_applies_mappings() -> None:
+    """build_import_controls turns a preview into the confirm payload: applies
+    auto-mapped co_ids/mitigation_group and drops controls flagged as duplicates."""
+    preview = {
         "parsed": [
             {"description": "Sign webhooks", "co_ids": ["CO-1"], "framework_refs": ["ASVS 5.3.1"]},
             {"description": "Dup of existing", "co_ids": ["CO-2"]},
         ],
         "mappings": [{"control_idx": 0, "co_ids": ["CO-1"], "mitigation_group": 1}],
         "duplicates": [{"import_idx": 1, "existing_ctrl_id": "CTRL-9", "match_type": "exact"}],
-        "source_label": "recovered",
-    }))
-    confirm = respx.post(
-        "https://test.api.mipiti.io/api/models/tm-1/controls/import/confirm",
-    ).mock(return_value=httpx.Response(200, json={"imported": 1, "controls": []}))
-
-    client = MipitiClient()
-    result = await client.import_controls("tm-1", free_text="Sign webhooks\nDup", source_label="recovered")
-    await client.close()
-
-    assert preview.called and confirm.called
-    body = json.loads(confirm.calls.last.request.read().decode("utf-8"))
-    assert "import_id" not in body
-    # The duplicate (import_idx 1) is dropped; the mapped control carries its co_ids + group.
-    assert [c["description"] for c in body["controls"]] == ["Sign webhooks"]
-    assert body["controls"][0]["co_ids"] == ["CO-1"]
-    assert body["controls"][0]["mitigation_group"] == 1
-    assert body["source_label"] == "recovered"
-    assert result.imported == 1
+    }
+    controls = MipitiClient.build_import_controls(preview)
+    assert [c["description"] for c in controls] == ["Sign webhooks"]  # dup dropped
+    assert controls[0]["co_ids"] == ["CO-1"]
+    assert controls[0]["mitigation_group"] == 1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_import_controls_json_is_parsed_into_controls_field(mock_env: None) -> None:
-    """The preview endpoint takes a parsed `controls` array, not a JSON string
-    under `controls_json`. An empty parse yields no confirm call."""
-    preview = respx.post(
-        "https://test.api.mipiti.io/api/models/tm-1/controls/import",
-    ).mock(return_value=httpx.Response(200, json={"parsed": [], "mappings": [], "duplicates": []}))
+async def test_import_confirm_posts_controls_list(mock_env: None) -> None:
+    """The stateless confirm step persists the controls list (not an import id)."""
+    route = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import/confirm",
+    ).mock(return_value=httpx.Response(200, json={"imported": 1, "controls": []}))
 
     client = MipitiClient()
-    result = await client.import_controls(
-        "tm-1", controls_json='[{"description": "X", "co_ids": ["CO-1"]}]',
+    result = await client.import_confirm(
+        "tm-1", [{"description": "Sign webhooks", "co_ids": ["CO-1"]}], source_label="recovered",
     )
     await client.close()
 
-    body = json.loads(preview.calls.last.request.read().decode("utf-8"))
-    assert "controls_json" not in body
-    assert body["controls"] == [{"description": "X", "co_ids": ["CO-1"]}]
-    assert result.imported == 0  # nothing parsed -> no confirm POST
+    body = json.loads(route.calls.last.request.read().decode("utf-8"))
+    assert "import_id" not in body
+    assert body["controls"][0]["description"] == "Sign webhooks"
+    assert body["source_label"] == "recovered"
+    assert result.imported == 1

@@ -1376,28 +1376,34 @@ class TestUpdateControlStatus:
 class TestRefineControl:
     @pytest.mark.asyncio
     async def test_accepted(self) -> None:
+        envelope = {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}}
         mock = _mock_client()
+        mock.start_refine_control = AsyncMock(return_value={"job_id": "job-refine"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await refine_control(
-                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=ctx,
                 description="Updated description matching implementation.",
                 justification="Implementation uses FastAPI Depends, not middleware.",
             )
         assert result["accepted"] is True
-        mock.refine_control.assert_awaited_once()
+        mock.start_refine_control.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_rejected(self) -> None:
-        mock = _mock_client(
-            refine_control=AsyncMock(return_value={
-                "accepted": False,
-                "reason": "CO1 would no longer be satisfied.",
-                "per_co": {"CO1": {"satisfied": False, "reasoning": "Weakened."}},
-            }),
-        )
+        envelope = {
+            "accepted": False,
+            "reason": "CO1 would no longer be satisfied.",
+            "per_co": {"CO1": {"satisfied": False, "reasoning": "Weakened."}},
+        }
+        mock = _mock_client()
+        mock.start_refine_control = AsyncMock(return_value={"job_id": "job-refine"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await refine_control(
-                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=ctx,
                 description="Weaker description.",
                 justification="Trying to weaken the control.",
             )
@@ -1407,12 +1413,12 @@ class TestRefineControl:
     @pytest.mark.asyncio
     async def test_empty_description_and_findings(self) -> None:
         with pytest.raises(ToolError, match="Either description or codebase_findings is required"):
-            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="  ", justification="Some justification here.")
+            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=_mock_ctx(), description="  ", justification="Some justification here.")
 
     @pytest.mark.asyncio
     async def test_short_justification(self) -> None:
         with pytest.raises(ToolError, match="justification must be at least 10"):
-            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="New desc.", justification="Short")
+            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=_mock_ctx(), description="New desc.", justification="Short")
 
 
 class TestRemapControl:
@@ -1485,51 +1491,59 @@ class TestReevaluateThreatModelFactors:
 
     @pytest.mark.asyncio
     async def test_success_returns_envelope(self) -> None:
+        envelope = {
+            "model_id": "tm-001",
+            "assets_reevaluated": 2,
+            "attackers_reevaluated": 1,
+            "deltas": {"assets": [{"id": "A1"}], "attackers": [{"id": "T1"}]},
+            "failed_entities": [],
+        }
         mock = _mock_client()
+        mock.start_reevaluate_factors = AsyncMock(return_value={"job_id": "job-reeval"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await reevaluate_threat_model_factors(
-                server_version="0", model_id="tm-001",
+                server_version="0", model_id="tm-001", ctx=ctx,
             )
-        assert result["model_id"] == "tm-001"
+        # The job result (the envelope) is returned, after polling.
         assert result["assets_reevaluated"] == 2
         assert result["attackers_reevaluated"] == 1
         assert result["deltas"]["assets"][0]["id"] == "A1"
-        assert result["deltas"]["attackers"][0]["id"] == "T1"
-        # No change_reason passed → client method called with None.
-        mock.reevaluate_factors.assert_awaited_once_with(
-            "tm-001", change_reason=None,
-        )
+        mock.start_reevaluate_factors.assert_awaited_once_with("tm-001", change_reason=None)
 
     @pytest.mark.asyncio
     async def test_change_reason_threaded_through(self) -> None:
         mock = _mock_client()
+        mock.start_reevaluate_factors = AsyncMock(return_value={"job_id": "job-reeval"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {}})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             await reevaluate_threat_model_factors(
-                server_version="0", model_id="tm-001",
+                server_version="0", model_id="tm-001", ctx=ctx,
                 change_reason="Re-eval after refinement bug fix v0.39.0",
             )
-        mock.reevaluate_factors.assert_awaited_once_with(
-            "tm-001",
-            change_reason="Re-eval after refinement bug fix v0.39.0",
+        mock.start_reevaluate_factors.assert_awaited_once_with(
+            "tm-001", change_reason="Re-eval after refinement bug fix v0.39.0",
         )
 
     @pytest.mark.asyncio
     async def test_client_error_wrapped_as_tool_error(self) -> None:
         import httpx
-        request = httpx.Request("POST", "https://api/factors/reevaluate")
+        request = httpx.Request("POST", "https://api/factors/reevaluate-job")
         response = httpx.Response(
             503, request=request,
             json={"detail": "LLM evaluator unreachable"},
         )
-        mock = _mock_client(reevaluate_factors=AsyncMock(
-            side_effect=httpx.HTTPStatusError(
-                "503 Service Unavailable", request=request, response=response,
-            ),
+        mock = _mock_client()
+        mock.start_reevaluate_factors = AsyncMock(side_effect=httpx.HTTPStatusError(
+            "503 Service Unavailable", request=request, response=response,
         ))
+        ctx = _mock_ctx()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="LLM evaluator unreachable"):
                 await reevaluate_threat_model_factors(
-                    server_version="0", model_id="tm-001",
+                    server_version="0", model_id="tm-001", ctx=ctx,
                 )
 
 
@@ -1594,13 +1608,62 @@ class TestRemoveEvidence:
 
 
 class TestImportControls:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
+    def _import_mock(self):
+        """A client mock wired for the preview-job -> build -> confirm flow."""
+        from mipiti_mcp.client import MipitiClient
+        from mipiti_mcp.types import ImportConfirmResult
         mock = _mock_client()
+        mock.start_import_preview = AsyncMock(return_value={"job_id": "job-imp"})
+        # The preview job result (parse/map/dedup) is delivered via get_operation.
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {
+                "parsed": [{"description": "Encrypt data at rest", "co_ids": ["CO-1"]}],
+                "mappings": [], "duplicates": [], "source_label": "",
+            },
+        })
+        mock.build_import_controls = MipitiClient.build_import_controls  # real staticmethod
+        mock.import_confirm = AsyncMock(return_value=ImportConfirmResult(imported=1, controls=[]))
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_success_after_elicited_confirm(self) -> None:
+        from types import SimpleNamespace
+        mock = self._import_mock()
         ctx = _mock_ctx()
+        ctx.elicit = AsyncMock(return_value=SimpleNamespace(action="accept", data="Apply import"))
         with _patch_client(mock):
-            result = await import_controls(server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest")
-        assert result["imported"] == 3
+            result = await import_controls(
+                server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest",
+            )
+        assert result["imported"] == 1
+        mock.import_confirm.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_when_user_declines(self) -> None:
+        from types import SimpleNamespace
+        mock = self._import_mock()
+        ctx = _mock_ctx()
+        ctx.elicit = AsyncMock(return_value=SimpleNamespace(action="decline", data=None))
+        with _patch_client(mock):
+            result = await import_controls(
+                server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest",
+            )
+        assert result["imported"] == 0
+        mock.import_confirm.assert_not_awaited()  # declined -> nothing saved
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_elicitation_unsupported(self) -> None:
+        """Clients without elicitation: the agent-initiated import proceeds."""
+        mock = self._import_mock()
+        ctx = _mock_ctx()
+        ctx.elicit = AsyncMock(side_effect=RuntimeError("elicitation not supported"))
+        with _patch_client(mock):
+            result = await import_controls(
+                server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest",
+            )
+        assert result["imported"] == 1
+        mock.import_confirm.assert_awaited_once()
 
 
 class TestDeleteControl:
@@ -1667,13 +1730,22 @@ class TestGetReviewQueue:
 class TestAddAsset:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
-        """Normal create: API returns {"model": ..., "controls_carried": ...}."""
+        """Normal create: the job result envelope is
+        {"model": ..., "controls_carried": ...}."""
         mock = _mock_client()
+        mock.start_add_asset = AsyncMock(return_value={"job_id": "job-add-asset"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "assets": [{"id": "A3"}]},
+            "controls_carried": 0, "controls_orphaned": 0,
+        }})
         with _patch_client(mock):
-            result = await add_asset(server_version="0", model_id="tm-001", name="Session Store")
+            result = await add_asset(
+                server_version="0", model_id="tm-001", name="Session Store",
+                ctx=_mock_ctx(),
+            )
         assert "model" in result
         assert result["controls_carried"] == 0
-        mock.add_asset.assert_awaited_once()
+        mock.start_add_asset.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_auto_restore_response_surfaced(self) -> None:
@@ -1683,7 +1755,9 @@ class TestAddAsset:
         `discarded_fields`. The MCP tool must pass all of those
         through so the agent knows the call wasn't a fresh create
         AND can reapply non-identity proposed values if appropriate."""
-        mock = _mock_client(add_asset=AsyncMock(return_value={
+        mock = _mock_client()
+        mock.start_add_asset = AsyncMock(return_value={"job_id": "job-add-asset"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
             "model": {"id": "tm-001", "assets": [{"id": "A-04"}]},
             "controls_carried": 2,
             "controls_orphaned": 0,
@@ -1695,11 +1769,11 @@ class TestAddAsset:
                  "preserved_value": "", "identity_bearing": False,
                  "reason": "Restored asset keeps archived notes."},
             ],
-        }))
+        }})
         with _patch_client(mock):
             result = await add_asset(
                 server_version="0", model_id="tm-001",
-                name="OIDC Token", notes="extra context",
+                name="OIDC Token", notes="extra context", ctx=_mock_ctx(),
             )
         assert result["auto_restored"] is True
         assert result["restored_asset_id"] == "A-04"
@@ -1721,24 +1795,32 @@ class TestAddAsset:
                 "detail": "Asset restore-candidate evaluator returned malformed output.",
             }),
         )
-        mock = _mock_client(add_asset=AsyncMock(side_effect=err))
+        mock = _mock_client()
+        mock.start_add_asset = AsyncMock(side_effect=err)
         with _patch_client(mock), pytest.raises(ToolError):
-            await add_asset(server_version="0", model_id="tm-001", name="X")
+            await add_asset(
+                server_version="0", model_id="tm-001", name="X", ctx=_mock_ctx(),
+            )
 
     @pytest.mark.asyncio
     async def test_similar_verdict_rejected_with_suggestion(self) -> None:
         """When the LLM classifies as `similar` (might be the same but
-        not confident), backend returns {accepted: False, ...} at
-        HTTP 200. Tool passes the structured rejection through."""
-        mock = _mock_client(add_asset=AsyncMock(return_value={
+        not confident), the job result is {accepted: False, ...}.
+        Tool passes the structured rejection through."""
+        mock = _mock_client()
+        mock.start_add_asset = AsyncMock(return_value={"job_id": "job-add-asset"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
             "accepted": False,
             "classification": "similar",
             "candidate_restore_id": "A-04",
             "reason": "Names match but descriptions diverge.",
             "suggestion": "Call restore_asset, or re-submit with a distinctive description.",
-        }))
+        }})
         with _patch_client(mock):
-            result = await add_asset(server_version="0", model_id="tm-001", name="OIDC Token")
+            result = await add_asset(
+                server_version="0", model_id="tm-001", name="OIDC Token",
+                ctx=_mock_ctx(),
+            )
         assert result["accepted"] is False
         assert result["classification"] == "similar"
         assert result["candidate_restore_id"] == "A-04"
@@ -1756,35 +1838,49 @@ class TestAddAsset:
                 "detail": "Asset restore-candidate evaluator unavailable.",
             }),
         )
-        mock = _mock_client(add_asset=AsyncMock(side_effect=err))
+        mock = _mock_client()
+        mock.start_add_asset = AsyncMock(side_effect=err)
         with _patch_client(mock), pytest.raises(ToolError):
-            await add_asset(server_version="0", model_id="tm-001", name="OIDC Token")
+            await add_asset(
+                server_version="0", model_id="tm-001", name="OIDC Token",
+                ctx=_mock_ctx(),
+            )
 
 
 class TestEditAsset:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
         mock = _mock_client()
+        mock.start_edit_asset = AsyncMock(return_value={"job_id": "job-edit-asset"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "assets": [{"id": "A1"}]},
+            "controls_carried": 0, "controls_orphaned": 0,
+        }})
         with _patch_client(mock):
-            result = await edit_asset(server_version="0", model_id="tm-001", asset_id="A1", name="Updated")
+            result = await edit_asset(
+                server_version="0", model_id="tm-001", asset_id="A1",
+                name="Updated", ctx=_mock_ctx(),
+            )
         assert "model" in result
 
     @pytest.mark.asyncio
     async def test_semantic_rejection_surfaced(self) -> None:
         """When the LLM classifies the edit as `replace` or
-        `ambiguous`, backend returns HTTP 200 with a structured
-        rejection. Tool passes it through so the agent can act."""
-        mock = _mock_client(edit_asset=AsyncMock(return_value={
+        `ambiguous`, the job result is a structured rejection. Tool
+        passes it through so the agent can act."""
+        mock = _mock_client()
+        mock.start_edit_asset = AsyncMock(return_value={"job_id": "job-edit-asset"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
             "accepted": False,
             "classification": "replace",
             "reason": "Rename changes semantic identity.",
             "per_field": {"name": "Card Data -> Audit Log is a different asset"},
             "suggestion": "Soft-delete + add new.",
-        }))
+        }})
         with _patch_client(mock):
             result = await edit_asset(
                 server_version="0", model_id="tm-001", asset_id="A1",
-                name="Audit Log",
+                name="Audit Log", ctx=_mock_ctx(),
             )
         assert result["accepted"] is False
         assert result["classification"] == "replace"
@@ -1800,11 +1896,12 @@ class TestEditAsset:
                 "detail": "Asset semantic-preservation evaluator unavailable.",
             }),
         )
-        mock = _mock_client(edit_asset=AsyncMock(side_effect=err))
+        mock = _mock_client()
+        mock.start_edit_asset = AsyncMock(side_effect=err)
         with _patch_client(mock), pytest.raises(ToolError):
             await edit_asset(
                 server_version="0", model_id="tm-001", asset_id="A1",
-                name="Renamed",
+                name="Renamed", ctx=_mock_ctx(),
             )
 
 
@@ -1822,39 +1919,54 @@ class TestAddAttacker:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
         mock = _mock_client()
+        mock.start_add_attacker = AsyncMock(return_value={"job_id": "job-add-attacker"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "attackers": [{"id": "T2"}]},
+            "controls_carried": 0, "controls_orphaned": 0,
+        }})
         with _patch_client(mock):
-            result = await add_attacker(server_version="0", model_id="tm-001", capability="Phishing")
+            result = await add_attacker(
+                server_version="0", model_id="tm-001", capability="Phishing",
+                ctx=_mock_ctx(),
+            )
         assert "model" in result
+        mock.start_add_attacker.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_auto_restore_response_surfaced(self) -> None:
-        mock = _mock_client(add_attacker=AsyncMock(return_value={
+        mock = _mock_client()
+        mock.start_add_attacker = AsyncMock(return_value={"job_id": "job-add-attacker"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
             "model": {"id": "tm-001", "attackers": [{"id": "T-03"}]},
             "controls_carried": 1,
             "controls_orphaned": 0,
             "auto_restored": True,
             "restored_attacker_id": "T-03",
             "reason": "Matched soft-deleted T-03.",
-        }))
+        }})
         with _patch_client(mock):
             result = await add_attacker(
                 server_version="0", model_id="tm-001", capability="Supply chain",
+                ctx=_mock_ctx(),
             )
         assert result["auto_restored"] is True
         assert result["restored_attacker_id"] == "T-03"
 
     @pytest.mark.asyncio
     async def test_similar_verdict_rejected(self) -> None:
-        mock = _mock_client(add_attacker=AsyncMock(return_value={
+        mock = _mock_client()
+        mock.start_add_attacker = AsyncMock(return_value={"job_id": "job-add-attacker"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
             "accepted": False,
             "classification": "similar",
             "candidate_restore_id": "T-03",
             "reason": "Capability close but archetype differs.",
             "suggestion": "Call restore_attacker(T-03) or distinguish the new one.",
-        }))
+        }})
         with _patch_client(mock):
             result = await add_attacker(
                 server_version="0", model_id="tm-001", capability="Supply chain",
+                ctx=_mock_ctx(),
             )
         assert result["accepted"] is False
         assert result["classification"] == "similar"
@@ -1864,23 +1976,33 @@ class TestEditAttacker:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
         mock = _mock_client()
+        mock.start_edit_attacker = AsyncMock(return_value={"job_id": "job-edit-attacker"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "attackers": [{"id": "T1"}]},
+            "controls_carried": 0, "controls_orphaned": 0,
+        }})
         with _patch_client(mock):
-            result = await edit_attacker(server_version="0", model_id="tm-001", attacker_id="T1", capability="Updated")
+            result = await edit_attacker(
+                server_version="0", model_id="tm-001", attacker_id="T1",
+                capability="Updated", ctx=_mock_ctx(),
+            )
         assert "model" in result
 
     @pytest.mark.asyncio
     async def test_semantic_rejection_surfaced(self) -> None:
-        mock = _mock_client(edit_attacker=AsyncMock(return_value={
+        mock = _mock_client()
+        mock.start_edit_attacker = AsyncMock(return_value={"job_id": "job-edit-attacker"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
             "accepted": False,
             "classification": "replace",
             "reason": "Archetype change is a different adversary.",
             "per_field": {"archetype": "Unauthenticated -> Supply chain"},
             "suggestion": "Soft-delete + add new.",
-        }))
+        }})
         with _patch_client(mock):
             result = await edit_attacker(
                 server_version="0", model_id="tm-001", attacker_id="T1",
-                archetype="Supply chain",
+                archetype="Supply chain", ctx=_mock_ctx(),
             )
         assert result["accepted"] is False
         assert result["classification"] == "replace"
@@ -2408,49 +2530,63 @@ class TestGetControlAssumptionGroups:
 class TestSetControlAssumptionGroups:
     @pytest.mark.asyncio
     async def test_single_group_single_member(self) -> None:
+        envelope = {
+            "control_id": "CTRL-01",
+            "assumption_groups": {"1": ["AS1"]},
+            "justification": "AWS KMS handles this control.",
+        }
         mock = _mock_client()
+        mock.start_set_control_assumption_groups = AsyncMock(return_value={"job_id": "job-asg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await set_control_assumption_groups(
                 server_version="0",
                 model_id="tm-001",
                 control_id="CTRL-01",
                 groups='{"1": ["AS1"]}',
+                ctx=ctx,
                 justification="AWS KMS handles this control.",
             )
         assert result["assumption_groups"] == {"1": ["AS1"]}
 
     @pytest.mark.asyncio
     async def test_compound_and_multi_group(self) -> None:
-        mock = _mock_client()
-        # Match the exact input — the mock returns whatever the fixture returns,
-        # so we only need to verify the tool accepts the structure and forwards it.
-        mock.set_control_assumption_groups = AsyncMock(return_value={
+        envelope = {
             "control_id": "CTRL-01",
             "assumption_groups": {"1": ["AS1", "AS2"], "2": ["AS3"]},
             "justification": "Either KMS+review or HSM.",
-        })
+        }
+        mock = _mock_client()
+        mock.start_set_control_assumption_groups = AsyncMock(return_value={"job_id": "job-asg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await set_control_assumption_groups(
                 server_version="0",
                 model_id="tm-001",
                 control_id="CTRL-01",
                 groups='{"1": ["AS1", "AS2"], "2": ["AS3"]}',
+                ctx=ctx,
                 justification="Either KMS+review or HSM.",
             )
         assert result["assumption_groups"] == {"1": ["AS1", "AS2"], "2": ["AS3"]}
         # Confirm the parsed dict was forwarded to the client (not the raw string)
-        mock.set_control_assumption_groups.assert_awaited_once()
-        call_args = mock.set_control_assumption_groups.call_args
+        mock.start_set_control_assumption_groups.assert_awaited_once()
+        call_args = mock.start_set_control_assumption_groups.call_args
         assert call_args.args[2] == {"1": ["AS1", "AS2"], "2": ["AS3"]}
 
     @pytest.mark.asyncio
     async def test_empty_groups_clears(self) -> None:
-        mock = _mock_client()
-        mock.set_control_assumption_groups = AsyncMock(return_value={
+        envelope = {
             "control_id": "CTRL-01",
             "assumption_groups": {},
             "justification": "",
-        })
+        }
+        mock = _mock_client()
+        mock.start_set_control_assumption_groups = AsyncMock(return_value={"job_id": "job-asg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             # Empty groups: justification length check is bypassed.
             result = await set_control_assumption_groups(
@@ -2458,6 +2594,7 @@ class TestSetControlAssumptionGroups:
                 model_id="tm-001",
                 control_id="CTRL-01",
                 groups="{}",
+                ctx=ctx,
             )
         assert result["assumption_groups"] == {}
 
@@ -2471,6 +2608,7 @@ class TestSetControlAssumptionGroups:
                     model_id="tm-001",
                     control_id="CTRL-01",
                     groups="not-json",
+                    ctx=_mock_ctx(),
                     justification="long enough justification",
                 )
 
@@ -2484,6 +2622,7 @@ class TestSetControlAssumptionGroups:
                     model_id="tm-001",
                     control_id="CTRL-01",
                     groups='["AS1"]',
+                    ctx=_mock_ctx(),
                     justification="long enough justification",
                 )
 
@@ -2497,6 +2636,7 @@ class TestSetControlAssumptionGroups:
                     model_id="tm-001",
                     control_id="CTRL-01",
                     groups='{"1": ["AS1"]}',
+                    ctx=_mock_ctx(),
                     justification="too short",
                 )
 
