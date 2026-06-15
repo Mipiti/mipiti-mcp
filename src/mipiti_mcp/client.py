@@ -1398,17 +1398,46 @@ class MipitiClient:
         source_label: str = "",
         auto_map: bool = True,
     ) -> ImportConfirmResult:
+        # Step 1 — preview: parse, auto-map to control objectives, flag duplicates.
         body: dict[str, Any] = {"auto_map": auto_map}
         if controls_json:
-            body["controls_json"] = controls_json
+            body["controls"] = json.loads(controls_json)
         if free_text:
             body["free_text"] = free_text
         if source_label:
             body["source_label"] = source_label
         preview = await self._post(f"/api/models/{model_id}/controls/import", body)
+
+        # Step 2 — confirm: the endpoint is stateless and persists the controls
+        # carried in the request body (it does not echo back an import id). Build
+        # them from the preview's parsed + auto-mapped controls, dropping any the
+        # preview flagged as duplicates of existing controls.
+        parsed = preview.get("parsed") or []
+        duplicate_idxs = {d["import_idx"] for d in (preview.get("duplicates") or [])}
+        mitigation_group_by_idx = {
+            m["control_idx"]: m.get("mitigation_group")
+            for m in (preview.get("mappings") or [])
+        }
+        controls = [
+            {
+                "description": item["description"],
+                "co_ids": item.get("co_ids", []),
+                "mitigation_group": mitigation_group_by_idx.get(idx),
+                "status": item.get("status", "not_implemented"),
+                "implementation_notes": item.get("implementation_notes", ""),
+                "framework_refs": item.get("framework_refs", []),
+            }
+            for idx, item in enumerate(parsed)
+            if idx not in duplicate_idxs
+        ]
+        if not controls:
+            return ImportConfirmResult(imported=0, controls=[])
         data = await self._post(
             f"/api/models/{model_id}/controls/import/confirm",
-            {"import_id": preview.get("import_id", "")},
+            {
+                "controls": controls,
+                "source_label": source_label or preview.get("source_label", ""),
+            },
         )
         return ImportConfirmResult.model_validate(data)
 

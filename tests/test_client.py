@@ -1781,3 +1781,65 @@ async def test_tag_crud_and_membership(mock_env: None) -> None:
     rv = await client.get_tag_risk_view("tag1")
     assert rv["tag_id"] == "tag1"
     await client.close()
+
+
+# ------------------------------------------------------------------
+# import_controls: preview -> confirm two-step contract
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_import_controls_confirm_sends_controls_not_import_id(mock_env: None) -> None:
+    """The confirm endpoint is stateless: it requires the controls list, not an
+    import id (the preview returns no id). import_controls must build the confirm
+    body from the preview's parsed+mapped controls and drop flagged duplicates."""
+    preview = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import",
+    ).mock(return_value=httpx.Response(200, json={
+        "parsed": [
+            {"description": "Sign webhooks", "co_ids": ["CO-1"], "framework_refs": ["ASVS 5.3.1"]},
+            {"description": "Dup of existing", "co_ids": ["CO-2"]},
+        ],
+        "mappings": [{"control_idx": 0, "co_ids": ["CO-1"], "mitigation_group": 1}],
+        "duplicates": [{"import_idx": 1, "existing_ctrl_id": "CTRL-9", "match_type": "exact"}],
+        "source_label": "recovered",
+    }))
+    confirm = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import/confirm",
+    ).mock(return_value=httpx.Response(200, json={"imported": 1, "controls": []}))
+
+    client = MipitiClient()
+    result = await client.import_controls("tm-1", free_text="Sign webhooks\nDup", source_label="recovered")
+    await client.close()
+
+    assert preview.called and confirm.called
+    body = json.loads(confirm.calls.last.request.read().decode("utf-8"))
+    assert "import_id" not in body
+    # The duplicate (import_idx 1) is dropped; the mapped control carries its co_ids + group.
+    assert [c["description"] for c in body["controls"]] == ["Sign webhooks"]
+    assert body["controls"][0]["co_ids"] == ["CO-1"]
+    assert body["controls"][0]["mitigation_group"] == 1
+    assert body["source_label"] == "recovered"
+    assert result.imported == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_import_controls_json_is_parsed_into_controls_field(mock_env: None) -> None:
+    """The preview endpoint takes a parsed `controls` array, not a JSON string
+    under `controls_json`. An empty parse yields no confirm call."""
+    preview = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-1/controls/import",
+    ).mock(return_value=httpx.Response(200, json={"parsed": [], "mappings": [], "duplicates": []}))
+
+    client = MipitiClient()
+    result = await client.import_controls(
+        "tm-1", controls_json='[{"description": "X", "co_ids": ["CO-1"]}]',
+    )
+    await client.close()
+
+    body = json.loads(preview.calls.last.request.read().decode("utf-8"))
+    assert "controls_json" not in body
+    assert body["controls"] == [{"description": "X", "co_ids": ["CO-1"]}]
+    assert result.imported == 0  # nothing parsed -> no confirm POST
