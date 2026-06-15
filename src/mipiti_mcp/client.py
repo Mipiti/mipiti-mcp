@@ -1390,15 +1390,18 @@ class MipitiClient:
         )
         return EvidenceActionResult.model_validate(data)
 
-    async def import_controls(
+    async def start_import_preview(
         self,
         model_id: str,
         controls_json: str = "",
         free_text: str = "",
         source_label: str = "",
         auto_map: bool = True,
-    ) -> ImportConfirmResult:
-        # Step 1 — preview: parse, auto-map to control objectives, flag duplicates.
+    ) -> dict:
+        """Kick off the import preview (parse / auto-map / dedup) as a background
+        job. Returns ``{"job_id": ...}`` to poll. The LLM work runs off the
+        backend event loop, and polling keeps the transport warm instead of a
+        10-30s silent request the MCP transport would time out."""
         body: dict[str, Any] = {"auto_map": auto_map}
         if controls_json:
             body["controls"] = json.loads(controls_json)
@@ -1406,19 +1409,22 @@ class MipitiClient:
             body["free_text"] = free_text
         if source_label:
             body["source_label"] = source_label
-        preview = await self._post(f"/api/models/{model_id}/controls/import", body)
+        return await self._post(
+            f"/api/models/{model_id}/controls/import/preview-job", body
+        )
 
-        # Step 2 — confirm: the endpoint is stateless and persists the controls
-        # carried in the request body (it does not echo back an import id). Build
-        # them from the preview's parsed + auto-mapped controls, dropping any the
-        # preview flagged as duplicates of existing controls.
+    @staticmethod
+    def build_import_controls(preview: dict) -> list[dict[str, Any]]:
+        """Turn a preview result into the confirm payload: the parsed +
+        auto-mapped controls, dropping any the preview flagged as duplicates of
+        existing controls."""
         parsed = preview.get("parsed") or []
         duplicate_idxs = {d["import_idx"] for d in (preview.get("duplicates") or [])}
         mitigation_group_by_idx = {
             m["control_idx"]: m.get("mitigation_group")
             for m in (preview.get("mappings") or [])
         }
-        controls = [
+        return [
             {
                 "description": item["description"],
                 "co_ids": item.get("co_ids", []),
@@ -1430,14 +1436,17 @@ class MipitiClient:
             for idx, item in enumerate(parsed)
             if idx not in duplicate_idxs
         ]
-        if not controls:
-            return ImportConfirmResult(imported=0, controls=[])
+
+    async def import_confirm(
+        self,
+        model_id: str,
+        controls: list[dict[str, Any]],
+        source_label: str = "",
+    ) -> ImportConfirmResult:
+        """Persist the reviewed controls — the fast, stateless confirm step."""
         data = await self._post(
             f"/api/models/{model_id}/controls/import/confirm",
-            {
-                "controls": controls,
-                "source_label": source_label or preview.get("source_label", ""),
-            },
+            {"controls": controls, "source_label": source_label},
         )
         return ImportConfirmResult.model_validate(data)
 

@@ -1594,13 +1594,62 @@ class TestRemoveEvidence:
 
 
 class TestImportControls:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
+    def _import_mock(self):
+        """A client mock wired for the preview-job -> build -> confirm flow."""
+        from mipiti_mcp.client import MipitiClient
+        from mipiti_mcp.types import ImportConfirmResult
         mock = _mock_client()
+        mock.start_import_preview = AsyncMock(return_value={"job_id": "job-imp"})
+        # The preview job result (parse/map/dedup) is delivered via get_operation.
+        mock.get_operation = AsyncMock(return_value={
+            "status": "completed",
+            "result": {
+                "parsed": [{"description": "Encrypt data at rest", "co_ids": ["CO-1"]}],
+                "mappings": [], "duplicates": [], "source_label": "",
+            },
+        })
+        mock.build_import_controls = MipitiClient.build_import_controls  # real staticmethod
+        mock.import_confirm = AsyncMock(return_value=ImportConfirmResult(imported=1, controls=[]))
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_success_after_elicited_confirm(self) -> None:
+        from types import SimpleNamespace
+        mock = self._import_mock()
         ctx = _mock_ctx()
+        ctx.elicit = AsyncMock(return_value=SimpleNamespace(action="accept", data="Apply import"))
         with _patch_client(mock):
-            result = await import_controls(server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest")
-        assert result["imported"] == 3
+            result = await import_controls(
+                server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest",
+            )
+        assert result["imported"] == 1
+        mock.import_confirm.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_when_user_declines(self) -> None:
+        from types import SimpleNamespace
+        mock = self._import_mock()
+        ctx = _mock_ctx()
+        ctx.elicit = AsyncMock(return_value=SimpleNamespace(action="decline", data=None))
+        with _patch_client(mock):
+            result = await import_controls(
+                server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest",
+            )
+        assert result["imported"] == 0
+        mock.import_confirm.assert_not_awaited()  # declined -> nothing saved
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_elicitation_unsupported(self) -> None:
+        """Clients without elicitation: the agent-initiated import proceeds."""
+        mock = self._import_mock()
+        ctx = _mock_ctx()
+        ctx.elicit = AsyncMock(side_effect=RuntimeError("elicitation not supported"))
+        with _patch_client(mock):
+            result = await import_controls(
+                server_version="0", model_id="tm-001", ctx=ctx, free_text="Encrypt data at rest",
+            )
+        assert result["imported"] == 1
+        mock.import_confirm.assert_awaited_once()
 
 
 class TestDeleteControl:
