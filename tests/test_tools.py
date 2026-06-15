@@ -1376,28 +1376,34 @@ class TestUpdateControlStatus:
 class TestRefineControl:
     @pytest.mark.asyncio
     async def test_accepted(self) -> None:
+        envelope = {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}}
         mock = _mock_client()
+        mock.start_refine_control = AsyncMock(return_value={"job_id": "job-refine"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await refine_control(
-                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=ctx,
                 description="Updated description matching implementation.",
                 justification="Implementation uses FastAPI Depends, not middleware.",
             )
         assert result["accepted"] is True
-        mock.refine_control.assert_awaited_once()
+        mock.start_refine_control.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_rejected(self) -> None:
-        mock = _mock_client(
-            refine_control=AsyncMock(return_value={
-                "accepted": False,
-                "reason": "CO1 would no longer be satisfied.",
-                "per_co": {"CO1": {"satisfied": False, "reasoning": "Weakened."}},
-            }),
-        )
+        envelope = {
+            "accepted": False,
+            "reason": "CO1 would no longer be satisfied.",
+            "per_co": {"CO1": {"satisfied": False, "reasoning": "Weakened."}},
+        }
+        mock = _mock_client()
+        mock.start_refine_control = AsyncMock(return_value={"job_id": "job-refine"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await refine_control(
-                server_version="0", model_id="tm-001", control_id="CTRL-01",
+                server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=ctx,
                 description="Weaker description.",
                 justification="Trying to weaken the control.",
             )
@@ -1407,12 +1413,12 @@ class TestRefineControl:
     @pytest.mark.asyncio
     async def test_empty_description_and_findings(self) -> None:
         with pytest.raises(ToolError, match="Either description or codebase_findings is required"):
-            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="  ", justification="Some justification here.")
+            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=_mock_ctx(), description="  ", justification="Some justification here.")
 
     @pytest.mark.asyncio
     async def test_short_justification(self) -> None:
         with pytest.raises(ToolError, match="justification must be at least 10"):
-            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", description="New desc.", justification="Short")
+            await refine_control(server_version="0", model_id="tm-001", control_id="CTRL-01", ctx=_mock_ctx(), description="New desc.", justification="Short")
 
 
 class TestRemapControl:
@@ -2465,49 +2471,63 @@ class TestGetControlAssumptionGroups:
 class TestSetControlAssumptionGroups:
     @pytest.mark.asyncio
     async def test_single_group_single_member(self) -> None:
+        envelope = {
+            "control_id": "CTRL-01",
+            "assumption_groups": {"1": ["AS1"]},
+            "justification": "AWS KMS handles this control.",
+        }
         mock = _mock_client()
+        mock.start_set_control_assumption_groups = AsyncMock(return_value={"job_id": "job-asg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await set_control_assumption_groups(
                 server_version="0",
                 model_id="tm-001",
                 control_id="CTRL-01",
                 groups='{"1": ["AS1"]}',
+                ctx=ctx,
                 justification="AWS KMS handles this control.",
             )
         assert result["assumption_groups"] == {"1": ["AS1"]}
 
     @pytest.mark.asyncio
     async def test_compound_and_multi_group(self) -> None:
-        mock = _mock_client()
-        # Match the exact input — the mock returns whatever the fixture returns,
-        # so we only need to verify the tool accepts the structure and forwards it.
-        mock.set_control_assumption_groups = AsyncMock(return_value={
+        envelope = {
             "control_id": "CTRL-01",
             "assumption_groups": {"1": ["AS1", "AS2"], "2": ["AS3"]},
             "justification": "Either KMS+review or HSM.",
-        })
+        }
+        mock = _mock_client()
+        mock.start_set_control_assumption_groups = AsyncMock(return_value={"job_id": "job-asg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await set_control_assumption_groups(
                 server_version="0",
                 model_id="tm-001",
                 control_id="CTRL-01",
                 groups='{"1": ["AS1", "AS2"], "2": ["AS3"]}',
+                ctx=ctx,
                 justification="Either KMS+review or HSM.",
             )
         assert result["assumption_groups"] == {"1": ["AS1", "AS2"], "2": ["AS3"]}
         # Confirm the parsed dict was forwarded to the client (not the raw string)
-        mock.set_control_assumption_groups.assert_awaited_once()
-        call_args = mock.set_control_assumption_groups.call_args
+        mock.start_set_control_assumption_groups.assert_awaited_once()
+        call_args = mock.start_set_control_assumption_groups.call_args
         assert call_args.args[2] == {"1": ["AS1", "AS2"], "2": ["AS3"]}
 
     @pytest.mark.asyncio
     async def test_empty_groups_clears(self) -> None:
-        mock = _mock_client()
-        mock.set_control_assumption_groups = AsyncMock(return_value={
+        envelope = {
             "control_id": "CTRL-01",
             "assumption_groups": {},
             "justification": "",
-        })
+        }
+        mock = _mock_client()
+        mock.start_set_control_assumption_groups = AsyncMock(return_value={"job_id": "job-asg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             # Empty groups: justification length check is bypassed.
             result = await set_control_assumption_groups(
@@ -2515,6 +2535,7 @@ class TestSetControlAssumptionGroups:
                 model_id="tm-001",
                 control_id="CTRL-01",
                 groups="{}",
+                ctx=ctx,
             )
         assert result["assumption_groups"] == {}
 
@@ -2528,6 +2549,7 @@ class TestSetControlAssumptionGroups:
                     model_id="tm-001",
                     control_id="CTRL-01",
                     groups="not-json",
+                    ctx=_mock_ctx(),
                     justification="long enough justification",
                 )
 
@@ -2541,6 +2563,7 @@ class TestSetControlAssumptionGroups:
                     model_id="tm-001",
                     control_id="CTRL-01",
                     groups='["AS1"]',
+                    ctx=_mock_ctx(),
                     justification="long enough justification",
                 )
 
@@ -2554,6 +2577,7 @@ class TestSetControlAssumptionGroups:
                     model_id="tm-001",
                     control_id="CTRL-01",
                     groups='{"1": ["AS1"]}',
+                    ctx=_mock_ctx(),
                     justification="too short",
                 )
 

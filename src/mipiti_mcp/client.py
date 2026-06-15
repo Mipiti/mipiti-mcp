@@ -621,7 +621,7 @@ class MipitiClient:
         )
         return ThreatModel.model_validate(data)
 
-    async def refine_control(
+    async def start_refine_control(
         self,
         model_id: str,
         control_id: str,
@@ -629,21 +629,24 @@ class MipitiClient:
         justification: str,
         codebase_findings: str = "",
     ) -> dict:
+        """Kick off the AI-gated control refinement as a background job.
+
+        The refinement re-evaluates whether every mapped control objective is
+        still satisfied (a strong-LLM call that scales with the control's CO
+        fan-out), so it runs as a job — POSTs the ``-job`` endpoint and returns
+        ``{"job_id": ...}`` to poll rather than holding a synchronous request the
+        MCP transport would drop. The job result is the response envelope
+        (accepted refinement, or ``{accepted: false, reason, per_co}`` on
+        semantic rejection).
+        """
         body: dict[str, str] = {"justification": justification}
         if description:
             body["description"] = description
         if codebase_findings:
             body["codebase_findings"] = codebase_findings
-        resp = await self._request_with_idempotency(
-            "PATCH",
-            f"/api/models/{model_id}/controls/{control_id}/refine",
-            json=body,
+        return await self._post(
+            f"/api/models/{model_id}/controls/{control_id}/refine-job", body,
         )
-        if resp.status_code == 422:
-            # AI evaluator rejected — return body with accepted=false
-            return resp.json()
-        resp.raise_for_status()
-        return resp.json()
 
     async def remap_control(
         self,
@@ -1301,7 +1304,7 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def set_mitigation_groups(
+    async def start_set_mitigation_groups(
         self,
         model_id: str,
         co_id: str,
@@ -1309,18 +1312,23 @@ class MipitiClient:
         defense_in_depth: list[str],
         justification: str,
     ) -> dict:
+        """Kick off the AI-gated mitigation-group authoring as a background job.
+
+        The platform evaluates whether the proposed group structure satisfies
+        the CO (a strong-LLM call), so it runs as a job — POSTs the ``-job``
+        endpoint and returns ``{"job_id": ...}`` to poll rather than holding a
+        synchronous request the MCP transport would drop. The job result is the
+        response envelope.
+        """
         body = {
             "groups": groups,
             "defense_in_depth": defense_in_depth,
             "justification": justification,
         }
-        resp = await self._request_with_idempotency(
-            "PUT",
-            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups",
-            json=body,
+        return await self._post(
+            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups-job",
+            body,
         )
-        resp.raise_for_status()
-        return resp.json()
 
     async def get_control_assumption_groups(
         self, model_id: str, control_id: str,
@@ -1331,24 +1339,29 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def set_control_assumption_groups(
+    async def start_set_control_assumption_groups(
         self,
         model_id: str,
         control_id: str,
         groups: dict,
         justification: str,
     ) -> dict:
+        """Kick off the AI-gated assumption-group authoring as a background job.
+
+        Each non-empty proposed group is evaluated for relevance to the control
+        (a strong-LLM call per group), so it runs as a job — POSTs the ``-job``
+        endpoint and returns ``{"job_id": ...}`` to poll rather than holding a
+        synchronous request the MCP transport would drop. The job result is the
+        response envelope.
+        """
         body = {
             "groups": groups,
             "justification": justification,
         }
-        resp = await self._request_with_idempotency(
-            "PUT",
-            f"/api/models/{model_id}/controls/{control_id}/assumption-groups",
-            json=body,
+        return await self._post(
+            f"/api/models/{model_id}/controls/{control_id}/assumption-groups-job",
+            body,
         )
-        resp.raise_for_status()
-        return resp.json()
 
     async def link_assumption(
         self, model_id: str, assumption_id: str, target_model_id: str,
@@ -1991,23 +2004,27 @@ class MipitiClient:
         """
         return await self._get(f"/api/findings/{finding_id}/remediation/preview")
 
-    async def apply_finding_remediation(
+    async def start_apply_finding_remediation(
         self, finding_id: str, justification: str,
     ) -> dict:
-        """POST /api/findings/{finding_id}/remediation/apply.
+        """POST /api/findings/{finding_id}/remediation/apply-job.
 
         Mutating. Commits the remediation that
-        ``preview_finding_remediation`` showed. ``justification`` is
-        recorded on the audit trail so future reviewers can see why
-        the cleanup was run; the server enforces non-empty.
+        ``preview_finding_remediation`` showed as a background job — the
+        remediation handler runs a strong-LLM step that scales with the
+        finding's blast radius, so it returns ``{"job_id": ...}`` to poll
+        rather than holding a synchronous request the MCP transport would
+        drop. ``justification`` is recorded on the audit trail so future
+        reviewers can see why the cleanup was run; the server enforces
+        non-empty.
 
-        Returns the server envelope verbatim. 404 if the finding
-        doesn't exist; 409 if it is already remediated or dismissed;
-        400 if justification is empty; 422 if the finding's kind has
-        no automatic remediation handler.
+        The job result is the server envelope verbatim. 404 if the finding
+        doesn't exist; 409 if it is already remediated or dismissed; 400 if
+        justification is empty; 422 if the finding's kind has no automatic
+        remediation handler.
         """
         return await self._post(
-            f"/api/findings/{finding_id}/remediation/apply",
+            f"/api/findings/{finding_id}/remediation/apply-job",
             {"justification": justification},
         )
 

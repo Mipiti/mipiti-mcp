@@ -2019,6 +2019,7 @@ async def refine_control(
     server_version: str,
     model_id: str,
     control_id: str,
+    ctx: Context,
     description: str = "",
     justification: str = "",
     codebase_findings: str = "",
@@ -2059,11 +2060,15 @@ async def refine_control(
     if len(justification.strip()) < 10:
         raise ToolError("justification must be at least 10 characters.")
     try:
-        return _dump(await _get_client().refine_control(
+        client = _get_client()
+        # Runs as a background job (strong-LLM CO sufficiency check); poll it so
+        # the work stays off the backend event loop and the transport stays warm.
+        started = await client.start_refine_control(
             model_id, control_id,
             description.strip(), justification.strip(),
             codebase_findings=codebase_findings.strip(),
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3559,6 +3564,7 @@ async def set_mitigation_groups(
     model_id: str,
     co_id: str,
     groups: str,
+    ctx: Context,
     defense_in_depth: str = "",
     justification: str = "",
 ) -> dict:
@@ -3595,9 +3601,13 @@ async def set_mitigation_groups(
         raise ToolError("justification must be at least 10 characters.")
 
     try:
-        return _dump(await _get_client().set_mitigation_groups(
+        client = _get_client()
+        # Runs as a background job (strong-LLM CO sufficiency check); poll it so
+        # the work stays off the backend event loop and the transport stays warm.
+        started = await client.start_set_mitigation_groups(
             model_id, co_id, parsed_groups, did_list, justification.strip(),
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5220,6 +5230,7 @@ async def apply_finding_remediation(
     server_version: str,
     finding_id: str,
     justification: str,
+    ctx: Context,
 ) -> dict:
     """Apply the remediation for a finding. Mutates state.
 
@@ -5250,9 +5261,14 @@ async def apply_finding_remediation(
             "the remediation ran."
         )
     try:
-        return _dump(await _get_client().apply_finding_remediation(
+        client = _get_client()
+        # Runs as a background job (remediation handler's strong-LLM step scales
+        # with the finding's blast radius); poll it so the work stays off the
+        # backend event loop and the transport stays warm.
+        started = await client.start_apply_finding_remediation(
             finding_id, justification,
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5836,6 +5852,7 @@ async def set_control_assumption_groups(
     model_id: str,
     control_id: str,
     groups: str,
+    ctx: Context,
     justification: str = "",
 ) -> dict:
     """Declaratively set the assumption group structure for a control.
@@ -5896,9 +5913,14 @@ async def set_control_assumption_groups(
         raise ToolError("justification must be at least 10 characters when setting groups.")
 
     try:
-        return _dump(await _get_client().set_control_assumption_groups(
+        client = _get_client()
+        # Runs as a background job (strong-LLM per-group relevance gate); poll it
+        # so the work stays off the backend event loop and the transport stays
+        # warm.
+        started = await client.start_set_control_assumption_groups(
             model_id, control_id, parsed_groups, justification.strip(),
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 

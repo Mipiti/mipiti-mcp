@@ -61,6 +61,13 @@ class TestPreviewFindingRemediation:
                 )
 
 
+def _mock_ctx() -> AsyncMock:
+    ctx = AsyncMock()
+    ctx.report_progress = AsyncMock()
+    ctx.info = AsyncMock()
+    return ctx
+
+
 class TestApplyFindingRemediation:
     @pytest.mark.asyncio
     async def test_calls_client_with_justification(self) -> None:
@@ -72,14 +79,20 @@ class TestApplyFindingRemediation:
             "dropped_control_ids": ["CTRL-07"],
         }
         client = AsyncMock()
-        client.apply_finding_remediation = AsyncMock(return_value=result_envelope)
+        # Runs as a background job: start it, then poll to completion.
+        client.start_apply_finding_remediation = AsyncMock(return_value={"job_id": "job-rem"})
+        client.get_operation = AsyncMock(
+            return_value={"status": "completed", "result": result_envelope},
+        )
+        ctx = _mock_ctx()
         with patch("mipiti_mcp.server._get_client", return_value=client):
             result = await apply_finding_remediation(
                 server_version="0",
                 finding_id="F-1",
                 justification="cleaning up pre-fix trigger duplicates",
+                ctx=ctx,
             )
-        client.apply_finding_remediation.assert_awaited_once_with(
+        client.start_apply_finding_remediation.assert_awaited_once_with(
             "F-1", "cleaning up pre-fix trigger duplicates",
         )
         assert result == result_envelope
@@ -94,25 +107,25 @@ class TestApplyFindingRemediation:
         with patch("mipiti_mcp.server._get_client", return_value=client):
             with pytest.raises(ToolError, match="justification is required"):
                 await apply_finding_remediation(
-                    server_version="0", finding_id="F-1", justification="",
+                    server_version="0", finding_id="F-1", justification="", ctx=_mock_ctx(),
                 )
             with pytest.raises(ToolError, match="justification is required"):
                 await apply_finding_remediation(
-                    server_version="0", finding_id="F-1", justification="   ",
+                    server_version="0", finding_id="F-1", justification="   ", ctx=_mock_ctx(),
                 )
-        client.apply_finding_remediation.assert_not_awaited()
+        client.start_apply_finding_remediation.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_409_already_remediated_wrapped_as_tool_error(self) -> None:
         """Conflict (already remediated/dismissed) surfaces with the
         server's detail intact so the agent can react (e.g., reload
         list_findings)."""
-        request = httpx.Request("POST", "http://x/api/findings/F-1/remediation/apply")
+        request = httpx.Request("POST", "http://x/api/findings/F-1/remediation/apply-job")
         response = httpx.Response(
             409, json={"detail": "Finding already remediated"}, request=request,
         )
         client = AsyncMock()
-        client.apply_finding_remediation = AsyncMock(
+        client.start_apply_finding_remediation = AsyncMock(
             side_effect=httpx.HTTPStatusError("conflict", request=request, response=response),
         )
         with patch("mipiti_mcp.server._get_client", return_value=client):
@@ -121,6 +134,7 @@ class TestApplyFindingRemediation:
                     server_version="0",
                     finding_id="F-1",
                     justification="retry after race",
+                    ctx=_mock_ctx(),
                 )
 
 
@@ -148,21 +162,22 @@ async def test_client_preview_uses_get_on_preview_path(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_client_apply_uses_post_with_justification_body(mock_env: None) -> None:
-    """apply_finding_remediation must hit
-    POST /api/findings/{id}/remediation/apply with the justification in
-    the body, and carry an Idempotency-Key (mutating call)."""
+    """start_apply_finding_remediation must hit
+    POST /api/findings/{id}/remediation/apply-job with the justification
+    in the body, carry an Idempotency-Key (mutating call), and return the
+    {job_id} envelope to poll."""
     route = respx.post(
-        "https://test.api.mipiti.io/api/findings/F-1/remediation/apply",
-    ).mock(return_value=httpx.Response(200, json={"applied": True}))
+        "https://test.api.mipiti.io/api/findings/F-1/remediation/apply-job",
+    ).mock(return_value=httpx.Response(200, json={"job_id": "job-rem"}))
     client = MipitiClient()
-    data = await client.apply_finding_remediation("F-1", "rationale here")
+    data = await client.start_apply_finding_remediation("F-1", "rationale here")
     assert route.called
     sent = route.calls.last.request
     body = sent.read().decode("utf-8")
     assert "rationale here" in body
     assert "justification" in body
     assert sent.headers.get("Idempotency-Key"), "mutating call must carry Idempotency-Key"
-    assert data["applied"] is True
+    assert data["job_id"] == "job-rem"
     await client.close()
 
 
