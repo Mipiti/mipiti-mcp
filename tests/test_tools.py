@@ -1485,51 +1485,59 @@ class TestReevaluateThreatModelFactors:
 
     @pytest.mark.asyncio
     async def test_success_returns_envelope(self) -> None:
+        envelope = {
+            "model_id": "tm-001",
+            "assets_reevaluated": 2,
+            "attackers_reevaluated": 1,
+            "deltas": {"assets": [{"id": "A1"}], "attackers": [{"id": "T1"}]},
+            "failed_entities": [],
+        }
         mock = _mock_client()
+        mock.start_reevaluate_factors = AsyncMock(return_value={"job_id": "job-reeval"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await reevaluate_threat_model_factors(
-                server_version="0", model_id="tm-001",
+                server_version="0", model_id="tm-001", ctx=ctx,
             )
-        assert result["model_id"] == "tm-001"
+        # The job result (the envelope) is returned, after polling.
         assert result["assets_reevaluated"] == 2
         assert result["attackers_reevaluated"] == 1
         assert result["deltas"]["assets"][0]["id"] == "A1"
-        assert result["deltas"]["attackers"][0]["id"] == "T1"
-        # No change_reason passed → client method called with None.
-        mock.reevaluate_factors.assert_awaited_once_with(
-            "tm-001", change_reason=None,
-        )
+        mock.start_reevaluate_factors.assert_awaited_once_with("tm-001", change_reason=None)
 
     @pytest.mark.asyncio
     async def test_change_reason_threaded_through(self) -> None:
         mock = _mock_client()
+        mock.start_reevaluate_factors = AsyncMock(return_value={"job_id": "job-reeval"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {}})
+        ctx = _mock_ctx()
         with _patch_client(mock):
             await reevaluate_threat_model_factors(
-                server_version="0", model_id="tm-001",
+                server_version="0", model_id="tm-001", ctx=ctx,
                 change_reason="Re-eval after refinement bug fix v0.39.0",
             )
-        mock.reevaluate_factors.assert_awaited_once_with(
-            "tm-001",
-            change_reason="Re-eval after refinement bug fix v0.39.0",
+        mock.start_reevaluate_factors.assert_awaited_once_with(
+            "tm-001", change_reason="Re-eval after refinement bug fix v0.39.0",
         )
 
     @pytest.mark.asyncio
     async def test_client_error_wrapped_as_tool_error(self) -> None:
         import httpx
-        request = httpx.Request("POST", "https://api/factors/reevaluate")
+        request = httpx.Request("POST", "https://api/factors/reevaluate-job")
         response = httpx.Response(
             503, request=request,
             json={"detail": "LLM evaluator unreachable"},
         )
-        mock = _mock_client(reevaluate_factors=AsyncMock(
-            side_effect=httpx.HTTPStatusError(
-                "503 Service Unavailable", request=request, response=response,
-            ),
+        mock = _mock_client()
+        mock.start_reevaluate_factors = AsyncMock(side_effect=httpx.HTTPStatusError(
+            "503 Service Unavailable", request=request, response=response,
         ))
+        ctx = _mock_ctx()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="LLM evaluator unreachable"):
                 await reevaluate_threat_model_factors(
-                    server_version="0", model_id="tm-001",
+                    server_version="0", model_id="tm-001", ctx=ctx,
                 )
 
 

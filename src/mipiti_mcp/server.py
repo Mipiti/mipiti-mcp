@@ -4213,6 +4213,7 @@ async def restore_attacker(server_version: str, model_id: str, attacker_id: str)
 async def reevaluate_threat_model_factors(
     server_version: str,
     model_id: str,
+    ctx: Context,
     change_reason: Optional[str] = None,
 ) -> dict:
     """Re-run the LLM factor judgment on every asset and attacker in
@@ -4264,9 +4265,13 @@ async def reevaluate_threat_model_factors(
           for per-entity LLM failures; ``[]`` on the happy path
     """
     try:
-        return _dump(await _get_client().reevaluate_factors(
+        client = _get_client()
+        # Runs as a background job (scales with entity count); poll it so the
+        # work stays off the backend event loop and the transport stays warm.
+        started = await client.start_reevaluate_factors(
             model_id, change_reason=change_reason,
-        ))
+        )
+        return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
         raise _api_error(exc) from exc
 

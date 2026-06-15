@@ -202,53 +202,43 @@ async def test_submit_assertions(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_reevaluate_factors_no_change_reason(mock_env: None) -> None:
-    """Default call posts an empty body — the backend falls back to
-    its own default change_reason for the audit trail."""
+async def test_start_reevaluate_factors_no_change_reason(mock_env: None) -> None:
+    """Default call posts an empty body to the job endpoint and returns a
+    job_id; the backend falls back to its own default change_reason."""
     captured: dict[str, dict] = {}
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content.decode())
-        return httpx.Response(200, json={
-            "model_id": "tm-001",
-            "assets_reevaluated": 0,
-            "attackers_reevaluated": 0,
-            "deltas": {"assets": [], "attackers": []},
-        })
+        return httpx.Response(200, json={"job_id": "job-reeval"})
 
-    respx.post(
-        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate",
+    route = respx.post(
+        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate-job",
     ).mock(side_effect=_capture)
 
     client = MipitiClient()
-    result = await client.reevaluate_factors("tm-001")
-    assert result["model_id"] == "tm-001"
+    result = await client.start_reevaluate_factors("tm-001")
+    assert route.called
+    assert result["job_id"] == "job-reeval"
     assert captured["body"] == {}
     await client.close()
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_reevaluate_factors_with_change_reason(mock_env: None) -> None:
-    """When change_reason is supplied, it is threaded through to the
-    body so the backend records it on every rating revision."""
+async def test_start_reevaluate_factors_with_change_reason(mock_env: None) -> None:
+    """change_reason is threaded through to the job-endpoint body."""
     captured: dict[str, dict] = {}
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content.decode())
-        return httpx.Response(200, json={
-            "model_id": "tm-001",
-            "assets_reevaluated": 1,
-            "attackers_reevaluated": 1,
-            "deltas": {"assets": [], "attackers": []},
-        })
+        return httpx.Response(200, json={"job_id": "job-reeval"})
 
     respx.post(
-        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate",
+        "https://test.api.mipiti.io/api/models/tm-001/factors/reevaluate-job",
     ).mock(side_effect=_capture)
 
     client = MipitiClient()
-    await client.reevaluate_factors(
+    await client.start_reevaluate_factors(
         "tm-001", change_reason="Re-eval after bug fix",
     )
     assert captured["body"] == {"change_reason": "Re-eval after bug fix"}

@@ -1551,33 +1551,27 @@ class MipitiClient:
         with the attacker now marked ``deleted=True`` in the model."""
         return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
 
-    async def reevaluate_factors(
+    async def start_reevaluate_factors(
         self, model_id: str, change_reason: Optional[str] = None,
     ) -> dict:
-        """POST /api/models/{model_id}/factors/reevaluate.
+        """Kick off the bulk factor re-evaluation as a background job.
 
-        Bulk re-runs the LLM factor judgment on every live asset and
-        attacker in the model. Sequential, per-entity soft-fail: an
-        LLM error on a single entity is surfaced via the response's
-        ``failed_entities`` list and does not abort the loop;
-        successful entities' rating revisions are persisted as they
-        complete. The server raises 503 only when *every* live entity
-        failed (in which case nothing was persisted). The body is
-        optional; when ``change_reason`` is omitted the backend
-        defaults to ``"LLM factor re-evaluation"`` for the audit trail.
-        Soft-deleted entities are skipped.
-
-        Returns the response envelope verbatim:
-        ``{"model_id", "assets_reevaluated", "attackers_reevaluated",
-        "deltas": {"assets": [...], "attackers": [...]},
-        "failed_entities": [{"id", "kind", "reason"}, ...]}``.
-        ``failed_entities`` is ``[]`` on the happy path.
+        Bulk re-runs the LLM factor judgment on every live asset and attacker.
+        It scales with entity count, so it runs as a job (returns
+        ``{"job_id": ...}`` to poll) rather than a long synchronous request the
+        MCP transport would time out. The job result is the response envelope:
+        ``{"model_id", "assets_reevaluated", "attackers_reevaluated", "deltas":
+        {"assets": [...], "attackers": [...]}, "failed_entities": [...]}`` —
+        per-entity soft-fail (a single LLM error surfaces in ``failed_entities``
+        and successful revisions still persist); the job fails only when every
+        live entity failed. Body optional; an omitted ``change_reason`` defaults
+        to ``"LLM factor re-evaluation"``. Soft-deleted entities are skipped.
         """
         body: dict[str, Any] = {}
         if change_reason is not None:
             body["change_reason"] = change_reason
         return await self._post(
-            f"/api/models/{model_id}/factors/reevaluate", body,
+            f"/api/models/{model_id}/factors/reevaluate-job", body,
         )
 
     async def revalidate_entities(self, model_id: str) -> dict:
