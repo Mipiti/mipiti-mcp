@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->133<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->143<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -173,6 +173,21 @@ uvx mipiti-mcp
 | `get_model_risk_view` | Per-model Prioritized Risk View: one row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage, and open-finding count. |
 | `get_system_risk_view` | Cross-model variant of `get_model_risk_view`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |
 | `list_risk_acceptances` | All risk acceptances on a model — risks explicitly accepted instead of mitigated. Includes CO id, owner, justification, status, review deadline. |
+
+### Functional Conformance
+
+Proves a feature *does what it was specified to do* (Capability × Condition), verified by the same assertion + CI engine as security controls.
+
+| Tool | Description |
+|------|-------------|
+| `generate_functional_objectives` | Derive capabilities (behaviours the feature must deliver) and Given-When-Then functional objectives from the feature spec, walking each capability against a taxonomy of operating conditions. Requires a Pro plan; billable. `refresh=true` re-derives. |
+| `list_capabilities` / `get_capability` | Read the capability decomposition. |
+| `list_functional_objectives` / `get_functional_objective` | Read the functional objectives (the test plan). |
+| `get_functional_coverage` | Per-objective state (verified / covered / failing / untested), the Capabilities × Conditions matrix, and applicable / missing-objective / not-applicable cell accounting. |
+| `check_functional_gaps` | Actionable gaps: applicable conditions with no objective yet, plus objectives that are failing or untested. |
+| `get_functional_scan_prompt` | The agent brief: per-objective instructions on what test to write, plus any missing objectives to author first. |
+| `add_functional_test` | Register a test that satisfies one or more objectives. |
+| `submit_functional_tests` | Submit evidence assertions for a functional test (verified in CI, same as control evidence). |
 
 ### Composition (recursive-tree effective model)
 
