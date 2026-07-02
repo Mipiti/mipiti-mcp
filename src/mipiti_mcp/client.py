@@ -2199,3 +2199,57 @@ class MipitiClient:
 
     async def convert_assumption_to_controls(self, model_id: str, assumption_id: str) -> dict:
         return await self._post(f"/api/models/{model_id}/assumptions/{assumption_id}/convert-to-controls", {})
+
+    # ------------------------------------------------------------------
+    # Functional conformance (Capability × Condition)
+    # ------------------------------------------------------------------
+
+    async def generate_functional(self, model_id: str, refresh: bool = False) -> dict:
+        params = {"refresh": "true"} if refresh else None
+        return await self._post(
+            f"/api/models/{model_id}/functional/generate", {}, params=params,
+        )
+
+    async def list_capabilities(self, model_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/capabilities")
+
+    async def get_capability(self, model_id: str, cap_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/capabilities/{cap_id}")
+
+    async def list_functional_objectives(self, model_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/functional-objectives")
+
+    async def get_functional_objective(self, model_id: str, fo_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/functional-objectives/{fo_id}")
+
+    async def get_functional_coverage(self, model_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/functional/coverage")
+
+    async def get_functional_gaps(self, model_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/functional/gaps")
+
+    async def get_functional_scan_prompt(self, model_id: str) -> dict:
+        return await self._get(f"/api/models/{model_id}/functional/scan-prompt")
+
+    async def add_functional_test(
+        self, model_id: str, description: str,
+        functional_objective_ids: list[str], status: str = "not_implemented",
+        component_ids: list[str] | None = None,
+    ) -> dict:
+        return await self._post(
+            f"/api/models/{model_id}/functional-tests",
+            {
+                "description": description,
+                "functional_objective_ids": functional_objective_ids,
+                "status": status,
+                "component_ids": component_ids or [],
+            },
+        )
+
+    async def submit_functional_tests(
+        self, model_id: str, functional_test_id: str, assertions: list[dict],
+    ) -> dict:
+        return await self._post(
+            f"/api/models/{model_id}/functional-tests/{functional_test_id}/assertions",
+            {"assertions": assertions},
+        )

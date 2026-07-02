@@ -5994,6 +5994,178 @@ async def convert_assumption_to_controls(
 
 
 # ------------------------------------------------------------------
+# Functional conformance (Capability × Condition)
+# ------------------------------------------------------------------
+# Proves a feature does what it was specified to do, verified by the same
+# assertion + CI engine as security controls. The agent loop is: generate
+# objectives → get_functional_scan_prompt → write tests → add_functional_test →
+# submit_functional_tests → CI verifies → get_functional_coverage.
+
+
+@mcp.tool()
+async def generate_functional_objectives(
+    server_version: str, model_id: str, refresh: bool = False,
+) -> dict:
+    """Derive capabilities, functional objectives, and the concrete tests to
+    implement from the feature spec.
+
+    Capabilities are the behaviours the feature must deliver; each is walked
+    against a taxonomy of operating conditions (nominal, boundary, invalid
+    input, dependency failure, concurrency, …) to produce testable
+    Given-When-Then objectives — and then a concrete, implementable test is
+    specified for each objective (so the agent implements the tests rather than
+    deciding what to test). Requires a Pro plan. Billable — may take some time.
+    `refresh=true` re-derives from scratch, replacing prior generated (not
+    manually authored) capabilities, objectives, and tests.
+
+    Args:
+        model_id: ID of the threat model.
+        refresh: Re-generate from scratch instead of serving cached output.
+    """
+    try:
+        return _dump(await _get_client().generate_functional(model_id, refresh))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_capabilities(server_version: str, model_id: str) -> dict:
+    """List the capabilities (behaviours the feature must deliver) for a model."""
+    try:
+        return _dump(await _get_client().list_capabilities(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_capability(server_version: str, model_id: str, capability_id: str) -> dict:
+    """Get a single capability with its component and asset bindings."""
+    try:
+        return _dump(await _get_client().get_capability(model_id, capability_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_functional_objectives(server_version: str, model_id: str) -> dict:
+    """List the functional objectives (Capability × Condition test plan)."""
+    try:
+        return _dump(await _get_client().list_functional_objectives(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_functional_objective(
+    server_version: str, model_id: str, functional_objective_id: str,
+) -> dict:
+    """Get a single functional objective (its Given-When-Then statement)."""
+    try:
+        return _dump(
+            await _get_client().get_functional_objective(model_id, functional_objective_id)
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_functional_coverage(server_version: str, model_id: str) -> dict:
+    """Get the functional coverage report — per-objective state (verified /
+    covered / failing / untested), the Capabilities × Conditions matrix, and
+    the applicable / missing-objective / not-applicable cell accounting."""
+    try:
+        return _dump(await _get_client().get_functional_coverage(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def check_functional_gaps(server_version: str, model_id: str) -> dict:
+    """Get the actionable functional gaps: applicable conditions with no
+    objective yet, and objectives that are failing or have no passing test."""
+    try:
+        return _dump(await _get_client().get_functional_gaps(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_functional_scan_prompt(server_version: str, model_id: str) -> dict:
+    """Get the agent brief for functional conformance. Generation specifies the
+    functional tests, so this returns, for each test not yet verified, its
+    implementation brief and the objectives it proves. Complete each
+    instruction by implementing the described test and submitting TEST_EXISTS +
+    TEST_PASSES assertions with submit_functional_tests so CI verifies it. Also
+    reports objectives_without_tests (regenerate or add a test) and
+    missing_objectives (applicable conditions with no objective yet)."""
+    try:
+        return _dump(await _get_client().get_functional_scan_prompt(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def add_functional_test(
+    server_version: str, model_id: str, description: str,
+    functional_objective_ids: str, status: str = "not_implemented",
+    component_ids: str = "",
+) -> dict:
+    """Manually register a functional test that satisfies one or more objectives.
+
+    Generation already specifies the tests to implement, so this is for hand-
+    authoring an extra test; a manually-added test is preserved when the model
+    is regenerated.
+
+    Args:
+        model_id: ID of the threat model.
+        description: What the test proves.
+        functional_objective_ids: Comma-separated objective ids the test satisfies.
+        status: not_implemented | implemented | verified (an operator claim;
+            an independent CI run is what actually verifies it).
+        component_ids: Comma-separated component ids the test exercises (optional).
+    """
+    fo_ids = [x.strip() for x in functional_objective_ids.split(",") if x.strip()]
+    comp_ids = [x.strip() for x in component_ids.split(",") if x.strip()]
+    if not fo_ids:
+        raise ToolError("functional_objective_ids must list at least one objective id.")
+    try:
+        return _dump(await _get_client().add_functional_test(
+            model_id, description, fo_ids, status, comp_ids,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def submit_functional_tests(
+    server_version: str, model_id: str, functional_test_id: str,
+    assertions_json: str,
+) -> dict:
+    """Submit evidence assertions for a functional test (verified in CI).
+
+    Args:
+        model_id: ID of the threat model.
+        functional_test_id: The functional test the assertions prove.
+        assertions_json: JSON array of assertions, each
+            {"type": "test_passes"|..., "params": {...}, "description": "...",
+             "repo": "<owner>/<repo>"}. Each assertion must carry an explicit
+            repo (or the "no_repo" sentinel).
+    """
+    try:
+        assertions = json.loads(assertions_json)
+    except json.JSONDecodeError:
+        raise ToolError("assertions_json must be a valid JSON array.")
+    if not isinstance(assertions, list):
+        raise ToolError("assertions_json must be a JSON array.")
+    try:
+        return _dump(await _get_client().submit_functional_tests(
+            model_id, functional_test_id, assertions,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
 
