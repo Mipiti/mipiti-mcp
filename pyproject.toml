@@ -58,4 +58,11 @@ testpaths = ["tests"]
 # requirements-audit.lock) and re-run pip-audit when bumping these.
 [tool.uv]
 constraint-dependencies = [
+    # Transitive CVE floors (all pulled in via fastmcp / the build+audit
+    # toolchains). Each floors to the first fixed release; refresh all four
+    # lockfiles + re-run pip-audit when changing these.
+    "starlette>=1.3.1",          # PYSEC-2026-248 / PYSEC-2026-249
+    "cryptography>=48.0.1",      # GHSA-537c-gmf6-5ccf
+    "pydantic-settings>=2.14.2", # GHSA-4xgf-cpjx-pc3j
+    "python-multipart>=0.0.31",  # CVE-2026-53540
 ]

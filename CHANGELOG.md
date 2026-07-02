@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `assertion_type_count` metric in `scripts/canonical-counts.sh` (+ `ASSERTION_TYPE_COUNT` in the doc-count gate), so README mentions of the type count are pinned to the schema instead of hand-maintained.
 - `revalidate_threat_model_entities(model_id)` MCP tool wrapping `POST /api/models/{id}/revalidate-entities`. Re-runs quality validation over an existing model's assets and attackers — a fast first-pass check on every entity, with a deeper review only on the ones it flags (which confirms them, sharpens their wording, or flags them for review). Stale quality warnings are cleared first so previously-flagged entities are re-judged. Non-destructive: an entity that should be removed is left in place with a quality warning rather than deleted, so no control objective loses its asset/attacker anchor; the result is saved as a new model version (controls and COs carry forward). The validation-pass counterpart to `reevaluate_threat_model_factors`.
 
+### Security
+
+- Floored four transitively-pulled dependencies to their first fixed release via `[tool.uv] constraint-dependencies`, clearing the current `pip-audit` findings: `starlette>=1.3.1` (PYSEC-2026-248 / PYSEC-2026-249), `cryptography>=48.0.1` (GHSA-537c-gmf6-5ccf), `pydantic-settings>=2.14.2` (GHSA-4xgf-cpjx-pc3j), and `python-multipart>=0.0.31` (CVE-2026-53540). All four lockfiles recompiled; `pip-audit` now reports no known vulnerabilities.
+
 ### Fixed
 
 - `server_version` validator no longer bypassable via empty string. The previous shape (`if client_version and client_version != _SERVER_VERSION:`) short-circuited when an agent omitted the field, defeating the pin's safety guarantee (tool catalog + parameter schemas can change between submodule pointer bumps; the server must refuse stale calls). Empty string now rejects alongside any mismatch. Five new tests pin the staleness-rejection path so a future short-circuit reopens-the-bypass change breaks CI loudly.
