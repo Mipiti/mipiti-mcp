@@ -6006,14 +6006,17 @@ async def convert_assumption_to_controls(
 async def generate_functional_objectives(
     server_version: str, model_id: str, refresh: bool = False,
 ) -> dict:
-    """Derive capabilities and functional objectives from the feature spec.
+    """Derive capabilities, functional objectives, and the concrete tests to
+    implement from the feature spec.
 
     Capabilities are the behaviours the feature must deliver; each is walked
     against a taxonomy of operating conditions (nominal, boundary, invalid
     input, dependency failure, concurrency, …) to produce testable
-    Given-When-Then objectives. Requires a Pro plan. Billable — may take some
-    time. `refresh=true` re-derives from scratch, replacing prior generated
-    (not manually authored) capabilities and objectives.
+    Given-When-Then objectives — and then a concrete, implementable test is
+    specified for each objective (so the agent implements the tests rather than
+    deciding what to test). Requires a Pro plan. Billable — may take some time.
+    `refresh=true` re-derives from scratch, replacing prior generated (not
+    manually authored) capabilities, objectives, and tests.
 
     Args:
         model_id: ID of the threat model.
@@ -6088,11 +6091,13 @@ async def check_functional_gaps(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def get_functional_scan_prompt(server_version: str, model_id: str) -> dict:
-    """Get the agent brief for functional conformance: for each objective that
-    still needs a test, an instruction on what to write, plus any missing
-    objectives to author first. Complete each instruction by implementing the
-    test, registering it with add_functional_test, and submitting assertions
-    with submit_functional_tests so CI verifies it."""
+    """Get the agent brief for functional conformance. Generation specifies the
+    functional tests, so this returns, for each test not yet verified, its
+    implementation brief and the objectives it proves. Complete each
+    instruction by implementing the described test and submitting TEST_EXISTS +
+    TEST_PASSES assertions with submit_functional_tests so CI verifies it. Also
+    reports objectives_without_tests (regenerate or add a test) and
+    missing_objectives (applicable conditions with no objective yet)."""
     try:
         return _dump(await _get_client().get_functional_scan_prompt(model_id))
     except Exception as exc:
@@ -6105,7 +6110,11 @@ async def add_functional_test(
     functional_objective_ids: str, status: str = "not_implemented",
     component_ids: str = "",
 ) -> dict:
-    """Register a functional test that satisfies one or more objectives.
+    """Manually register a functional test that satisfies one or more objectives.
+
+    Generation already specifies the tests to implement, so this is for hand-
+    authoring an extra test; a manually-added test is preserved when the model
+    is regenerated.
 
     Args:
         model_id: ID of the threat model.

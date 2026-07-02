@@ -180,13 +180,13 @@ Proves a feature *does what it was specified to do* (Capability × Condition), v
 
 | Tool | Description |
 |------|-------------|
-| `generate_functional_objectives` | Derive capabilities (behaviours the feature must deliver) and Given-When-Then functional objectives from the feature spec, walking each capability against a taxonomy of operating conditions. Requires a Pro plan; billable. `refresh=true` re-derives. |
+| `generate_functional_objectives` | Derive capabilities (behaviours the feature must deliver), Given-When-Then functional objectives (walking each capability against a taxonomy of operating conditions), **and a concrete implementable test per objective** — so the agent implements the tests rather than deciding what to test. Requires a Pro plan; billable. `refresh=true` re-derives. |
 | `list_capabilities` / `get_capability` | Read the capability decomposition. |
 | `list_functional_objectives` / `get_functional_objective` | Read the functional objectives (the test plan). |
-| `get_functional_coverage` | Per-objective state (verified / covered / failing / untested), the Capabilities × Conditions matrix, and applicable / missing-objective / not-applicable cell accounting. |
+| `get_functional_coverage` | Per-objective + per-test state (verified / covered / failing / untested), the Capabilities × Conditions matrix, and applicable / missing-objective / not-applicable cell accounting. |
 | `check_functional_gaps` | Actionable gaps: applicable conditions with no objective yet, plus objectives that are failing or untested. |
-| `get_functional_scan_prompt` | The agent brief: per-objective instructions on what test to write, plus any missing objectives to author first. |
-| `add_functional_test` | Register a test that satisfies one or more objectives. |
+| `get_functional_scan_prompt` | The agent brief: per not-yet-verified test, its implementation brief and the objectives it proves; plus objectives with no test and applicable conditions with no objective. |
+| `add_functional_test` | Manually register an extra test satisfying one or more objectives (generation already specifies the tests; a manual test survives regeneration). |
 | `submit_functional_tests` | Submit evidence assertions for a functional test (verified in CI, same as control evidence). |
 
 ### Composition (recursive-tree effective model)
