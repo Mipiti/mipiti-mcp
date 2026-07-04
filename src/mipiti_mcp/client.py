@@ -2246,6 +2246,14 @@ class MipitiClient:
             },
         )
 
+    async def import_functional_tests(
+        self, model_id: str, tests: list[dict],
+    ) -> dict:
+        return await self._post(
+            f"/api/models/{model_id}/functional/import-tests",
+            {"tests": tests},
+        )
+
     async def submit_functional_tests(
         self, model_id: str, functional_test_id: str, assertions: list[dict],
     ) -> dict:

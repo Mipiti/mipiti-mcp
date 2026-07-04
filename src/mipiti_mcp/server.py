@@ -6137,6 +6137,43 @@ async def add_functional_test(
 
 
 @mcp.tool()
+async def import_functional_tests(
+    server_version: str, model_id: str, tests_json: str,
+) -> dict:
+    """Register existing tests from the codebase against a model's functional
+    objectives, so tests you already have count toward functional conformance —
+    not only Mipiti-specified tests.
+
+    Scan the repo's test suite and pass the tests here. Optionally associate each
+    with the objective ids it covers (from list_functional_objectives); the
+    platform verifies each association is applicable before accepting it and
+    returns any it rejected under ``rejected_mappings``. A test with no (or a
+    rejected) association is still imported, unmapped, so it can be associated
+    later.
+
+    Args:
+        model_id: ID of the threat model.
+        tests_json: A JSON array of test objects. Each object supports
+            ``test_name``, ``file_path``, ``framework``, ``description``,
+            ``status`` (not_implemented | implemented | verified — an operator
+            claim; an independent CI run is what verifies it), and
+            ``functional_objective_ids`` (list of objective ids the test covers).
+            At least ``test_name`` or ``description`` is required per test; the
+            rest are optional.
+    """
+    try:
+        tests = json.loads(tests_json)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ToolError(f"tests_json must be a JSON array: {exc}") from exc
+    if not isinstance(tests, list) or not tests:
+        raise ToolError("tests_json must be a non-empty JSON array of test objects.")
+    try:
+        return _dump(await _get_client().import_functional_tests(model_id, tests))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def submit_functional_tests(
     server_version: str, model_id: str, functional_test_id: str,
     assertions_json: str,
