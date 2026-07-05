@@ -2261,3 +2261,45 @@ class MipitiClient:
             f"/api/models/{model_id}/functional-tests/{functional_test_id}/assertions",
             {"assertions": assertions},
         )
+
+    async def suggest_functional_test_mappings(
+        self, model_id: str, test_ids: list[str],
+    ) -> dict:
+        return await self._post(
+            f"/api/models/{model_id}/functional/suggest-test-mappings",
+            {"test_ids": test_ids},
+        )
+
+    async def associate_functional_test(
+        self, model_id: str, functional_test_id: str,
+        functional_objective_ids: list[str],
+    ) -> dict:
+        return await self._post(
+            f"/api/models/{model_id}/functional-tests/{functional_test_id}/associate",
+            {"functional_objective_ids": functional_objective_ids},
+        )
+
+    async def get_functional_satisfaction_groups(
+        self, model_id: str, functional_objective_id: str,
+    ) -> dict:
+        return await self._get(
+            f"/api/models/{model_id}/functional-objectives/{functional_objective_id}"
+            "/satisfaction-groups"
+        )
+
+    async def set_functional_satisfaction_groups(
+        self, model_id: str, functional_objective_id: str,
+        groups: dict, ungrouped: list[str],
+    ) -> dict:
+        return await self._put(
+            f"/api/models/{model_id}/functional-objectives/{functional_objective_id}"
+            "/satisfaction-groups",
+            {"groups": groups, "ungrouped": ungrouped},
+        )
+
+    async def get_functional_test_sufficiency(
+        self, model_id: str, functional_test_id: str,
+    ) -> dict:
+        return await self._get(
+            f"/api/models/{model_id}/functional-tests/{functional_test_id}/sufficiency"
+        )

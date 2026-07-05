@@ -6202,6 +6202,136 @@ async def submit_functional_tests(
         raise _api_error(exc) from exc
 
 
+@mcp.tool()
+async def suggest_functional_test_mappings(
+    server_version: str, model_id: str, test_ids: str = "",
+) -> dict:
+    """Suggest which functional objectives each imported test likely covers.
+
+    For unmapped tests (imported without an association, or added without
+    objective ids), this proposes objective mappings so you can review and
+    apply them with associate_functional_test. It only suggests — nothing is
+    associated until you confirm.
+
+    Args:
+        model_id: ID of the threat model.
+        test_ids: Comma-separated functional-test ids to map. Empty means every
+            currently-unmapped test.
+    """
+    ids = [x.strip() for x in test_ids.split(",") if x.strip()]
+    try:
+        return _dump(
+            await _get_client().suggest_functional_test_mappings(model_id, ids)
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def associate_functional_test(
+    server_version: str, model_id: str, functional_test_id: str,
+    functional_objective_ids: str,
+) -> dict:
+    """Associate a functional test with one or more functional objectives.
+
+    Use this after suggest_functional_test_mappings, or to hand-map a test to
+    the objectives it covers. The platform verifies each association is
+    applicable before accepting it and returns any it declined under
+    ``rejected_mappings``.
+
+    Args:
+        model_id: ID of the threat model.
+        functional_test_id: The functional test to associate.
+        functional_objective_ids: Comma-separated objective ids the test covers.
+    """
+    fo_ids = [x.strip() for x in functional_objective_ids.split(",") if x.strip()]
+    if not fo_ids:
+        raise ToolError("functional_objective_ids must list at least one objective id.")
+    try:
+        return _dump(await _get_client().associate_functional_test(
+            model_id, functional_test_id, fo_ids,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_functional_satisfaction_groups(
+    server_version: str, model_id: str, functional_objective_id: str,
+) -> dict:
+    """Get the satisfaction groups for a functional objective.
+
+    A satisfaction group is a set of functional tests that together satisfy the
+    objective; the objective is satisfied when any one complete group is
+    verified. Returns the current groups plus any ungrouped tests.
+
+    Args:
+        model_id: ID of the threat model.
+        functional_objective_id: The objective whose groups to read.
+    """
+    try:
+        return _dump(await _get_client().get_functional_satisfaction_groups(
+            model_id, functional_objective_id,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def set_functional_satisfaction_groups(
+    server_version: str, model_id: str, functional_objective_id: str,
+    groups_json: str, ungrouped: str = "",
+) -> dict:
+    """Set the satisfaction groups for a functional objective.
+
+    Replaces the objective's groups wholesale. Each group is a set of functional
+    tests that together satisfy the objective; the objective is satisfied when
+    any one complete group is verified.
+
+    Args:
+        model_id: ID of the threat model.
+        functional_objective_id: The objective whose groups to set.
+        groups_json: A JSON object mapping group label to a list of functional
+            test ids, e.g. ``{"1": ["FT-1", "FT-2"], "2": ["FT-3"]}``.
+        ungrouped: Comma-separated functional-test ids to keep unassigned to any
+            group (optional).
+    """
+    try:
+        groups = json.loads(groups_json)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ToolError(f"groups_json must be a JSON object: {exc}") from exc
+    if not isinstance(groups, dict):
+        raise ToolError("groups_json must be a JSON object of {label: [test ids]}.")
+    ungrouped_ids = [x.strip() for x in ungrouped.split(",") if x.strip()]
+    try:
+        return _dump(await _get_client().set_functional_satisfaction_groups(
+            model_id, functional_objective_id, groups, ungrouped_ids,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_functional_test_sufficiency(
+    server_version: str, model_id: str, functional_test_id: str,
+) -> dict:
+    """Get the sufficiency verdict for a functional test.
+
+    Reports whether the test's evidence adequately proves the objectives it is
+    associated with, along with the reasoning behind the verdict.
+
+    Args:
+        model_id: ID of the threat model.
+        functional_test_id: The functional test to assess.
+    """
+    try:
+        return _dump(await _get_client().get_functional_test_sufficiency(
+            model_id, functional_test_id,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
