@@ -662,6 +662,39 @@ requirement coverage; `export_tag_report` produces the signed auditor HTML \
 (member reports + cross-model dependency graph + attestation status) — the tag \
 equivalents of the system-level compliance report and auditor export.
 
+## Functional conformance
+
+Functional conformance proves a feature does what it was *specified* to do — the \
+parallel of security controls, verified by the same assertion + CI engine. \
+Capabilities are the behaviours the feature must deliver; each is tested against a \
+taxonomy of operating conditions (nominal, boundary, dependency-failure, …), and a \
+Functional Objective is a Given-When-Then acceptance criterion. Two ways to \
+establish coverage:
+
+**Generate (top-down).** `generate_functional_objectives` derives capabilities, \
+objectives, and the concrete tests to write; `get_functional_scan_prompt` returns \
+the per-test brief; implement each test, register it with `add_functional_test`, \
+then submit `TEST_EXISTS` + `TEST_PASSES` evidence with `submit_functional_tests` \
+so CI verifies it.
+
+**Import (bottom-up) — bring the tests you already have.** \
+`import_functional_tests` registers your existing codebase tests (optionally with \
+the objectives they cover; the platform verifies each association is applicable \
+before accepting it). For tests you don't map yourself, \
+`suggest_functional_test_mappings` proposes which objective each one actually \
+proves (judged on behaviour, with a confidence) and `associate_functional_test` \
+confirms a mapping — so an existing suite counts toward conformance, not only \
+Mipiti-specified tests.
+
+- `get_functional_coverage` / `check_functional_gaps` — the Capability × Condition \
+coverage report and the actionable gaps (uncovered cells, failing/untested \
+objectives).
+- `set_functional_satisfaction_groups` / `get_functional_satisfaction_groups` — \
+when several tests must *together* prove an objective, group them (within a group \
+all must pass; any complete group proves the objective).
+- `get_functional_test_sufficiency` — whether a test's submitted evidence is \
+sufficient to prove the objective it targets.
+
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -5997,9 +6030,13 @@ async def convert_assumption_to_controls(
 # Functional conformance (Capability × Condition)
 # ------------------------------------------------------------------
 # Proves a feature does what it was specified to do, verified by the same
-# assertion + CI engine as security controls. The agent loop is: generate
-# objectives → get_functional_scan_prompt → write tests → add_functional_test →
-# submit_functional_tests → CI verifies → get_functional_coverage.
+# assertion + CI engine as security controls. Two flows:
+# (1) generate — generate_functional_objectives → get_functional_scan_prompt →
+#     write tests → add_functional_test → submit_functional_tests → CI verifies →
+#     get_functional_coverage.
+# (2) import existing tests — import_functional_tests → suggest_functional_test_mappings
+#     → associate_functional_test → (optionally) set_functional_satisfaction_groups →
+#     get_functional_test_sufficiency.
 
 
 @mcp.tool()

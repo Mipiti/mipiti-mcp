@@ -87,3 +87,29 @@ def test_tags_section_present(tier: str, role: str) -> None:
         "export_tag_report",
     ):
         assert tool in text
+
+
+@pytest.mark.parametrize(
+    "tier,role",
+    [
+        ("pro", "user"),
+        ("developer", "user"),
+    ],
+)
+def test_functional_conformance_section_present(tier: str, role: str) -> None:
+    """Functional-conformance guidance (generate + import flows) lives in
+    _INSTRUCTIONS_BASE, so it must reach every tier."""
+    text = build_instructions(tier=tier, role=role)
+    assert "## Functional conformance" in text
+    for tool in (
+        "generate_functional_objectives",
+        "get_functional_scan_prompt",
+        "add_functional_test",
+        "import_functional_tests",
+        "suggest_functional_test_mappings",
+        "associate_functional_test",
+        "get_functional_coverage",
+        "set_functional_satisfaction_groups",
+        "get_functional_test_sufficiency",
+    ):
+        assert tool in text
