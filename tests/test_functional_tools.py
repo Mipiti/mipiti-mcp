@@ -14,6 +14,7 @@ from mipiti_mcp.server import (
     get_functional_coverage,
     get_functional_objective,
     get_functional_scan_prompt,
+    import_functional_tests,
     list_capabilities,
     list_functional_objectives,
     submit_functional_tests,
@@ -32,6 +33,7 @@ def _client(**overrides: AsyncMock) -> AsyncMock:
         "get_functional_gaps": {"model_id": "tm-1", "gaps": [], "summary": {}},
         "get_functional_scan_prompt": {"model_id": "tm-1", "instructions": [], "missing_objectives": []},
         "add_functional_test": {"id": "FT-1", "description": "t"},
+        "import_functional_tests": {"model_id": "tm-1", "imported": [], "rejected_mappings": []},
         "submit_functional_tests": {"functional_test_id": "FT-1", "assertions": []},
     }
     defaults.update(overrides)
@@ -112,4 +114,38 @@ async def test_submit_functional_tests_rejects_bad_json():
             await submit_functional_tests(
                 server_version="0", model_id="tm-1", functional_test_id="FT-1",
                 assertions_json='{"not": "a list"}',
+            )
+
+
+@pytest.mark.asyncio
+async def test_import_functional_tests_parses_and_forwards():
+    c = _client()
+    with _patch(c):
+        await import_functional_tests(
+            server_version="0", model_id="tm-1",
+            tests_json='[{"test_name": "test_login", "file_path": "t/test_login.py", '
+            '"functional_objective_ids": ["FO-1"]}]',
+        )
+    c.import_functional_tests.assert_awaited_once_with(
+        "tm-1",
+        [{"test_name": "test_login", "file_path": "t/test_login.py",
+          "functional_objective_ids": ["FO-1"]}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_functional_tests_rejects_bad_json():
+    with _patch(_client()):
+        with pytest.raises(ToolError):
+            await import_functional_tests(
+                server_version="0", model_id="tm-1", tests_json="not json",
+            )
+
+
+@pytest.mark.asyncio
+async def test_import_functional_tests_rejects_empty_array():
+    with _patch(_client()):
+        with pytest.raises(ToolError):
+            await import_functional_tests(
+                server_version="0", model_id="tm-1", tests_json="[]",
             )
