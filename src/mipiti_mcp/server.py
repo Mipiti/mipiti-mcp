@@ -392,6 +392,10 @@ I work on next?".
 rows for a specific model or system with risk dimensions, control \
 coverage counts, and open-finding counts per CO. Use when narrowing \
 from workspace-wide to a specific target.
+- `get_remediation_leverage` — for one model, the not-yet-satisfied \
+controls ranked by how many control objectives each closes, plus a greedy \
+minimal fix order. Use to prioritize implementation: which controls to \
+build first for the shortest path to coverage.
 - `list_risk_acceptances` — see which risks have been explicitly accepted \
 on a model (with owner, justification, review deadline) so you can \
 separate intentional acceptances from genuinely unaddressed gaps.
@@ -5363,6 +5367,30 @@ async def get_model_risk_view(server_version: str, model_id: str) -> dict:
     """
     try:
         return _dump(await _get_client().get_model_risk_view(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_remediation_leverage(server_version: str, model_id: str) -> dict:
+    """Remediation-leverage plan for a model: which controls to implement
+    first to close the most control objectives with the least work.
+
+    Returns the model's not-yet-satisfied controls ranked by how many
+    control objectives each one closes (``ranked``), plus a greedy
+    minimal fix order — the sequence of controls that reaches the most
+    mitigated objectives with the fewest controls (``greedy_plan``) — and
+    a ``summary`` of the collapse (total objectives, currently mitigated,
+    how many controls the plan needs). Use to prioritize implementation
+    work: a single call tells the agent which controls give the highest
+    leverage, so it can tackle the shortest path to coverage instead of
+    fixing objectives one at a time. Read-only.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return await _get_client().get_remediation_leverage(model_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 
