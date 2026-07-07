@@ -2067,6 +2067,18 @@ class MipitiClient:
         data = await self._get(f"/api/models/{model_id}/risk-view")
         return ModelRiskView.model_validate(data)
 
+    async def get_remediation_leverage(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/remediation.
+
+        Read-only remediation-leverage plan for a model: how the model's
+        many control objectives collapse onto far fewer not-yet-satisfied
+        controls, each control ranked by how many objectives it closes,
+        plus a greedy minimal fix order. Returns the server envelope
+        verbatim (``summary``, ``ranked``, ``greedy_plan``) so newly
+        added fields surface automatically.
+        """
+        return await self._get(f"/api/models/{model_id}/remediation")
+
     async def get_system_risk_view(self, system_id: str) -> SystemRiskView:
         """System-level cross-model Prioritized Risk View: one row per
         live Control Objective across every model in the system, with
