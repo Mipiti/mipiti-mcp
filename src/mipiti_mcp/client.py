@@ -2344,3 +2344,24 @@ class MipitiClient:
         return await self._get(
             f"/api/models/{model_id}/functional-tests/{functional_test_id}/sufficiency"
         )
+
+    async def get_cwe_catalog(self) -> dict:
+        """Platform CWE reference catalog status: current MITRE version +
+        entry count. Reports ``enabled: false`` when the instance doesn't
+        have CWE classification turned on."""
+        return await self._get("/api/cwe/catalog")
+
+    async def get_model_cwe_tags(self, model_id: str) -> dict:
+        """CWE tags for a model's live control objectives, with a staleness
+        marker for tags whose catalog entry has since been deprecated,
+        redefined, or removed."""
+        return await self._get(f"/api/models/{model_id}/cwe")
+
+    async def classify_model_cwe(self, model_id: str, force: bool = False) -> dict:
+        """Trigger grounded CO->CWE classification for a model's live COs.
+
+        Calls ``POST /api/models/{model_id}/cwe/classify``.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/cwe/classify", params={"force": force},
+        )
