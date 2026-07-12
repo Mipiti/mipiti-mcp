@@ -1829,3 +1829,54 @@ async def test_import_confirm_posts_controls_list(mock_env: None) -> None:
     assert body["controls"][0]["description"] == "Sign webhooks"
     assert body["source_label"] == "recovered"
     assert result.imported == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_cwe_catalog(mock_env: None) -> None:
+    respx.get(f"{_BASE}/api/cwe/catalog").mock(
+        return_value=httpx.Response(
+            200,
+            json={"enabled": True, "current_version": "4.20", "entry_count": 1400, "versions": []},
+        ),
+    )
+    client = MipitiClient()
+    result = await client.get_cwe_catalog()
+    assert result["enabled"] is True
+    assert result["current_version"] == "4.20"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_model_cwe_tags(mock_env: None) -> None:
+    respx.get(f"{_BASE}/api/models/tm-001/cwe").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model_id": "tm-001", "control_objectives": []},
+        ),
+    )
+    client = MipitiClient()
+    result = await client.get_model_cwe_tags("tm-001")
+    assert result["model_id"] == "tm-001"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_classify_model_cwe_sends_force_param(mock_env: None) -> None:
+    route = respx.post(f"{_BASE}/api/models/tm-001/cwe/classify").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "ok", "catalog_version": "4.20", "cos": 3,
+                "classified": 2, "tags_written": 3, "skipped": 1,
+            },
+        ),
+    )
+    client = MipitiClient()
+    result = await client.classify_model_cwe("tm-001", force=True)
+    assert result["status"] == "ok"
+    assert result["tags_written"] == 3
+    assert route.calls.last.request.url.params["force"] == "true"
+    await client.close()

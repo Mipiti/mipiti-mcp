@@ -126,6 +126,9 @@ from mipiti_mcp.server import (
     get_trust_boundary,
     get_assumption,
     get_control,
+    get_cwe_catalog,
+    get_model_cwe_tags,
+    classify_model_cwe,
 )
 
 from .conftest import SAMPLE_CONTROLS, SAMPLE_MODELS_LIST, SAMPLE_THREAT_MODEL
@@ -609,6 +612,13 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "select_tag_compliance_frameworks": {"selected": ["soc2"], "propagated_to_models": 1},
         "get_tag_compliance_report": {"framework_id": "soc2", "requirements": []},
         "export_tag": "<html>report</html>",
+        # CWE reference classification (optional)
+        "get_cwe_catalog": {"enabled": False, "current_version": None, "entry_count": 0, "versions": []},
+        "get_model_cwe_tags": {"model_id": "tm-001", "control_objectives": []},
+        "classify_model_cwe": {
+            "status": "ok", "catalog_version": "4.20", "cos": 0,
+            "classified": 0, "tags_written": 0, "skipped": 0,
+        },
     }
 
     for name, default_val in defaults.items():
@@ -1082,6 +1092,96 @@ class TestReliance:
                     provider_model_id="other", provider_control_id="CTRL-X",
                     mode="delegated", source_objective_id="CO1",
                 )
+
+
+class TestCweClassification:
+    @pytest.mark.asyncio
+    async def test_get_cwe_catalog(self) -> None:
+        mock = _mock_client(
+            get_cwe_catalog=AsyncMock(return_value={
+                "enabled": True, "current_version": "4.20",
+                "entry_count": 1400, "versions": [],
+            }),
+        )
+        with _patch_client(mock):
+            result = await get_cwe_catalog(server_version="0")
+        assert result["enabled"] is True
+        assert result["current_version"] == "4.20"
+
+    @pytest.mark.asyncio
+    async def test_get_cwe_catalog_disabled(self) -> None:
+        mock = _mock_client(
+            get_cwe_catalog=AsyncMock(return_value={
+                "enabled": False, "current_version": None,
+                "entry_count": 0, "versions": [],
+            }),
+        )
+        with _patch_client(mock):
+            result = await get_cwe_catalog(server_version="0")
+        assert result["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_model_cwe_tags(self) -> None:
+        mock = _mock_client(
+            get_model_cwe_tags=AsyncMock(return_value={
+                "model_id": "tm-001",
+                "control_objectives": [{
+                    "co_id": "CO1", "statement": "Protect tokens",
+                    "cwe_tags": [{
+                        "cwe_id": "CWE-522", "name": "Insufficiently Protected Credentials",
+                        "description": "...", "catalog_version": "4.19",
+                        "confidence": 0.8, "rationale": "...", "stale": "changed",
+                    }],
+                }],
+            }),
+        )
+        with _patch_client(mock):
+            result = await get_model_cwe_tags(server_version="0", model_id="tm-001")
+        assert result["model_id"] == "tm-001"
+        tag = result["control_objectives"][0]["cwe_tags"][0]
+        assert tag["cwe_id"] == "CWE-522"
+        assert tag["stale"] == "changed"
+        mock.get_model_cwe_tags.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_classify_model_cwe(self) -> None:
+        mock = _mock_client(
+            classify_model_cwe=AsyncMock(return_value={
+                "status": "ok", "catalog_version": "4.20", "cos": 3,
+                "classified": 2, "tags_written": 3, "skipped": 1,
+            }),
+        )
+        with _patch_client(mock):
+            result = await classify_model_cwe(server_version="0", model_id="tm-001")
+        assert result["status"] == "ok"
+        assert result["tags_written"] == 3
+        mock.classify_model_cwe.assert_awaited_once_with("tm-001", force=False)
+
+    @pytest.mark.asyncio
+    async def test_classify_model_cwe_force(self) -> None:
+        mock = _mock_client(
+            classify_model_cwe=AsyncMock(return_value={
+                "status": "ok", "catalog_version": "4.20", "cos": 3,
+                "classified": 3, "tags_written": 5, "skipped": 0,
+            }),
+        )
+        with _patch_client(mock):
+            await classify_model_cwe(server_version="0", model_id="tm-001", force=True)
+        mock.classify_model_cwe.assert_awaited_once_with("tm-001", force=True)
+
+    @pytest.mark.asyncio
+    async def test_surfaces_api_error(self) -> None:
+        import httpx
+        request = httpx.Request("GET", "https://api/x")
+        response = httpx.Response(404, request=request, text="CWE tagging is not enabled.")
+        mock = _mock_client(
+            get_model_cwe_tags=AsyncMock(
+                side_effect=httpx.HTTPStatusError("404", request=request, response=response),
+            ),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await get_model_cwe_tags(server_version="0", model_id="tm-001")
 
 
 class TestTags:

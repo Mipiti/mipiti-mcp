@@ -6480,6 +6480,65 @@ async def get_functional_test_sufficiency(
         raise _api_error(exc) from exc
 
 
+@mcp.tool()
+async def get_cwe_catalog(server_version: str) -> dict:
+    """Get the platform's CWE reference catalog status.
+
+    Returns ``{enabled, current_version, entry_count, versions}``. When CWE
+    classification is not turned on for this instance, ``enabled`` is false
+    and the rest is empty — this is a normal informational response, not an
+    error.
+    """
+    try:
+        return await _get_client().get_cwe_catalog()
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_model_cwe_tags(server_version: str, model_id: str) -> dict:
+    """List CWE weakness classifications tagged onto a model's control objectives.
+
+    Each tag's name/description are resolved from the platform's CWE catalog,
+    never model-authored. A tag whose CWE id has since been deprecated,
+    redefined, or removed by MITRE carries a ``stale`` reason (``missing`` /
+    ``deprecated`` / ``changed``) — re-run ``classify_model_cwe`` to refresh
+    it. 404s if CWE classification is not enabled on this instance.
+
+    Args:
+        model_id: ID of the threat model to inspect.
+    """
+    try:
+        return await _get_client().get_model_cwe_tags(model_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def classify_model_cwe(
+    server_version: str, model_id: str, force: bool = False,
+) -> dict:
+    """Classify a model's control objectives against the platform CWE catalog.
+
+    Grounded: the model may only select from the catalog's current-version
+    candidate ids, and every returned id is re-validated against the catalog
+    before storage — a hallucinated or deprecated id is never persisted.
+    Skips control objectives already tagged at the catalog's current version
+    unless ``force`` is set. Returns a summary:
+    ``{status, catalog_version, cos, classified, tags_written, skipped}``.
+    404s if CWE classification is not enabled on this instance.
+
+    Args:
+        model_id: ID of the threat model to classify.
+        force: re-classify control objectives even if already tagged at the
+            catalog's current version (default false).
+    """
+    try:
+        return await _get_client().classify_model_cwe(model_id, force=force)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------

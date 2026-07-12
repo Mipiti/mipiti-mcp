@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->152<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->155<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -279,6 +279,14 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 |------|-------------|
 | `get_setup_status` | Check which onboarding steps are done. |
 | `complete_setup_step` | Mark an onboarding step as done (mcp_configured, mipiti_verify_installed, ci_secret_added, ci_pipeline_added). |
+
+### CWE Classification
+
+| Tool | Description |
+|------|-------------|
+| `get_cwe_catalog` | Get the platform's CWE reference catalog status (current MITRE version, entry count). Reports `enabled: false` when not turned on for this instance. |
+| `get_model_cwe_tags` | List CWE weakness classifications tagged onto a model's control objectives, with a staleness marker for tags whose catalog entry has since been deprecated, redefined, or removed. |
+| `classify_model_cwe` | Classify a model's control objectives against the platform CWE catalog. Grounded — the model may only select from the catalog's current candidates, and every returned id is re-validated before storage. |
 
 ## Development
 
