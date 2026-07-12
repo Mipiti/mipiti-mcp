@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->150<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->152<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -174,6 +174,8 @@ uvx mipiti-mcp
 | `get_system_risk_view` | Cross-model variant of `get_model_risk_view`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |
 | `get_remediation_leverage` | Per-model remediation plan: the not-yet-satisfied controls ranked by how many COs each one closes, plus a greedy minimal fix order (`summary` / `ranked` / `greedy_plan`). Use to prioritize which controls to implement first for the shortest path to coverage. |
 | `list_risk_acceptances` | All risk acceptances on a model — risks explicitly accepted instead of mitigated. Includes CO id, owner, justification, status, review deadline. |
+| `recompute_verdicts` | Force-enqueue a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict, bypassing the quiet-period batching. Response carries an informational cost estimate and a spend status object — exhausted means the work is queued and resumes automatically, never dropped. |
+| `get_recompute_quote` | Pre-flight informational cost estimate for `recompute_verdicts` (carries `computed_at` + the pricing `rate_version`; nothing is charged from the estimate — actuals are metered as evaluation runs). |
 
 ### Functional Conformance
 
