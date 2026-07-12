@@ -1622,6 +1622,35 @@ class MipitiClient:
             f"/api/models/{model_id}/revalidate-entities", {},
         )
 
+    async def recompute_verdicts(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/verdict-divergence/recompute.
+
+        Force-enqueue a fresh evaluation of every control's coverage verdict
+        and every live CO's group-sufficiency verdict, bypassing the normal
+        quiet-period batching. Evaluation runs in the background.
+
+        Returns ``{"model_id", "model_version", "enqueued_coverage",
+        "enqueued_group_sufficiency", "total_enqueued", "estimated_credits",
+        "quote", "governor"}``. Raises the backend's 503 when verdict
+        observability is unavailable on the deployment.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/verdict-divergence/recompute", {},
+        )
+
+    async def get_recompute_quote(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/verdict-divergence/recompute/quote.
+
+        Informational pre-flight cost estimate for ``recompute_verdicts``.
+        Nothing is charged from the estimate — actual usage is metered as the
+        evaluation runs. Returns ``{"estimated_credits", "computed_at",
+        "rate_version", "informational", "total_enqueueable",
+        "already_evaluated", "governor"}``.
+        """
+        return await self._get(
+            f"/api/models/{model_id}/verdict-divergence/recompute/quote",
+        )
+
     # ------------------------------------------------------------------
     # Assurance
     # ------------------------------------------------------------------

@@ -399,6 +399,13 @@ build first for the shortest path to coverage.
 - `list_risk_acceptances` — see which risks have been explicitly accepted \
 on a model (with owner, justification, review deadline) so you can \
 separate intentional acceptances from genuinely unaddressed gaps.
+- `recompute_verdicts` — force a fresh evaluation of every control's \
+coverage verdict and every live CO's group-sufficiency verdict when the \
+surfaced divergences look stale. Runs in the background; the response \
+includes an informational cost estimate and a spend status object (an \
+exhausted status means the work is queued and resumes automatically — \
+never dropped). `get_recompute_quote` returns the estimate alone, \
+pre-flight.
 
 ## Remediating findings (structural drift)
 
@@ -4331,6 +4338,82 @@ async def reevaluate_threat_model_factors(
             model_id, change_reason=change_reason,
         )
         return await _await_backend_job(client, started["job_id"], ctx)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def recompute_verdicts(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Re-run coverage and group-sufficiency verdict evaluation for a model.
+
+    Enqueues a fresh evaluation of every control's coverage verdict and
+    every live control objective's group-sufficiency verdict, bypassing
+    the normal quiet-period batching. Evaluation runs in the background;
+    re-read the model's divergence report (or coverage surfaces) shortly
+    after to see updated verdicts.
+
+    Cost visibility: the response carries ``estimated_credits`` — an
+    informational estimate of the evaluation cost (see also
+    ``get_recompute_quote`` for the pre-flight version). Nothing is
+    charged from the estimate; actual usage is metered as the evaluation
+    runs, per the account's plan.
+
+    Returns a 503-mapped error when verdict observability is unavailable
+    on the deployment.
+
+    Args:
+        model_id: ID of the threat model to re-evaluate.
+
+    Returns:
+        Dict with:
+        - model_id, model_version
+        - enqueued_coverage / enqueued_group_sufficiency / total_enqueued
+        - estimated_credits: informational cost estimate
+        - quote: the full estimate envelope (computed_at, rate_version)
+        - governor: spend status — when ``governor.exhausted`` is true the
+          work is queued and resumes automatically at
+          ``governor.resets_at``; it is never dropped.
+    """
+    try:
+        return _dump(await _get_client().recompute_verdicts(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_recompute_quote(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Get the informational pre-flight cost estimate for
+    ``recompute_verdicts`` on a model.
+
+    Nothing is charged from the estimate — actual usage is metered as the
+    evaluation runs. The estimate carries ``computed_at`` and the pricing
+    ``rate_version`` in force so a stale quote is detectable.
+
+    Returns a 503-mapped error when verdict observability is unavailable
+    on the deployment.
+
+    Args:
+        model_id: ID of the threat model to estimate for.
+
+    Returns:
+        Dict with:
+        - estimated_credits: informational cost estimate
+        - computed_at / rate_version / informational
+        - total_enqueueable: jobs a recompute would enqueue
+        - already_evaluated: subjects that already carry a verdict (a
+          portion short-circuit without cost, so the estimate is an
+          upper bound)
+        - governor: spend status — ``governor.exhausted`` true means new
+          evaluation is queued until ``governor.resets_at``.
+    """
+    try:
+        return _dump(await _get_client().get_recompute_quote(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
