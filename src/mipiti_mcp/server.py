@@ -4175,6 +4175,7 @@ async def edit_attacker(
     capability_prevalence: Optional[str] = None,
     likelihood_rationale: Optional[str] = None,
     trust_boundary_ids: Optional[str] = None,
+    attest_position: Optional[bool] = None,
     change_reason: Optional[str] = None,
 ) -> dict:
     """Edit an existing attacker. Only provided fields changed.
@@ -4201,7 +4202,14 @@ async def edit_attacker(
         user_interaction: "None" | "Required".
         capability_prevalence: "Commodity" | "Targeted" | "Rare".
         likelihood_rationale: New rationale (optional).
-        trust_boundary_ids: Comma-separated trust boundary IDs (replaces existing).
+        trust_boundary_ids: Comma-separated trust boundary IDs — the boundaries
+            this attacker has crossed (its position). Replaces the existing set.
+            Changing it operator-attests the position, which lets reachability
+            trust it for a decisive verdict.
+        attest_position: Operator-attest the attacker's current position without
+            changing it — e.g. to confirm a fully external attacker's empty
+            crossed set so an objective blocked on an unpositioned attacker can
+            be resolved. Pass ``true`` to attest.
         change_reason: Required when any factor field is supplied —
             documents the operator override of LLM-generated factors.
     """
@@ -4225,6 +4233,8 @@ async def edit_attacker(
         body["likelihood_rationale"] = likelihood_rationale
     if trust_boundary_ids is not None:
         body["trust_boundary_ids"] = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()]
+    if attest_position is not None:
+        body["attest_position"] = attest_position
     if change_reason is not None:
         body["change_reason"] = change_reason
     factor_sent = any(k in body for k in _ATTACKER_FACTOR_PARAMS)
@@ -5629,6 +5639,7 @@ async def edit_trust_boundary(
     crosses: Optional[str] = None,
     passes: Optional[str] = None,
     sealed: Optional[bool] = None,
+    seal_source: Optional[str] = None,
     change_reason: Optional[str] = None,
 ) -> dict:
     """Edit a trust boundary. Creates a new model version.
@@ -5647,10 +5658,18 @@ async def edit_trust_boundary(
             way in is crossing the perimeter — an air-gap / segmented enclave),
             which lets reachability decisively rule the boundary unreachable;
             False assumes a lateral pivot is possible. Reach-relevant — changing
-            it can flip CO verdicts. Omit to leave unchanged.
-        change_reason: Required when ``passes`` or ``sealed`` actually changes.
-            Captured in the audit trail; documents why the boundary's vector
-            filter was tightened/widened or its isolation claim changed.
+            it can flip CO verdicts. Setting it records an operator attestation
+            of the seal. Omit to leave unchanged.
+        seal_source: "attested" | "unattested". Only an operator-attested seal
+            lets reachability decisively rule an objective unreachable past the
+            boundary; an unattested (default/model-suggested) seal is treated as
+            pivotable. Use "attested" to attest a boundary already marked sealed
+            without re-toggling it; "unattested" retracts. An attested seal
+            implies ``sealed``. Requires ``change_reason``.
+        change_reason: Required when ``passes``, ``sealed``, or the seal
+            attestation actually changes. Captured in the audit trail; documents
+            why the boundary's vector filter, isolation claim, or attestation
+            changed.
     """
     kwargs: dict = {}
     if description is not None:
@@ -5661,6 +5680,8 @@ async def edit_trust_boundary(
         kwargs["passes"] = [v.strip() for v in passes.split(",") if v.strip()]
     if sealed is not None:
         kwargs["sealed"] = sealed
+    if seal_source is not None:
+        kwargs["seal_source"] = seal_source
     if change_reason is not None:
         kwargs["change_reason"] = change_reason
     try:
