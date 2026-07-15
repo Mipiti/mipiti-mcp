@@ -2089,6 +2089,21 @@ class TestEditAttacker:
         assert "model" in result
 
     @pytest.mark.asyncio
+    async def test_forwards_attest_position(self) -> None:
+        mock = _mock_client()
+        mock.start_edit_attacker = AsyncMock(return_value={"job_id": "job-edit-attacker"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "attackers": [{"id": "T1"}]},
+        }})
+        with _patch_client(mock):
+            await edit_attacker(
+                server_version="0", model_id="tm-001", attacker_id="T1",
+                attest_position=True, ctx=_mock_ctx(),
+            )
+        mock.start_edit_attacker.assert_awaited_once()
+        assert mock.start_edit_attacker.await_args.kwargs.get("attest_position") is True
+
+    @pytest.mark.asyncio
     async def test_semantic_rejection_surfaced(self) -> None:
         mock = _mock_client()
         mock.start_edit_attacker = AsyncMock(return_value={"job_id": "job-edit-attacker"})
@@ -2818,6 +2833,18 @@ class TestPerIdGets:
         kw = mock.edit_trust_boundary.await_args.kwargs
         assert kw.get("sealed") is True
         assert kw.get("change_reason") == "network-segmented; no lateral ingress"
+
+    @pytest.mark.asyncio
+    async def test_edit_trust_boundary_forwards_seal_source(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await edit_trust_boundary(
+                server_version="0", model_id="tm-001", tb_id="TB1",
+                seal_source="attested", change_reason="verified isolation",
+            )
+        mock.edit_trust_boundary.assert_awaited_once()
+        kw = mock.edit_trust_boundary.await_args.kwargs
+        assert kw.get("seal_source") == "attested"
 
     @pytest.mark.asyncio
     async def test_get_assumption(self) -> None:
