@@ -1181,8 +1181,20 @@ async def generate_threat_model(
                 ),
             }
         tm = result.threat_model
+        # `model_id` is the persisted model id; `threat_model.id` is the
+        # generated in-memory id, which can be present even when the model was
+        # not saved — returning it yields an id that 404s on the next fetch.
+        # Prefer `model_id`, and if it is absent treat the generation as not
+        # persisted rather than reporting an unusable id.
+        model_id = getattr(result, "model_id", "") or ""
+        if not model_id:
+            raise RuntimeError(
+                "Threat model was generated but not saved (no model id "
+                "returned). This is usually a transient storage error — please "
+                "retry generate_threat_model."
+            )
         return {
-            "model_id": tm.id,
+            "model_id": model_id,
             "version": tm.version,
             "title": tm.title,
             "asset_count": len(tm.assets),
@@ -1263,8 +1275,18 @@ async def refine_threat_model(
         live_assets = [a for a in tm.assets if not getattr(a, "deleted", False)]
         live_attackers = [t for t in tm.attackers if not getattr(t, "deleted", False)]
         live_cos = [c for c in tm.control_objectives if not getattr(c, "removed", False)]
+        # Prefer the persisted `model_id` over the in-memory `threat_model.id`
+        # (see generate_threat_model). An empty `model_id` means the refine did
+        # not persist, so surface that instead of reporting a stale success.
+        model_id = getattr(result, "model_id", "") or ""
+        if not model_id:
+            raise RuntimeError(
+                "Refine completed but was not saved (no model id returned). "
+                "This is usually a transient storage error — please retry "
+                "refine_threat_model."
+            )
         return {
-            "model_id": tm.id,
+            "model_id": model_id,
             "version": tm.version,
             "title": tm.title,
             "asset_count": len(tm.assets),

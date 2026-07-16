@@ -658,6 +658,28 @@ class TestGenerateThreatModel:
         mock.generate_threat_model.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_raises_when_model_not_persisted(self) -> None:
+        """A save failure surfaces as an empty top-level ``model_id``. The tool
+        must raise rather than return the in-memory ``threat_model.id`` (which
+        was never committed and 404s on the next fetch)."""
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        not_saved = GenerateResult(
+            threat_model=ThreatModel(id="tm-inmemory", title="t"),
+            model_id="",
+            version=1,
+        )
+        mock = _mock_client(
+            generate_threat_model=AsyncMock(return_value=not_saved),
+        )
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            with pytest.raises(Exception) as ei:
+                await generate_threat_model(
+                    server_version="0", feature_description="User login", ctx=ctx,
+                )
+        assert "not saved" in str(ei.value).lower()
+
+    @pytest.mark.asyncio
     async def test_similar_models_short_circuit(self) -> None:
         """Backend returns similar_models instead of generating. Tool
         must pass the candidate IDs through with a suggestion, not
@@ -743,6 +765,26 @@ class TestRefineThreatModel:
         # Semantic-rejections array surfaced (empty on happy path).
         assert result["semantic_rejections"] == []
         mock.refine_threat_model.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_raises_when_refine_not_persisted(self) -> None:
+        """An empty top-level ``model_id`` means the refine did not persist.
+        The tool must raise instead of reporting a stale success."""
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        not_saved = GenerateResult(
+            threat_model=ThreatModel(id="tm-001", title="t"),
+            model_id="",
+            version=2,
+        )
+        mock = _mock_client(refine_threat_model=AsyncMock(return_value=not_saved))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            with pytest.raises(Exception) as ei:
+                await refine_threat_model(
+                    server_version="0", model_id="tm-001",
+                    instruction="Add CSRF", ctx=ctx,
+                )
+        assert "not saved" in str(ei.value).lower()
 
     @pytest.mark.asyncio
     async def test_semantic_rejections_surfaced(self) -> None:
