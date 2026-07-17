@@ -1134,7 +1134,13 @@ async def generate_threat_model(
 
     Return shape (normal generation):
         ``{"model_id", "version", "title", "asset_count",
-           "attacker_count", "control_objective_count"}``
+           "attacker_count", "control_objective_count"}``, and — when the
+        workspace bounds background analysis spend — a ``governor`` object
+        (``{"status": "ok"|"warning"|"exhausted", "exhausted", "resets_at",
+        ...}``). When ``governor.status`` is ``warning`` or ``exhausted``,
+        relay it to the user: analysis is nearing or at today's budget and
+        queued background work resumes at ``governor.resets_at`` — it is never
+        dropped. Absent when no budget applies.
 
     Return shape (similar-model short-circuit):
         ``{"similar_models": [{"id", "title", "reason"}, ...],
@@ -1193,6 +1199,7 @@ async def generate_threat_model(
                 "returned). This is usually a transient storage error — please "
                 "retry generate_threat_model."
             )
+        gov = getattr(result, "governor", None)
         return {
             "model_id": model_id,
             "version": tm.version,
@@ -1200,6 +1207,7 @@ async def generate_threat_model(
             "asset_count": len(tm.assets),
             "attacker_count": len(tm.attackers),
             "control_objective_count": len(tm.control_objectives),
+            **({"governor": gov} if gov else {}),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -1249,12 +1257,18 @@ async def refine_threat_model(
           attacker_count, live_attacker_count,
           control_objective_count, live_control_objective_count,
           semantic_rejections: [{kind, id, classification, reason, per_field}, ...],
+          governor?: {status, exhausted, resets_at, ...},
         }
 
     ``*_count`` includes soft-deleted / tombstoned entries;
     ``live_*_count`` excludes them. Agents summarizing the result
     should typically quote the live counts unless specifically
     looking at history.
+
+    A ``governor`` object is present when the workspace bounds background
+    analysis spend; when ``governor.status`` is ``warning`` or ``exhausted``,
+    relay it — queued background work resumes at ``governor.resets_at`` and is
+    never dropped.
     """
     # See generate_threat_model for rationale on the last-total tracker.
     last_progress_total: list[float] = [0.0, 0.0]
@@ -1298,6 +1312,7 @@ async def refine_threat_model(
             "semantic_rejections": list(
                 getattr(result, "semantic_rejections", []) or []
             ),
+            **({"governor": _gov} if (_gov := getattr(result, "governor", None)) else {}),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -2033,6 +2048,11 @@ async def regenerate_controls(
             = more accurate + granular progress, more LLM calls.
         co_ids: Optional comma-separated CO IDs to regenerate (e.g.
             "CO1,CO5"). When omitted, regenerates all controls.
+
+    The result includes a ``governor`` object when the workspace bounds
+    background analysis spend; when ``governor.status`` is ``warning`` or
+    ``exhausted``, relay it — queued background re-evaluation resumes at
+    ``governor.resets_at`` and is never dropped.
     """
     # Workaround for Claude Code MCP array serialization bug
     # (anthropics/claude-code#18260) — accept comma-separated string
@@ -3750,6 +3770,11 @@ async def import_controls(
         free_text: Free-text controls (narrative/CSV/bullets).
         source_label: Origin label (e.g., "ISO 27001").
         auto_map: Auto-map controls to COs using LLM (default: True).
+
+    The confirm result includes a ``governor`` object when the workspace bounds
+    background analysis spend; when ``governor.status`` is ``warning`` or
+    ``exhausted``, relay it — queued background re-evaluation resumes at
+    ``governor.resets_at`` and is never dropped.
     """
     try:
         client = _get_client()

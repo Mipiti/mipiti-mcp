@@ -658,6 +658,48 @@ class TestGenerateThreatModel:
         mock.generate_threat_model.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_surfaces_governor_when_present(self) -> None:
+        """The backend attaches a ``governor`` object to the result when the
+        workspace bounds background spend; it rides through ``extra="allow"``
+        and the tool surfaces it so the agent can relay a budget flip."""
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
+        gov = {"status": "warning", "exhausted": False,
+               "resets_at": "2026-07-18T00:00:00+00:00"}
+        res = GenerateResult(threat_model=_tm, model_id="tm-001", version=1,
+                             governor=gov)
+        mock = _mock_client(generate_threat_model=AsyncMock(return_value=res))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await generate_threat_model(
+                server_version="0", feature_description="x", ctx=ctx)
+        assert result["governor"] == gov
+
+    @pytest.mark.asyncio
+    async def test_omits_governor_when_absent(self) -> None:
+        mock = _mock_client()  # default result carries no governor
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await generate_threat_model(
+                server_version="0", feature_description="x", ctx=ctx)
+        assert "governor" not in result
+
+    @pytest.mark.asyncio
+    async def test_refine_surfaces_governor_when_present(self) -> None:
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
+        gov = {"status": "exhausted", "exhausted": True,
+               "resets_at": "2026-07-18T00:00:00+00:00"}
+        res = GenerateResult(threat_model=_tm, model_id="tm-001", version=2,
+                             governor=gov)
+        mock = _mock_client(refine_threat_model=AsyncMock(return_value=res))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await refine_threat_model(
+                server_version="0", model_id="tm-001", instruction="x", ctx=ctx)
+        assert result["governor"] == gov
+
+    @pytest.mark.asyncio
     async def test_raises_when_model_not_persisted(self) -> None:
         """A save failure surfaces as an empty top-level ``model_id``. The tool
         must raise rather than return the in-memory ``threat_model.id`` (which
