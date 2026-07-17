@@ -806,7 +806,18 @@ _INSTRUCTIONS_ASYNC = """\
 `generate_threat_model`, `refine_threat_model`, `auto_remediate`, \
 `auto_map_controls`, `regenerate_controls`, and `check_control_gaps` \
 run LLM pipelines that may take several minutes. They block until complete \
-and report progress automatically — no polling needed.
+and report progress automatically — no polling needed for the operation itself.
+
+**Controls may be generated asynchronously.** `generate_threat_model` and \
+`refine_threat_model` return the model as soon as it is built, but the \
+implementation controls can then be authored in the background. If the result \
+carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, \
+`deferred`), the controls are NOT ready yet — do not report them as done. Poll \
+`get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) \
+until the status is terminal, then read the controls with `get_controls`. \
+`deferred` means the workspace's daily background-analysis budget is used up; \
+generation resumes automatically at the daily reset — surface that, no action \
+needed.
 """
 
 
