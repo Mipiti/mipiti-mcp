@@ -41,6 +41,7 @@ from mipiti_mcp.server import (
     generate_threat_model,
     import_threat_model_archive,
     get_compliance_report,
+    get_control_generation_status,
     get_control_objectives,
     get_controls,
     get_findings_risks,
@@ -161,6 +162,9 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "start_export_model_full": "job_export_full",
         "fetch_operation_result": b"AssetID,Name\nA1,Tokens\n",
         "get_controls": ControlsResponse(controls=_controls),
+        "get_control_generation_status": {
+            "model_id": "tm-001", "status": "queued", "mode": "fresh",
+            "ready_cos": 0, "target_cos": 2, "elapsed_seconds": 3},
         "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
@@ -5089,3 +5093,39 @@ class TestVersionCheckMiddleware:
         assert "claude mcp remove" in _INSTRUCTIONS_UPDATE_MESSAGE
         assert "claude mcp add" in _INSTRUCTIONS_UPDATE_MESSAGE
         assert "reauthenticate" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
+
+
+class TestControlGenerationStatus:
+    @pytest.mark.asyncio
+    async def test_status_tool_passes_through(self) -> None:
+        mock = _mock_client()
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            result = await get_control_generation_status(
+                server_version="0", model_id="tm-001", ctx=ctx)
+        assert result["status"] == "queued" and result["mode"] == "fresh"
+        assert result["elapsed_seconds"] == 3
+        mock.get_control_generation_status.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_generate_surfaces_controls_status(self) -> None:
+        from mipiti_mcp.types import GenerateResult, ThreatModel
+        _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
+        res = GenerateResult(threat_model=_tm, model_id="tm-001", version=1,
+                             controls_status="queued", controls_expected=4)
+        mock = _mock_client(generate_threat_model=AsyncMock(return_value=res))
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            out = await generate_threat_model(
+                server_version="0", feature_description="x", ctx=ctx)
+        assert out["controls_status"] == "queued"
+        assert out["controls_expected"] == 4
+
+    @pytest.mark.asyncio
+    async def test_generate_omits_controls_status_when_inline(self) -> None:
+        mock = _mock_client()  # default result has no controls_status
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            out = await generate_threat_model(
+                server_version="0", feature_description="x", ctx=ctx)
+        assert "controls_status" not in out
