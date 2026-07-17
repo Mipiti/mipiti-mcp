@@ -1142,6 +1142,12 @@ async def generate_threat_model(
         queued background work resumes at ``governor.resets_at`` — it is never
         dropped. Absent when no budget applies.
 
+        May also carry ``controls_status`` (+ ``controls_expected``) when
+        controls are authored asynchronously: if it is anything other than
+        ``complete``, the controls aren't ready yet — poll
+        ``get_control_generation_status(model_id)`` until terminal, then read
+        the controls. Absent when controls were built inline.
+
     Return shape (similar-model short-circuit):
         ``{"similar_models": [{"id", "title", "reason"}, ...],
            "suggestion": "..."}``
@@ -1200,6 +1206,8 @@ async def generate_threat_model(
                 "retry generate_threat_model."
             )
         gov = getattr(result, "governor", None)
+        cs = getattr(result, "controls_status", None)
+        ce = getattr(result, "controls_expected", None)
         return {
             "model_id": model_id,
             "version": tm.version,
@@ -1208,6 +1216,11 @@ async def generate_threat_model(
             "attacker_count": len(tm.attackers),
             "control_objective_count": len(tm.control_objectives),
             **({"governor": gov} if gov else {}),
+            # Async control generation: when present, controls are being authored
+            # in the background — poll get_control_generation_status until the
+            # status is terminal, then read the controls.
+            **({"controls_status": cs} if cs else {}),
+            **({"controls_expected": ce} if ce is not None else {}),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -1313,6 +1326,10 @@ async def refine_threat_model(
                 getattr(result, "semantic_rejections", []) or []
             ),
             **({"governor": _gov} if (_gov := getattr(result, "governor", None)) else {}),
+            **({"controls_status": _cs}
+               if (_cs := getattr(result, "controls_status", None)) else {}),
+            **({"controls_expected": _ce}
+               if (_ce := getattr(result, "controls_expected", None)) is not None else {}),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -2017,6 +2034,37 @@ async def get_controls(
         if not result.get("returned"):
             result["returned"] = len(result.get("controls", []))
         return result
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_control_generation_status(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Poll the async control-generation status for a threat model.
+
+    When ``generate_threat_model`` / ``refine_threat_model`` return a
+    ``controls_status`` other than ``complete``, controls are being authored in
+    the background — poll this until a terminal state, then read the controls.
+
+    Return shape: ``{status, mode, target_cos, ready_cos, error_message,
+    elapsed_seconds}`` (or ``{status: "none"}`` when controls were built inline).
+    ``status`` is ``queued | generating | deferred | complete | failed |
+    skipped | none``:
+    - ``deferred`` — today's background-analysis budget is used up; generation
+      resumes automatically at the daily reset (relay this to the user).
+    - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
+    - ``ready_cos`` / ``target_cos`` — coverage progress.
+    - ``elapsed_seconds`` — time since queued; if it stays ``queued`` with a
+      large elapsed, generation may not be progressing — surface that instead of
+      polling forever.
+    """
+    try:
+        return _dump(
+            await _get_client().get_control_generation_status(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 

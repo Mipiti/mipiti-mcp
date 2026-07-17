@@ -589,6 +589,11 @@ class MipitiClient:
         data = await self._get(f"/api/models/{model_id}/controls", params=params)
         return ControlsResponse.model_validate(data)
 
+    async def get_control_generation_status(self, model_id: str) -> dict:
+        """Async control-generation status for a model — the poll target after
+        generate/refine returns ``controls_status`` other than complete."""
+        return await self._get(f"/api/models/{model_id}/controls/status")
+
     async def regenerate_controls(
         self,
         model_id: str,
