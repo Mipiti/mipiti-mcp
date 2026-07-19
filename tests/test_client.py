@@ -198,6 +198,72 @@ async def test_submit_assertions(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_list_assertions_flat_list(mock_env: None) -> None:
+    """Legacy/flat response shape: a bare list of assertions, all tagged own."""
+    respx.get("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions").mock(
+        return_value=httpx.Response(200, json=[
+            {"id": "a1", "type": "file_exists"},
+            {"id": "a2", "type": "function_called"},
+        ])
+    )
+    client = MipitiClient()
+    assertions = await client.list_assertions("tm-001", control_id="CTRL-01")
+    assert [a.id for a in assertions] == ["a1", "a2"]
+    assert [a.origin for a in assertions] == ["own", "own"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_assertions_grouped_shape(mock_env: None) -> None:
+    """Own/inherited grouping is flattened into the flat-list contract;
+    every assertion carries an additive ``origin`` tag from its arm."""
+    respx.get("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions").mock(
+        return_value=httpx.Response(200, json={
+            "own": [{"id": "a-own", "type": "file_exists"}],
+            "inherited": [{"id": "a-inh", "type": "file_exists"}],
+        })
+    )
+    client = MipitiClient()
+    assertions = await client.list_assertions("tm-001", control_id="CTRL-01")
+    assert [a.id for a in assertions] == ["a-own", "a-inh"]
+    assert [a.origin for a in assertions] == ["own", "inherited"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_assertions_grouped_shape_assumption(mock_env: None) -> None:
+    """The assumption-scoped listing endpoint handles the grouping too."""
+    respx.get("https://test.api.mipiti.io/api/models/tm-001/assumptions/AS1/assertions").mock(
+        return_value=httpx.Response(200, json={
+            "own": [],
+            "inherited": [{"id": "a-inh", "type": "config_setting"}],
+        })
+    )
+    client = MipitiClient()
+    assertions = await client.list_assertions("tm-001", assumption_id="AS1")
+    assert [a.id for a in assertions] == ["a-inh"]
+    assert assertions[0].origin == "inherited"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_assertions_unexpected_shape_raises(mock_env: None) -> None:
+    """A response that is neither a list nor an own/inherited grouping raises
+    a clear ValueError instead of a per-item validation stack trace."""
+    respx.get("https://test.api.mipiti.io/api/models/tm-001/controls/CTRL-01/assertions").mock(
+        return_value=httpx.Response(200, json={"assertions": [{"id": "a1"}]})
+    )
+    client = MipitiClient()
+    with pytest.raises(ValueError, match="Unexpected assertion listing response"):
+        await client.list_assertions("tm-001", control_id="CTRL-01")
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_start_reevaluate_factors_no_change_reason(mock_env: None) -> None:
     """Default call posts an empty body to the job endpoint and returns a
     job_id; the backend falls back to its own default change_reason."""
