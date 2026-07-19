@@ -5247,6 +5247,12 @@ async def list_assertions(
 
     Provide exactly one of control_id or assumption_id.
 
+    Returns a flat list of assertions. Each assertion carries an ``origin``
+    field: "own" for assertions submitted directly against this model's
+    control or assumption, "inherited" for assertions contributed through
+    model composition (composed models whose assertions apply here).
+    Inherited assertions are included in the listing.
+
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control (omit if using assumption_id).

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list_assertions` no longer fails against servers that return the origin-grouped assertion listing (`{"own": [...], "inherited": [...]}`, where inherited assertions are contributed through model composition). The client previously assumed a bare JSON array and iterated the grouping's keys, so the tool crashed with a validation error (`input_value='own'`). Both shapes are now accepted and flattened into the tool's flat-list contract; each returned assertion carries an additive `origin` field (`"own"` | `"inherited"`, with bare-list responses tagged `"own"`), and an unrecognized response shape raises a clear error instead of a per-item validation trace.
+
 - `server_version` validator no longer bypassable via empty string. The previous shape (`if client_version and client_version != _SERVER_VERSION:`) short-circuited when an agent omitted the field, defeating the pin's safety guarantee (tool catalog + parameter schemas can change between submodule pointer bumps; the server must refuse stale calls). Empty string now rejects alongside any mismatch. Five new tests pin the staleness-rejection path so a future short-circuit reopens-the-bypass change breaks CI loudly.
 - Staleness-rejection message now describes the empirically-verified recovery sequence in Claude Code (exit + `claude mcp remove` + resume + exit + `claude mcp add` + reauth + resume). The earlier wording ("Reconnect your MCP client (e.g., run /mcp in Claude Code and reconnect)") was misleading: a `/mcp` reconnect / reauth / disable+re-enable does not refresh tool descriptions in the live session — only a full server-config teardown does.
 

@@ -1946,7 +1946,34 @@ class MipitiClient:
         else:
             url = f"/api/models/{model_id}/controls/{control_id}/assertions"
         data = await self._get(url)
-        return [_Base.model_validate(a) for a in data]
+        # The assertion listing endpoints return either a flat list or an
+        # ``{"own": [...], "inherited": [...]}`` wrapper, depending on whether
+        # the model participates in cross-model inheritance. Flatten both arms
+        # into this method's flat-list contract, tagging every assertion with
+        # an additive ``origin`` field ("own" | "inherited"); a flat list is
+        # entirely "own".
+        if isinstance(data, dict) and ("own" in data or "inherited" in data):
+            tagged = [
+                *(("own", a) for a in data.get("own") or []),
+                *(("inherited", a) for a in data.get("inherited") or []),
+            ]
+        elif isinstance(data, list):
+            tagged = [("own", a) for a in data]
+        else:
+            raise ValueError(
+                "Unexpected assertion listing response: expected a list of "
+                "assertions or an own/inherited grouping, got "
+                f"{type(data).__name__}"
+            )
+        out: list[_Base] = []
+        for origin, item in tagged:
+            if not isinstance(item, dict):
+                raise ValueError(
+                    "Unexpected assertion listing response: expected assertion "
+                    f"objects, got {type(item).__name__}"
+                )
+            out.append(_Base.model_validate({**item, "origin": origin}))
+        return out
 
     async def delete_assertion(
         self, model_id: str, assertion_id: str,
