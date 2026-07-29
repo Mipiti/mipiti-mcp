@@ -1353,14 +1353,15 @@ async def query_threat_model(
     question: str,
     ctx: Context,
 ) -> dict:
-    """Ask a question about an existing threat model.
+    """Ask a natural-language question about an existing threat model.
 
-    Uses AI to answer questions about the model's assets, attackers,
-    control objectives, assumptions, or security posture.
+    Read-only; no side effects (no new version, no mutation). Uses AI to answer questions grounded in the model's assets, attackers, control objectives, assumptions, and current security posture, returning ``{model_id, answer}`` where ``answer`` is prose.
+
+    Use this for interpretation or summary questions ("what are the biggest gaps?", "which attackers target the token store?"). Do NOT use it to change the model — use ``refine_threat_model`` for that — and prefer ``get_threat_model`` / ``assess_model`` when you need structured data (entity lists, coverage counts) rather than a written answer.
 
     Args:
         model_id: ID of the threat model to query.
-        question: The question to ask.
+        question: The natural-language question to ask.
     """
     try:
         result = await _get_client().query_threat_model(model_id, question)
@@ -1375,21 +1376,13 @@ async def list_threat_models(
     source: str = "",
     include_assessment_summary: bool = False,
 ) -> dict:
-    """List all saved threat models.
+    """List saved threat models in the current workspace.
 
-    Returns a summary of each model including ID, title, creation date,
-    and version number. Use the model ID with other tools.
+    Read-only; no side effects. Returns ``{items: [{id, title, version, created_at, ...}], count}``. Use this to discover model IDs to pass to other tools, or for a portfolio overview.
 
     Args:
-        source: Filter by source system. One of "web", "mcp", "jira", "api".
-            Omit to list all models regardless of source.
-        include_assessment_summary: If True, include an `assessment_summary`
-            object with each model (counts of mitigated / at_risk /
-            unassessed COs plus a human-readable `message`). Useful for
-            aggregate posture queries across the workspace in a single
-            call — e.g. "which of my models are at risk?" — instead of
-            calling `assess_model` once per model (N+1 at the agent layer).
-            Adds ~100 bytes per model to the response.
+        source: Filter by the system that created each model. One of "web", "mcp", "jira", "api". Omit (default "") to list all models regardless of source.
+        include_assessment_summary: If True, include an `assessment_summary` object per model (counts of mitigated / at_risk / unassessed control objectives plus a human-readable `message`). Use for aggregate posture queries across the workspace in a single call (e.g. "which of my models are at risk?") instead of calling `assess_model` once per model. Adds roughly 100 bytes per model. Default False.
     """
     try:
         include = "assessment_summary" if include_assessment_summary else ""
@@ -1445,8 +1438,8 @@ async def set_threat_model_parent(
 
     Pass ``parent_id=None`` to clear the parent (the model becomes a
     tree root). The server rejects cycles (you cannot make a descendant
-    your parent) and over-deep chains (depth bounded by
-    ``MAX_TREE_DEPTH``) with HTTP 400. Bumps the model version on
+    your parent) and over-deep chains (depth bounded by the platform's
+    configured maximum tree depth) with HTTP 400. Bumps the model version on
     success.
 
     Returns the updated threat model.
@@ -1471,18 +1464,14 @@ async def declare_foundation(
 ) -> dict:
     """Mark a model as a shared foundation that advertises providable controls.
 
-    A foundation is a shared service (auth, logging, a shared datastore) whose
-    controls other models can delegate to. Each entry in ``provides`` advertises
-    one of THIS model's controls as providable:
-    ``{"control_id": "CTRL-07", "capability_label": "Validates session tokens",
-    "description": "..."}``. A capability always advertises a control (a proven
-    mechanism), never an objective. ``visibility`` is "workspace" (default) or
-    "explicit".
+    Mutating: records this model as a foundation and stores its advertised controls; other models can then delegate to them (see ``propose_attach_foundation`` / ``attach_foundation``). A foundation is a shared service (auth, logging, a shared datastore) whose controls other models can rely on.
+
+    Each entry in ``provides`` advertises one of THIS model's controls as providable: ``{"control_id": "CTRL-07", "capability_label": "Validates session tokens", "description": "..."}``. A capability always advertises a control (a proven mechanism), never an objective.
 
     Args:
         model_id: ID of the model to declare as a foundation.
-        provides: List of advertised-control dicts (control_id required).
-        visibility: "workspace" or "explicit".
+        provides: List of advertised-control dicts. ``control_id`` is required per entry; ``capability_label`` and ``description`` describe what the control provides to consumers.
+        visibility: Who may delegate to this foundation. "workspace" (default) makes it discoverable to every model in the workspace; "explicit" limits it to models explicitly attached.
     """
     try:
         return await _get_client().declare_foundation(model_id, provides, visibility)
@@ -1492,11 +1481,11 @@ async def declare_foundation(
 
 @mcp.tool()
 async def list_reliance(server_version: str, model_id: str) -> dict:
-    """List a model's cross-model dependency edges (as consumer and as provider).
+    """List a model's cross-model dependency edges, in both directions.
 
-    Returns ``{model_id, as_consumer: [...], as_provider: [...]}``. Consumer
-    edges are this model's declared delegations / reliances; provider edges are
-    other models relying on this one (the blast radius if its controls change).
+    Read-only; no side effects. Returns ``{model_id, as_consumer: [...], as_provider: [...]}``. Consumer edges are this model's declared delegations / reliances on other models' controls; provider edges are other models relying on this one (its blast radius if its controls change).
+
+    Use this to inspect existing dependencies before creating or deleting edges (``create_reliance`` / ``attach_foundation`` / ``delete_reliance``), or to understand what breaks if this model's controls change.
 
     Args:
         model_id: ID of the model to inspect.
@@ -1572,7 +1561,11 @@ async def confirm_reliance(
 
 @mcp.tool()
 async def delete_reliance(server_version: str, edge_id: str) -> dict:
-    """Delete a cross-model reliance edge.
+    """Delete a cross-model reliance / delegation edge. Destructive and immediate.
+
+    Mutating: permanently removes the edge. Any credit the consumer model derived from it (a delegated objective or a relied-upon control) is withdrawn, which can move the consumer's coverage/posture. Does not affect either model's own controls. Returns ``{deleted: True, edge_id}``.
+
+    Use ``list_reliance`` to find the edge_id first. To pause an edge without deleting, there is no toggle — deletion is the only removal path.
 
     Args:
         edge_id: ID of the reliance edge to delete.
@@ -1635,11 +1628,14 @@ async def attach_foundation(
 
 @mcp.tool()
 async def list_tags(server_version: str) -> dict:
-    """List the workspace's tags (the Affiliation primitive).
+    """List the workspace's tags.
 
-    A tag is an overlapping, semantics-free grouping of models — for audit
-    scopes, ad-hoc selections, or portfolios. Unlike a system, a model may carry
-    many tags, and a tag never affects posture or credit. Returns ``{tags: [...]}``.
+    Read-only; no side effects. Returns ``{tags: [...]}``. A tag is an overlapping, semantics-free grouping of models — for audit scopes, ad-hoc selections, or portfolios. Unlike a system, a model may carry many tags, and a tag never affects posture or credit.
+
+    Use this to discover tag IDs before calling tag risk/compliance/export tools or before adding/removing members.
+
+    Args:
+        (none beyond the version guard)
     """
     try:
         return await _get_client().list_tags()
@@ -1717,7 +1713,9 @@ async def remove_model_from_tag(
 
 @mcp.tool()
 async def list_model_tags(server_version: str, model_id: str) -> dict:
-    """List every tag a model belongs to (overlapping membership).
+    """List every tag a given model belongs to.
+
+    Read-only; no side effects. Membership is overlapping — a model may appear under many tags. Use this to see a single model's groupings; use ``list_tags`` for all tags in the workspace.
 
     Args:
         model_id: the model whose tags to list.
@@ -1730,12 +1728,11 @@ async def list_model_tags(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def get_tag_risk_view(server_version: str, tag_id: str) -> dict:
-    """Aggregate per-CO risk rows across a tag's member models.
+    """Aggregate per-control-objective risk rows across a tag's member models.
 
-    The tag-based aggregate posture view. Each row is delegation-aware
-    (``delegation_mitigated`` / ``delegating_controls``), so a CO mitigated via a
-    verified cross-model delegation reads as covered — consistent with the
-    per-model assessment.
+    Read-only; no side effects. The tag-based aggregate posture view: one row per CO across all member models. Each row is delegation-aware (``delegation_mitigated`` / ``delegating_controls``), so a CO mitigated via a verified cross-model delegation reads as covered — consistent with each model's own assessment.
+
+    Use this for a portfolio/audit-scope posture rollup. For a single model, use ``assess_model``; for a system (rather than a freely-composed tag), use ``get_system_risk_view``.
 
     Args:
         tag_id: the tag to aggregate over.
@@ -1752,15 +1749,13 @@ async def select_tag_compliance_frameworks(
     tag_id: str,
     framework_ids: list[str],
 ) -> dict:
-    """Select compliance frameworks for a tag (scope-level).
+    """Select compliance frameworks for a tag (scope-level). Mutating.
 
-    Records the frameworks against the tag and propagates them to each member
-    model — the tag becomes a compliance scope (e.g. an audit boundary) spanning
-    several models, the same capability a system has.
+    Records the given frameworks against the tag AND propagates them to every member model, so the tag becomes a compliance scope (e.g. an audit boundary) spanning several models — the same capability a system has. Re-calling replaces the tag's framework selection. Discover valid ids with ``list_compliance_frameworks``.
 
     Args:
         tag_id: the tag to scope compliance to.
-        framework_ids: framework ids to select (from `list_compliance_frameworks`).
+        framework_ids: framework ids to select (from ``list_compliance_frameworks``).
     """
     try:
         return await _get_client().select_tag_compliance_frameworks(tag_id, framework_ids)
@@ -1777,13 +1772,12 @@ async def get_tag_compliance_report(
 ) -> dict:
     """Cross-model compliance coverage report scoped to a tag's members.
 
-    Aggregates requirement coverage across every model the tag contains, the
-    same as a system-level compliance report but over a freely-composed set.
+    Read-only; no side effects. Aggregates requirement coverage across every model the tag contains — the same as a system-level compliance report but over a freely-composed set of models. Select the tag's frameworks first with ``select_tag_compliance_frameworks``.
 
     Args:
         tag_id: the tag (compliance scope).
         framework_id: the framework to report on.
-        level: optional framework level filter (0 = all).
+        level: optional framework level filter; 0 (default) reports all levels.
     """
     try:
         return await _get_client().get_tag_compliance_report(tag_id, framework_id, level)
@@ -1793,12 +1787,11 @@ async def get_tag_compliance_report(
 
 @mcp.tool()
 async def export_tag_report(server_version: str, tag_id: str) -> dict:
-    """Export the signed auditor report for a tag (HTML).
+    """Export the signed auditor report for a tag as HTML.
 
-    Aggregates every member model's report plus the cross-model dependency graph
-    and attestation status into one signed HTML document — the tag equivalent of
-    the system auditor export. Returns ``{tag_id, format, content}`` where
-    ``content`` is the HTML body.
+    Read-only; no side effects. Aggregates every member model's report plus the cross-model dependency graph and attestation status into one signed HTML document — the tag equivalent of the system auditor export. Returns ``{tag_id, format, content}`` where ``content`` is the HTML body.
+
+    Use for a portfolio/audit-scope deliverable. For a single model use ``export_threat_model``.
 
     Args:
         tag_id: the tag to export.
@@ -1812,7 +1805,11 @@ async def export_tag_report(server_version: str, tag_id: str) -> dict:
 
 @mcp.tool()
 async def delete_threat_model(server_version: str, model_id: str) -> dict:
-    """Delete a threat model and all associated data. This cannot be undone.
+    """Delete a threat model and all associated data. Destructive and permanent — cannot be undone.
+
+    Mutating: removes the model along with every version, its controls, assertions, findings, attestations, and tag/reliance memberships. Reliance edges from other models that pointed at this one are invalidated, which can move those consumers' posture.
+
+    Confirm intent before calling. To keep a copy first, use ``export_threat_model_archive`` (a self-contained, re-importable JSON archive). Returns ``{deleted: True, model_id}``.
 
     Args:
         model_id: ID of the threat model to delete.
@@ -1869,20 +1866,17 @@ async def export_threat_model(
 ) -> dict:
     """Export a threat model as CSV, PDF, or HTML.
 
-    The backend export endpoint runs as an async job (the synchronous
-    render path was retired because cross-model assurance compute could
-    pin the worker for minutes on large models). This tool kicks off the
-    job, polls for completion via ``_await_backend_job`` (reporting
-    progress), then fetches the rendered bytes.
+    Read-only; no side effects on the model. Renders the model's current state into a downloadable document. The export runs server-side and may take some time for large models; progress is reported automatically while it completes.
+
+    For CSV the content is returned inline as UTF-8 text; for PDF/HTML it is returned base64-encoded. For a re-importable, fully self-contained audit bundle (all versions, controls, assertions, attestations) use ``export_threat_model_archive`` instead.
 
     Args:
         model_id: ID of the threat model to export.
         format: Export format — "csv" (default), "pdf", or "html".
 
     Returns:
-        ``{"format", "filename", "content"}`` for CSV (inline text).
-        ``{"format", "filename", "content_b64", "content_type"}`` for
-        PDF/HTML (binary, base64-encoded).
+        ``{format, filename, content}`` for CSV (inline UTF-8 text).
+        ``{format, filename, content_b64, content_type}`` for PDF/HTML (base64-encoded bytes).
     """
     if format not in ("csv", "pdf", "html"):
         raise ToolError("format must be 'csv', 'pdf', or 'html'.")
@@ -1919,26 +1913,28 @@ async def export_threat_model_archive(
 ) -> dict:
     """Export the self-contained JSON audit archive for a threat model.
 
-    The archive carries every version, controls, assertions (with CI Tier
-    1/Tier 2 verdicts and attested flags), findings, risk acceptances,
-    assumption overrides, attestations, and instance sufficiency
-    signatures. Independently verifiable — CI OIDC JWTs verify against
-    the issuer's public JWKS, workspace signatures against the
-    workspace's published key, and sufficiency signatures against the
-    origin instance's key (via the target's trusted_signers table).
+    Read-only; no side effects on the source model. Runs as a backend
+    job: this tool starts the job, waits for it to finish (reporting
+    progress as it goes), then fetches and decodes the JSON envelope.
 
-    The backend renders the archive as an async job (the same
-    cross-model assurance compute that motivated PDF/HTML to migrate
-    away from synchronous rendering). This tool kicks off the job,
-    polls for completion via ``_await_backend_job`` (reporting progress),
-    then fetches and decodes the JSON envelope.
+    The archive is a complete, independently-verifiable snapshot: every
+    version, controls, assertions (with Tier 1 / Tier 2 verification
+    verdicts and attested flags), findings, risk acceptances, assumption
+    overrides, attestations, and instance sufficiency signatures. It
+    verifies standalone — CI OIDC JWTs against the issuer's public JWKS,
+    workspace signatures against the workspace's published key, and
+    sufficiency signatures against the origin instance's key.
+
+    To restore the archive into a workspace (same or different instance),
+    pass the returned envelope to ``import_threat_model_archive``. For a
+    rendered document (PDF / HTML / CSV) rather than a machine-verifiable
+    archive, use ``export_threat_model`` instead.
 
     Args:
         model_id: ID of the threat model to export.
 
     Returns:
-        ``{"envelope": <full archive dict>}`` — pass this envelope to
-        ``import_threat_model_archive`` on any instance to restore.
+        ``{"envelope": <full archive dict>}``.
     """
     try:
         client = _get_client()
@@ -1957,21 +1953,27 @@ async def import_threat_model_archive(
     envelope: dict,
     workspace_id: str,
 ) -> dict:
-    """Import a JSON audit archive (from `export_threat_model_archive`)
-    into the target workspace.
+    """Import a JSON audit archive (from ``export_threat_model_archive``)
+    into a target workspace.
 
-    A fresh model_id is assigned every time, so the same envelope can be
-    imported any number of times without collisions. Title collisions in
-    the target workspace auto-suffix `(imported YYYY-MM-DD)`. The caller
-    must have write access to the target workspace.
+    Mutating: creates a NEW threat model in the target workspace. Requires
+    write access to that workspace. A fresh model_id is assigned on every
+    import, so the same envelope can be imported any number of times
+    without collisions; title collisions in the target workspace
+    auto-suffix ``(imported YYYY-MM-DD)``. Non-destructive — never
+    overwrites or touches an existing model.
+
+    Use to move or clone a model between workspaces or across instances;
+    the envelope round-trips through ``export_threat_model_archive``
+    first.
 
     Args:
         envelope: The full archive dict returned by
-            `export_threat_model_archive`.
+            ``export_threat_model_archive``.
         workspace_id: Target workspace to import into.
 
     Returns:
-        {"model_id": "<new id>"}.
+        ``{"model_id": "<new id>"}`` — the id of the newly created model.
     """
     if not isinstance(envelope, dict):
         raise ToolError("envelope must be a dict returned by export_threat_model_archive.")
@@ -2003,28 +2005,40 @@ async def get_controls(
 ) -> dict:
     """Get implementation controls for a threat model.
 
-    Returns controls that should be implemented to satisfy control objectives.
-    If controls haven't been generated yet, auto-generates them.
+    Returns the controls that should be implemented to satisfy the model's
+    control objectives. Mostly read-only, with one side effect: if
+    controls have never been generated for this model, the first call
+    triggers generation. Generation may finish inline or continue in the
+    background — if results look incomplete, poll
+    ``get_control_generation_status`` and re-read once it reports
+    ``complete``.
 
-    By default excludes ORPHANED controls — controls whose every mapped
-    CO is tombstoned (its asset/attacker pair was removed in a later
-    version). Pass include_orphaned=True to see them. Each returned
-    control carries a boolean `orphaned` field so callers can render
-    the distinction.
+    By default excludes ORPHANED controls (controls whose every mapped CO
+    is tombstoned because its asset/attacker pair was removed in a later
+    version). Pass ``include_orphaned=True`` to include them; each
+    returned control carries a boolean ``orphaned`` field so callers can
+    render the distinction.
+
+    For one control's full detail pass ``control_id``; for a lightweight
+    listing pass ``summary_only=True``.
 
     Args:
         model_id: ID of the threat model.
-        control_id: Optional specific control for detail mode.
-        status: Filter by "implemented", "not_implemented", "verified".
+        control_id: Optional specific control id for detail mode.
+        status: Filter by "implemented", "not_implemented", or "verified".
         co_id: Filter by control objective ID.
         component_id: Filter by component ID (e.g., "CMP1").
-        offset: Skip first N (for pagination).
-        limit: Max to return (0=all).
-        include_deleted: Include soft-deleted controls.
-        include_orphaned: Include controls mapped only to tombstoned
-            COs (default False).
+        offset: Skip the first N controls (pagination).
+        limit: Max controls to return (0 = all).
+        include_deleted: Include soft-deleted controls (default False).
+        include_orphaned: Include controls mapped only to tombstoned COs
+            (default False).
         summary_only: If True, returns only id, description, status,
-            assertion_count, and assumed_by per control (much smaller response).
+            assertion_count, and assumed_by per control (much smaller
+            response).
+
+    Returns a dict with ``controls`` plus ``total`` and ``returned``
+    counts.
     """
     try:
         data = await _get_client().get_controls(
@@ -2072,6 +2086,11 @@ async def get_control_generation_status(
     - ``elapsed_seconds`` — time since queued; if it stays ``queued`` with a
       large elapsed, generation may not be progressing — surface that instead of
       polling forever.
+
+    Read-only; no side effects (polling does not trigger or alter generation).
+
+    Args:
+        model_id: ID of the threat model whose control-generation status to poll.
     """
     try:
         return _dump(
@@ -2089,27 +2108,32 @@ async def regenerate_controls(
     batch_size: int = 0,
     co_ids: Optional[str] = None,
 ) -> dict:
-    """Regenerate controls from control objectives.
+    """Regenerate controls from the model's control objectives. Mutating.
 
-    Controls whose descriptions survive regeneration unchanged preserve
-    their implementation status, evidence, notes, assertions, Jira
-    mappings, and compliance mappings. Controls with changed or removed
-    descriptions are soft-deleted (queryable via include_deleted=True).
+    Re-authors controls from the current COs. Controls whose descriptions
+    survive regeneration unchanged KEEP their implementation status,
+    evidence, notes, assertions, and Jira / compliance mappings. Controls
+    whose descriptions change or disappear are soft-deleted (still
+    queryable via ``get_controls(include_deleted=True)``). When ``co_ids``
+    is given, only those COs' controls are regenerated — all other controls
+    are left as-is.
 
-    When co_ids is specified, only the controls for those COs are
-    regenerated — other controls are preserved as-is.
+    May run as a background job; this tool waits for completion and returns
+    the final result. To rebuild everything, omit ``co_ids``. To fix only
+    stale/orphaned CO mappings without re-authoring control text, prefer
+    ``remap_control`` (mechanical, no LLM).
 
     Args:
         model_id: ID of the threat model.
-        mode: "batch" (default) or "per_co" (most thorough, one LLM
-            call per CO).
-        batch_size: COs per batch in batch mode (default: 15). Smaller
-            = more accurate + granular progress, more LLM calls.
+        mode: "batch" (default) or "per_co" (most thorough — one LLM call
+            per CO).
+        batch_size: COs per batch in batch mode (default 15). Smaller =
+            more accurate and more granular progress, but more LLM calls.
         co_ids: Optional comma-separated CO IDs to regenerate (e.g.
-            "CO1,CO5"). When omitted, regenerates all controls.
+            "CO1,CO5"). Omit to regenerate all controls.
 
     The result includes a ``governor`` object when the workspace bounds
-    background analysis spend; when ``governor.status`` is ``warning`` or
+    background-analysis spend; when ``governor.status`` is ``warning`` or
     ``exhausted``, relay it — queued background re-evaluation resumes at
     ``governor.resets_at`` and is never dropped.
     """
@@ -2138,16 +2162,20 @@ async def update_control_status(
     status: str,
     implementation_notes: str = "",
 ) -> dict:
-    """Update the implementation status of a security control.
+    """Update the implementation status of a security control. Mutating.
 
-    Requires at least one assertion before marking as implemented.
-    Check the control's assertion_count from get_controls before calling.
+    Sets the control's status to "implemented" or "not_implemented".
+    Marking a control "implemented" REQUIRES at least one assertion on the
+    control — check its ``assertion_count`` (via ``get_controls``) first and
+    submit assertions with ``submit_assertions`` if it is zero, or the call
+    is rejected.
 
     Args:
         model_id: ID of the threat model the control belongs to.
         control_id: ID of the control to update (e.g. "CTRL-01").
         status: New status — "implemented" or "not_implemented".
-        implementation_notes: Optional free-text notes.
+        implementation_notes: Optional free-text notes recorded with the
+            status change.
     """
     if status not in ("implemented", "not_implemented"):
         raise ToolError("status must be 'implemented' or 'not_implemented'.")
@@ -2496,10 +2524,9 @@ async def get_reachability_verdicts(
 #
 # Read-only views over the *effective* model — own entities composed with
 # everything inherited from ancestor threat models on the recursive tree.
-# Backend-gated by ``TREE_COMPOSITION_ENABLED``. When the flag is off every
-# tool below returns its stable empty shape with ``flag_enabled: false`` so
-# agents can detect the disabled state without separate code paths or 404
-# handling.
+# When composition is not available for the deployment, every tool below
+# returns its stable empty shape with ``flag_enabled: false`` so agents can
+# detect the disabled state without separate code paths or 404 handling.
 
 
 @mcp.tool()
@@ -2509,12 +2536,13 @@ async def get_composition_overview(
 ) -> dict:
     """Composition index for a model — counts, tree metadata, warnings.
 
-    Cheapest call in the composition surface (~1-2KB). Use this first to
-    learn whether composition is enabled, where the model sits on the
-    recursive tree (parent + ancestor chain + child ids), how many own vs
-    inherited entities and COs there are per kind, and whether any
-    structural warnings (cycle, parent missing, max depth exceeded) need
-    surfacing before drilling into sub-resources.
+    Read-only; no side effects. Cheapest call in the composition surface
+    (~1-2KB). Use it first to learn whether composition is available for
+    this model, where the model sits on the recursive tree (parent +
+    ancestor chain + child ids), how many own vs inherited entities and
+    COs there are per kind, and whether any structural warnings (cycle,
+    parent missing, max depth exceeded) need surfacing before drilling
+    into sub-resources.
 
     Return shape::
 
@@ -2530,8 +2558,9 @@ async def get_composition_overview(
           warnings: [str, ...],
         }
 
-    When ``TREE_COMPOSITION_ENABLED`` is off on the backend, returns the
-    same shape with all counts zeroed and ``flag_enabled: false``.
+    When composition is not available on the backend, the same shape is
+    returned with all counts zeroed and ``flag_enabled: false`` — detect
+    that rather than handling an error.
 
     Args:
         model_id: ID of the threat model.
@@ -2654,13 +2683,13 @@ async def get_effective_coverage(
 ) -> dict:
     """Effective coverage rollup with credited inheritance.
 
-    Per effective CO: whether it is covered, how much credit comes from
-    controls owned by this model vs inherited from ancestors, and the
-    list of contributing controls (with the owning model id, origin tag,
-    verification status, and mitigation group). This is the surface that
-    drives the composition view's coverage / compliance numbers — it
-    reflects ``TREE_COMPOSITION_ENABLED`` math, not the per-model
-    coverage shown by ``get_verification_report``.
+    Read-only. Per effective CO: whether it is covered, how much credit
+    comes from controls owned by this model vs inherited from ancestors,
+    and the list of contributing controls (with the owning model id,
+    origin tag, verification status, and mitigation group). This is the
+    surface that drives the composition view's coverage / compliance
+    numbers — it reflects composed (own ⊕ inherited) math, NOT the
+    per-model coverage shown by ``get_verification_report``.
 
     Return shape::
 
@@ -2675,20 +2704,19 @@ async def get_effective_coverage(
           total, page, page_size,
         }
 
-    When composition is disabled on the backend, ``coverage`` is empty
-    and ``flag_enabled: false``.
+    When composition is not available on the backend, ``coverage`` is
+    empty and ``flag_enabled: false``.
 
-    Omitting ``page`` / ``page_size`` defaults to ``page=1,
-    page_size=100`` — the response is paginated and no longer returns
-    every coverage row in a single call.
+    Paginated: omitting ``page`` / ``page_size`` defaults to ``page=1,
+    page_size=100`` — a single call no longer returns every coverage row.
 
     Args:
         model_id: ID of the threat model.
         page: 1-indexed page number (default ``1``).
         page_size: coverage rows per page (default ``100``).
-        origin: filter coverage rows by contributing-control origin —
-            one of ``"own" | "cross" | "inherited"``. When omitted,
-            rows with any origin mix are returned.
+        origin: filter coverage rows by contributing-control origin — one
+            of ``"own" | "cross" | "inherited"``. When omitted, rows with
+            any origin mix are returned.
     """
     try:
         return _dump(
@@ -2881,13 +2909,12 @@ async def apply_certain_reconciliation_match(
 
     The server re-validates the candidate against current live state
     before applying; if the model has moved since the candidate was
-    detected, returns 400 and the operator should refresh the
-    candidate list and retry. Bumps model version and emits an
-    activity event on success.
+    detected, returns 400 and the operator should refresh the candidate
+    list and retry. Bumps model version and emits an activity event on
+    success.
 
     Args:
-        model_id: ID of the descendant threat model the duplicate is
-            on.
+        model_id: ID of the descendant threat model the duplicate is on.
         kind: Entity kind — one of ``"assets"``, ``"attackers"``,
             ``"components"``.
         own_qid: Qualified id of the descendant's own duplicate (e.g.
@@ -2906,9 +2933,9 @@ async def apply_certain_reconciliation_match(
          "controls_orphaned": int,
          "orphaned_control_ids": [str, ...]}
 
-    Errors: 400 on stale candidates, or heuristic-tier candidates
-    without ``confirm_heuristic``; 404 if the model isn't found; 503
-    if ``TREE_COMPOSITION_ENABLED`` is off on the backend.
+    Errors: 400 on stale candidates, or heuristic-tier candidates without
+    ``confirm_heuristic``; 404 if the model isn't found; 503 if
+    composition is not available on the backend.
     """
     if kind not in _RECONCILIATION_KINDS:
         raise ToolError(
@@ -2949,16 +2976,15 @@ async def reject_reconciliation_candidate(
     """Reject a reconciliation candidate. Mutates state.
 
     Records the operator's "these are NOT duplicates" decision at org
-    scope so the candidate detector filters this pair out of the
-    active queue on subsequent reads. Idempotent on the natural key
-    ``(model_id, kind, own_qid, inherited_qid)`` — re-rejecting an
-    existing pair returns the same row. Use when
-    ``list_reconciliation_candidates`` surfaces a pair that looks like
-    a duplicate but the operator has confirmed it is not.
+    scope so the candidate detector filters this pair out of the active
+    queue on subsequent reads. Idempotent on the natural key
+    ``(model_id, kind, own_qid, inherited_qid)`` — re-rejecting an existing
+    pair returns the same row. Use when ``list_reconciliation_candidates``
+    surfaces a pair that looks like a duplicate but the operator has
+    confirmed it is not.
 
-    Persistence is at org scope, not model state — the rejection is
-    durable across sessions and teammates but does NOT bump model
-    version.
+    Persistence is at org scope, not model state — the rejection is durable
+    across sessions and teammates but does NOT bump model version.
 
     Args:
         model_id: ID of the descendant threat model.
@@ -2975,12 +3001,11 @@ async def reject_reconciliation_candidate(
          "inherited_qid": str, "rejected_by": str,
          "rejected_at": <ISO-8601>}
 
-    Use the ``id`` field with ``unreject_reconciliation_candidate`` if
-    the operator changes their mind.
+    Use the ``id`` field with ``unreject_reconciliation_candidate`` if the
+    operator changes their mind.
 
-    Errors: 404 if the model isn't found; 503 if
-    ``TREE_COMPOSITION_ENABLED`` is off or the rejection store is not
-    configured.
+    Errors: 404 if the model isn't found; 503 if composition is not
+    available on the backend, or the rejection store is not configured.
     """
     if kind not in _RECONCILIATION_KINDS:
         raise ToolError(
@@ -3018,25 +3043,23 @@ async def unreject_reconciliation_candidate(
     """Remove a persisted reconciliation rejection. Mutates state.
 
     The pair becomes eligible to surface in the active candidate queue
-    again on the next read of ``list_reconciliation_candidates``. Use
-    when the operator changes their mind about a prior rejection — the
-    surrogate ``rejection_id`` comes from ``rejections[*].id`` on
+    again on the next read of ``list_reconciliation_candidates``. Use when
+    the operator changes their mind about a prior rejection — the surrogate
+    ``rejection_id`` comes from ``rejections[*].id`` on
     ``list_reconciliation_rejections`` (or the return value of
     ``reject_reconciliation_candidate``).
 
-    Does NOT bump model version (rejection is org state, not model
-    state).
+    Does NOT bump model version (rejection is org state, not model state).
 
     Args:
-        model_id: ID of the descendant threat model the rejection is
-            on.
+        model_id: ID of the descendant threat model the rejection is on.
         rejection_id: Surrogate id of the persisted rejection.
 
     Returns ``{"ok": True}`` on success.
 
-    Errors: 404 if no rejection with that id exists on the model;
-    503 if ``TREE_COMPOSITION_ENABLED`` is off or the rejection store
-    is not configured.
+    Errors: 404 if no rejection with that id exists on the model; 503 if
+    composition is not available on the backend, or the rejection store is
+    not configured.
     """
     if not model_id or not model_id.strip():
         raise ToolError("model_id is required and must be non-empty.")
@@ -3059,17 +3082,17 @@ async def list_reconciliation_rejections(
 ) -> dict:
     """List persisted reconciliation rejections for a model.
 
-    Returns the operator's "these are NOT duplicates" decisions on this
-    model in ``rejected_at`` ascending order — the same set the
-    candidate detector consults to filter the active queue. Use this
-    to render the rejected section of a triage view, or to find the
-    surrogate id needed by ``unreject_reconciliation_candidate``.
+    Read-only. Returns the operator's "these are NOT duplicates" decisions
+    on this model in ``rejected_at`` ascending order — the same set the
+    candidate detector consults to filter the active queue. Use this to
+    render the rejected section of a triage view, or to find the surrogate
+    id needed by ``unreject_reconciliation_candidate``.
 
-    When ``TREE_COMPOSITION_ENABLED`` is off, returns
-    ``{model_id, flag_enabled: false, rejections: []}`` so the caller
-    can render the disabled state without a separate code path. The
-    same empty shape is returned with ``flag_enabled: true`` when the
-    rejection store is not configured on the instance.
+    When composition is not available on the backend, returns
+    ``{model_id, flag_enabled: false, rejections: []}`` so the caller can
+    render the disabled state without a separate code path. The same empty
+    shape is returned with ``flag_enabled: true`` when the rejection store
+    is not configured on the instance.
 
     Args:
         model_id: ID of the threat model.
@@ -3113,38 +3136,39 @@ async def lift_composition_entity(
     attached_state_resolutions: Optional[Dict[str, str]] = None,
     skip_overapplication_gate: bool = False,
 ) -> dict:
-    """Promote a shared-anchor entity from two sibling descendants to
-    their lowest common ancestor. Mutates state across three models.
+    """Promote a shared-anchor entity from two sibling descendants to their
+    lowest common ancestor. Mutates state across THREE models.
 
     The operator has confirmed (via the composition lift-candidate view)
     that the entity ``local_id_a`` on ``descendant_a_id`` and the entity
-    ``local_id_b`` on ``descendant_b_id`` are the same logical thing
-    and should be modeled once on the LCA. The route's ``model_id`` is
-    the operator's current context model — typically the LCA, but the
-    server accepts any ancestor of both descendants.
+    ``local_id_b`` on ``descendant_b_id`` are the same logical thing and
+    should be modeled once on the LCA. The route's ``model_id`` is the
+    operator's current context model — typically the LCA, but the server
+    accepts any ancestor of both descendants.
 
     Conflict resolution. The server re-detects field-level and
-    attached-state conflicts against current live state before
-    applying. If new conflicts have surfaced since the operator's last
-    candidate fetch, the call returns 400 with the missing conflict
-    keys; refresh ``composition_lift_candidates`` and resubmit with
-    resolutions covering every key. Each entry in ``field_resolutions``
-    / ``attached_state_resolutions`` is ``"keep_a"`` | ``"keep_b"`` |
-    ``"keep_both"`` (union for list/set fields; falls back to B for
-    scalars).
+    attached-state conflicts against current live state before applying.
+    If new conflicts have surfaced since the operator's last candidate
+    fetch, the call returns 400 with the missing conflict keys; refresh
+    the lift-candidate view and resubmit with resolutions covering every
+    key. Each entry in ``field_resolutions`` / ``attached_state_resolutions``
+    is ``"keep_a"`` | ``"keep_b"`` | ``"keep_both"`` (union for list/set
+    fields; falls back to B for scalars).
 
-    Over-application gate. The lift extends visibility to every
-    descendant of the LCA, not just the two source descendants. The
-    server runs an over-application gate that refuses lifts touching
-    descendants outside an acknowledged set; pass
-    ``acknowledged_third_party_subtrees`` to acknowledge specific
-    subtrees, or ``skip_overapplication_gate=True`` to override
-    entirely after explicit operator confirmation.
+    Over-application gate. The lift extends visibility to every descendant
+    of the LCA, not just the two source descendants. The server runs an
+    over-application gate that refuses lifts touching descendants outside
+    an acknowledged set; pass ``acknowledged_third_party_subtrees`` to
+    acknowledge specific subtrees, or ``skip_overapplication_gate=True`` to
+    override entirely after explicit operator confirmation.
 
-    Each affected model (LCA + both descendants) bumps version and
-    emits a ``model_refined`` activity event; a structured
-    ``lift_applied`` event with the full ``lift_event`` payload lands
-    on the LCA. The audit pack surfaces this under ``lift_history``.
+    Each affected model (LCA + both descendants) bumps version and emits a
+    ``model_refined`` activity event; a structured ``lift_applied`` event
+    with the full ``lift_event`` payload lands on the LCA. The audit pack
+    surfaces this under ``lift_history``. Reverse it with
+    ``undo_lift_composition_event`` (preview first via
+    ``preview_undo_lift_composition``); the inverse operation is
+    ``split_composition_entity``.
 
     Args:
         model_id: Operator's context model — the model whose composition
@@ -3156,18 +3180,17 @@ async def lift_composition_entity(
         local_id_b: Local id of the entity on ``descendant_b_id``.
         descendant_a_id: First source descendant model id.
         descendant_b_id: Second source descendant model id.
-        lca_model_id: Target ancestor model id (the LCA, or any
-            ancestor higher up the chain).
-        lca_descendant_ids: Optional snapshot of the LCA's descendant
-            set used by the over-application gate. Omit to let the
-            server compute it via BFS.
-        acknowledged_third_party_subtrees: Optional list of subtree
-            roots the operator has acknowledged as in-scope for the
-            lift.
+        lca_model_id: Target ancestor model id (the LCA, or any ancestor
+            higher up the chain).
+        lca_descendant_ids: Optional snapshot of the LCA's descendant set
+            used by the over-application gate. Omit to let the server
+            compute it via BFS.
+        acknowledged_third_party_subtrees: Optional list of subtree roots
+            the operator has acknowledged as in-scope for the lift.
         field_resolutions: Optional per-field resolution map (e.g.
             ``{"description": "keep_both", "tags": "keep_a"}``).
-        attached_state_resolutions: Optional per-state-key resolution
-            map (e.g. ``{"state:assertions/AS3": "keep_b"}``).
+        attached_state_resolutions: Optional per-state-key resolution map
+            (e.g. ``{"state:assertions/AS3": "keep_b"}``).
         skip_overapplication_gate: When True, bypass the gate after
             explicit operator confirmation. Default False.
 
@@ -3183,8 +3206,8 @@ async def lift_composition_entity(
     Errors: 400 if required fields are missing, no LCA exists, conflict
     resolutions are stale, or the lift is structurally refused
     (eligibility / over-application gate); 404 if the route model or
-    either source descendant is missing; 503 if
-    ``TREE_COMPOSITION_ENABLED`` is off.
+    either source descendant is missing; 503 if composition is not
+    available on the backend.
     """
     if kind not in _RECONCILIATION_KINDS:
         raise ToolError(
@@ -3229,9 +3252,9 @@ async def split_composition_entity(
     ancestor_local_id: str,
     target_descendants: List[str],
 ) -> dict:
-    """Push an ancestor-owned entity down to one or more descendants
-    and soft-delete the ancestor's copy. Mutates state across the
-    ancestor + every target descendant.
+    """Push an ancestor-owned entity down to one or more descendants and
+    soft-delete the ancestor's copy. Mutates state across the ancestor +
+    every target descendant.
 
     Inverse of ``lift_composition_entity``. Use when an entity that
     currently lives on an ancestor is in fact descendant-specific and
@@ -3240,12 +3263,11 @@ async def split_composition_entity(
     target; attached state on the ancestor's entity (assertions, jira
     mappings, risk acceptances, etc.) is duplicated to every target.
 
-    The route's ``model_id`` IS the ancestor (the entity being split
-    lives on it). Each affected model (ancestor + every target
-    descendant) bumps version and emits a ``model_refined`` activity
-    event; a structured ``split_applied`` event with the full
-    ``split_event`` payload lands on the ancestor. The audit pack
-    surfaces this under ``split_history``.
+    The route's ``model_id`` IS the ancestor (the entity being split lives
+    on it). Each affected model (ancestor + every target descendant) bumps
+    version and emits a ``model_refined`` activity event; a structured
+    ``split_applied`` event with the full ``split_event`` payload lands on
+    the ancestor. The audit pack surfaces this under ``split_history``.
 
     Args:
         model_id: Ancestor model id — the entity to split lives here.
@@ -3264,8 +3286,8 @@ async def split_composition_entity(
          "split_event": {...}}
 
     Errors: 400 if required fields are missing or the split is
-    structurally refused; 404 if the ancestor or any target descendant
-    is missing; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    structurally refused; 404 if the ancestor or any target descendant is
+    missing; 503 if composition is not available on the backend.
     """
     if kind not in _RECONCILIATION_KINDS:
         raise ToolError(
@@ -3299,22 +3321,22 @@ async def preview_undo_lift_composition(
     """Preview the inverse plan (or divergence refusal) for a prior
     ``lift_applied`` event WITHOUT mutating any state.
 
-    Read-only counterpart to ``undo_lift_composition_event``. Used by
-    the confirmation flow so the operator sees what an undo would do
-    before committing — either the inverse state operations the apply
-    step will commit (tombstone the lifted LCA entity, restore the
-    source descendants' copies, rewrite CO references), or the
-    enumerated reasons the divergence detector refuses the undo.
+    Read-only counterpart to ``undo_lift_composition_event``. Used by the
+    confirmation flow so the operator sees what an undo would do before
+    committing — either the inverse state operations the apply step will
+    commit (tombstone the lifted LCA entity, restore the source
+    descendants' copies, rewrite CO references), or the enumerated reasons
+    the divergence detector refuses the undo.
 
     Args:
-        model_id: The model whose composition view originated the
-            lift. Must match the ``threat_model_id`` carried by the
-            cited activity event; the server rejects with 404 when a
-            caller tries to undo a sibling model's lift through a
-            different model's URL.
-        lift_id: Either the surrogate id of the ``lift_applied``
-            activity event, or the structured ``lift_id`` carried in
-            the event's payload — both lookups are supported.
+        model_id: The model whose composition view originated the lift.
+            Must match the ``threat_model_id`` carried by the cited
+            activity event; the server rejects with 404 when a caller
+            tries to undo a sibling model's lift through a different
+            model's URL.
+        lift_id: Either the surrogate id of the ``lift_applied`` activity
+            event, or the structured ``lift_id`` carried in the event's
+            payload — both lookups are supported.
 
     Returns::
 
@@ -3322,12 +3344,12 @@ async def preview_undo_lift_composition(
          "refusal": <UndoRefusal> | null}
 
     Exactly one of ``plan`` / ``refusal`` is non-null. The plan block
-    carries the inverse state operations; the refusal block carries
-    the enumerated divergence reasons when state has materially
-    evolved since the forward lift.
+    carries the inverse state operations; the refusal block carries the
+    enumerated divergence reasons when state has materially evolved since
+    the forward lift.
 
-    Errors: 404 if the cited event doesn't exist or belongs to a
-    different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    Errors: 404 if the cited event doesn't exist or belongs to a different
+    model; 503 if composition is not available on the backend.
     """
     if not model_id or not model_id.strip():
         raise ToolError("model_id is required and must be non-empty.")
@@ -3347,7 +3369,7 @@ async def undo_lift_composition_event(
     model_id: str,
     lift_id: str,
 ) -> dict:
-    """Apply the inverse of a previous ``lift_applied`` event.
+    """Apply the inverse of a previous ``lift_applied`` composition event. Mutating — persists inverse state across multiple models.
 
     Re-runs the divergence detector immediately before applying and
     refuses with 409 + the structured refusal block when state has
@@ -3378,7 +3400,8 @@ async def undo_lift_composition_event(
     Errors: 409 with ``detail = {message, refusal: {reasons: [...]}}``
     when the divergence detector refuses; 404 if the cited event
     doesn't exist or belongs to a different model; 400 on payload /
-    event-type mismatch; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    event-type mismatch; 503 if composition is not available for this
+    deployment.
 
     Operator pattern: call ``preview_undo_lift_composition`` first,
     surface the plan or refusal to the operator, and only call this
@@ -3403,7 +3426,7 @@ async def preview_undo_split_composition(
     split_id: str,
 ) -> dict:
     """Preview the inverse plan (or divergence refusal) for a prior
-    ``split_applied`` event WITHOUT mutating any state.
+    ``split_applied`` event WITHOUT mutating any state. Read-only.
 
     Counterpart to ``preview_undo_lift_composition`` for splits. Same
     ``{plan, refusal}`` shape; the plan block carries the
@@ -3424,7 +3447,8 @@ async def preview_undo_split_composition(
          "refusal": <UndoRefusal> | null}
 
     Errors: 404 if the cited event doesn't exist or belongs to a
-    different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+    different model; 503 if composition is not available for this
+    deployment.
     """
     if not model_id or not model_id.strip():
         raise ToolError("model_id is required and must be non-empty.")
@@ -3444,7 +3468,7 @@ async def undo_split_composition_event(
     model_id: str,
     split_id: str,
 ) -> dict:
-    """Apply the inverse of a previous ``split_applied`` event.
+    """Apply the inverse of a previous ``split_applied`` composition event. Mutating — persists inverse state across multiple models.
 
     Mirror of ``undo_lift_composition_event`` for splits. Re-runs the
     divergence detector before applying and refuses with 409 + a
@@ -3471,7 +3495,7 @@ async def undo_split_composition_event(
 
     Errors: same shape as ``undo_lift_composition_event`` — 409 on
     divergence refusal, 404 on missing event, 400 on type mismatch,
-    503 when ``TREE_COMPOSITION_ENABLED`` is off.
+    503 when composition is not available for this deployment.
 
     Operator pattern: call ``preview_undo_split_composition`` first,
     surface the plan or refusal to the operator, and only call this
@@ -3495,11 +3519,13 @@ async def get_control_objective(
     model_id: str,
     co_id: str,
 ) -> dict:
-    """Get a single control objective with its composer verdict.
+    """Get a single control objective with its composer verdict. Read-only.
 
     Returns the CO's typed fields, the IDs of any controls that map to
     it, and the deterministic reachability verdict — the structural
-    derivation that backs any reach claim on the CO.
+    derivation that backs any reach claim on the CO. For the full CO
+    matrix use ``get_control_objectives``; for pass/fail assurance
+    scoring use ``assess_model``.
 
     Tombstoned COs (``removed: true``) are returned with the flag set;
     the verdict is omitted because reach state is frozen at the
@@ -3713,23 +3739,25 @@ async def set_mitigation_groups(
     defense_in_depth: str = "",
     justification: str = "",
 ) -> dict:
-    """Declaratively set the mitigation group structure for a CO.
+    """Declaratively set the mitigation-group structure for a control objective. Mutating; runs as a polled background job (an LLM sufficiency check evaluates whether the new structure satisfies the CO) and returns once complete.
 
-    Replaces all mitigation group assignments for this CO. AI-gated:
-    the platform evaluates whether the new structure satisfies the CO.
+    Replaces ALL mitigation-group assignments for this CO. Call
+    ``get_mitigation_groups`` first to see the current structure and the
+    unmapped controls available for assignment.
 
     Mitigation groups define alternative paths to satisfy a CO:
-    - Within a group: AND — all controls must be implemented
-    - Across groups: OR — any complete group mitigates the CO
-    - Defense-in-depth: tracked but not required for mitigation
+    - Within a group: AND — all controls must be implemented.
+    - Across groups: OR — any one complete group mitigates the CO.
+    - Defense-in-depth: tracked but not required for mitigation.
 
     Args:
         model_id: ID of the threat model.
         co_id: ID of the control objective (e.g., "CO5").
-        groups: JSON object mapping group numbers to control ID lists.
-            Example: '{"1": ["CTRL-01", "CTRL-02"], "2": ["CTRL-03"]}'
-        defense_in_depth: Comma-separated control IDs for defense-in-depth.
-            Example: "CTRL-04,CTRL-05"
+        groups: JSON object mapping group numbers to control-ID lists.
+            Example: '{"1": ["CTRL-01", "CTRL-02"], "2": ["CTRL-03"]}'.
+        defense_in_depth: Comma-separated control IDs tracked as
+            defense-in-depth (not required for mitigation). Example:
+            "CTRL-04,CTRL-05".
         justification: Why this group structure is appropriate (min 10 chars).
     """
     import json as _json
@@ -3766,17 +3794,19 @@ async def add_evidence(
     label: str = "",
     url: str = "",
 ) -> dict:
-    """Attach auxiliary metadata to a control (docs, links, artifacts).
+    """Attach an auxiliary evidence item (doc, link, or artifact reference) to a control. Mutating.
 
-    Evidence is contextual metadata — it does NOT count toward
-    implementation status. Only assertions prove controls.
+    Evidence is contextual metadata only — it does NOT count toward a
+    control's implementation status; only assertions prove controls.
+    Use ``remove_evidence`` to detach an item.
 
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control.
-        type: Evidence type: "code", "test", "config", "document", "link".
-        label: Description of evidence (required).
-        url: Optional file path or URL.
+        type: Evidence type — one of "code", "test", "config",
+            "document", "link" (default "code").
+        label: Human-readable description of the evidence (required).
+        url: Optional file path or URL pointing at the artifact.
     """
     if not label.strip():
         raise ToolError("label is required.")
@@ -3793,12 +3823,18 @@ async def remove_evidence(
     control_id: str,
     evidence_index: int = 0,
 ) -> dict:
-    """Remove an evidence item from a control by index.
+    """Remove one evidence item from a control by its position in the control's evidence array. Mutating.
+
+    Evidence is auxiliary metadata (see ``add_evidence``); removing it
+    does not affect the control's implementation status or any
+    assertions. To find the index, read the control via ``get_control``
+    and count its ``evidence`` array from 0.
 
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control.
-        evidence_index: Zero-based index to remove.
+        evidence_index: Zero-based position of the item to remove within
+            the control's ``evidence`` array (default 0 = first item).
     """
     try:
         return _dump(await _get_client().remove_evidence(model_id, control_id, evidence_index))
@@ -3878,15 +3914,18 @@ async def delete_control(
     control_id: str,
     reason: str = "",
 ) -> dict:
-    """Soft-delete a security control with justification.
+    """Soft-delete a security control, optionally with a justification. Destructive (mutating): the control is retired, not permanently erased.
 
-    Blocks with HTTP 409 if this is the only control covering any control
-    objective. Add a replacement control or refine the threat model first.
+    Blocks with HTTP 409 when the control is the ONLY control covering
+    any control objective — removing it would leave that CO uncovered.
+    Add a replacement control (or refine the threat model) before
+    deleting.
 
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control to delete.
-        reason: Justification for deletion.
+        reason: Optional justification recorded in the audit trail
+            (recommended).
     """
     try:
         return _dump(await _get_client().delete_control(model_id, control_id, reason))
@@ -3900,10 +3939,13 @@ async def check_control_gaps(
     model_id: str,
     ctx: Context,
 ) -> dict:
-    """Check for missing controls.
+    """Analyze control coverage and surface control objectives that lack sufficient controls. Read-only (does not mutate the model); runs as a polled background job and uses LLM reasoning.
 
-    Analyzes existing controls against control objectives and suggests
-    COs with insufficient coverage.
+    Complements the deterministic ``assess_model`` (which scores each
+    CO's mitigated / at_risk / unassessed status from control
+    implementation state) by reasoning about which COs are under-covered
+    and where new controls are needed. Use this to decide what controls
+    to add; use ``assess_model`` to score the current state.
 
     Args:
         model_id: ID of the threat model.
@@ -3928,16 +3970,18 @@ async def get_control_objectives(
     offset: int = 0,
     limit: int = 0,
 ) -> dict:
-    """Get control objective matrix for a threat model.
+    """Get the control objective matrix for a threat model. Read-only.
 
-    Returns COs with references to which controls cover each one.
-    By default returns compact summary (total count only).
-    Pass offset/limit to retrieve specific COs.
+    Returns COs, each with references to the controls that cover it. By
+    default returns a compact summary (total count only); pass
+    offset/limit to page through full CO records. For a single CO with
+    its reachability verdict use ``get_control_objective``; for
+    pass/fail assurance scoring use ``assess_model``.
 
     Args:
         model_id: ID of the threat model.
-        offset: Skip first N.
-        limit: Max to return (0=summary only).
+        offset: Skip the first N control objectives.
+        limit: Max to return (0 = summary only, no per-CO records).
     """
     try:
         return _dump(await _get_client().get_control_objectives(model_id, offset, limit))
@@ -3954,20 +3998,24 @@ async def assess_model(
     offset: int = 0,
     limit: int = 0,
 ) -> dict:
-    """Run assurance assessment on a threat model.
+    """Run the deterministic assurance assessment over a threat model. Read-only — no LLM calls, no mutation.
 
-    Evaluates each control objective based on control implementation status.
-    Returns summary (mitigated/at_risk/unassessed) and progressive metrics
-    (defined/implemented/verified). No LLM calls — deterministic.
+    Evaluates each control objective from its controls' implementation
+    status and returns summary counts (mitigated / at_risk /
+    unassessed) plus progressive metrics (defined / implemented /
+    verified). For LLM-based reasoning about *which* COs are
+    under-covered and what controls to add, use ``check_control_gaps``
+    instead.
 
-    Use summary_only=True to get just the counts without per-CO assessments.
+    Use summary_only=True to get just the counts without per-CO
+    assessments.
 
     Args:
         model_id: ID of the threat model to assess.
-        summary_only: If True, returns only summary counts (no per-CO details).
-        status: Filter: "mitigated", "at_risk", "unassessed".
-        offset: Skip first N.
-        limit: Max to return (0=all).
+        summary_only: If True, return only summary counts (no per-CO details).
+        status: Optional filter — "mitigated", "at_risk", or "unassessed".
+        offset: Skip the first N control objectives.
+        limit: Max control objectives to return (0 = all).
     """
     try:
         return _dump(await _get_client().assess_model(
@@ -4360,15 +4408,15 @@ async def edit_attacker(
 
 @mcp.tool()
 async def remove_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
-    """Soft-delete an attacker. Creates a new version.
+    """Soft-delete an attacker from a threat model. Mutating: creates a new model version.
 
-    Same lifecycle as remove_asset: ID preserved, linked COs
-    tombstoned, orphaned controls derived at read time. Use
-    `restore_attacker` to un-delete.
+    The attacker's ID is preserved (so a later restore reinstates the same ID and all its links). Control objectives anchored to this attacker are tombstoned, and any controls left with no live anchor become orphaned (derived at read time, never hard-deleted). Nothing is permanently destroyed, so removal is reversible.
+
+    Use to drop an attacker that no longer applies. To change an attacker's fields instead, use edit_attacker; to bring a removed one back, use restore_attacker.
 
     Args:
         model_id: ID of the threat model.
-        attacker_id: ID of the attacker to soft-delete.
+        attacker_id: ID of the attacker to soft-delete (e.g. "T1").
     """
     try:
         return _dump(await _get_client().remove_attacker(model_id, attacker_id))
@@ -4378,8 +4426,9 @@ async def remove_attacker(server_version: str, model_id: str, attacker_id: str) 
 
 @mcp.tool()
 async def restore_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
-    """Un-soft-delete an attacker. Revives tombstoned COs; un-orphans
-    any linked controls.
+    """Un-soft-delete an attacker previously removed with remove_attacker. Mutating.
+
+    Reinstates the attacker under its original ID, revives the control objectives that were tombstoned when it was removed, and un-orphans any controls that were anchored to it. Only affects an attacker that is currently soft-deleted. Returns the updated threat model.
 
     Args:
         model_id: ID of the threat model.
@@ -4555,6 +4604,10 @@ async def revalidate_threat_model_entities(
     May consume credits for the entities that need the deeper review; a model
     already in good shape costs nothing. Returns the updated model envelope:
     ``{"accepted": true, "model": {...}}``.
+
+    Args:
+        model_id: ID of the threat model whose assets and attackers to
+            re-validate.
     """
     try:
         return _dump(await _get_client().revalidate_entities(model_id))
@@ -4567,9 +4620,13 @@ async def revalidate_threat_model_entities(
 
 @mcp.tool()
 async def list_compliance_frameworks(server_version: str) -> dict:
-    """List available compliance frameworks.
+    """List the compliance frameworks available to map controls against.
 
-    Returns built-in frameworks (e.g., OWASP ASVS) and custom frameworks.
+    Read-only; no side effects. Returns both built-in frameworks (e.g. OWASP
+    ASVS) and any custom frameworks in the workspace. Use this to discover
+    framework identifiers before ``select_compliance_frameworks`` (activate one
+    for a model) or ``import_compliance_framework`` (add a custom one). Takes no
+    arguments beyond the version guard.
     """
     try:
         return _dump(await _get_client().list_compliance_frameworks())
@@ -4672,13 +4729,11 @@ async def select_compliance_frameworks(
     model_id: str,
     framework_ids: str,
 ) -> dict:
-    """Select compliance frameworks for a threat model. Requires PRO tier.
+    """Select (activate) compliance frameworks on a threat model. Requires PRO tier. Mutating.
 
-    Selecting a framework automatically triggers auto-remediation in the
-    background: auto-maps existing controls, excludes non-applicable
-    requirements by taxonomy, and suggests/applies new entities for remaining
-    gaps. The response includes auto_remediate_jobs — these run in the
-    background and complete automatically.
+    Activating a framework automatically kicks off auto-remediation in the background: it auto-maps existing controls to requirements, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for the remaining gaps. The response includes auto_remediate_jobs, which run and complete on their own; re-trigger later with auto_remediate if the model changes.
+
+    Discover framework IDs with list_compliance_frameworks (or add a custom one via import_compliance_framework); view the resulting gap analysis with get_compliance_report. For the system-level equivalent, use select_system_compliance_frameworks.
 
     Args:
         model_id: ID of the threat model.
@@ -4701,18 +4756,17 @@ async def get_compliance_report(
     offset: int = 0,
     limit: int = 0,
 ) -> dict:
-    """Get compliance gap analysis report.
+    """Get the compliance gap-analysis report for a framework on a threat model. Read-only; no side effects.
 
-    Evaluates each framework requirement against mapped controls.
-    By default returns summary; pass status/offset/limit for details.
+    Evaluates every framework requirement against the model's mapped controls and classifies each as covered, partial, uncovered, unmapped, or excluded. With no filters it returns a summary; pass status and/or offset/limit to page through per-requirement detail. The framework must first be activated on the model via select_compliance_frameworks.
 
     Args:
         model_id: ID of the threat model.
-        framework_id: ID of the compliance framework.
-        level: Optional level filter (e.g., 1 for L1 only).
-        status: Filter: "covered", "partial", "uncovered", "unmapped", "excluded".
-        offset: Skip first N.
-        limit: Max to return.
+        framework_id: ID of the compliance framework (as listed by list_compliance_frameworks).
+        level: Optional level filter for level-aware frameworks — returns only requirements at or below this level (e.g. 1 for L1 only). Omit for all levels.
+        status: Optional status filter: "covered", "partial", "uncovered", "unmapped", or "excluded". Empty = all statuses.
+        offset: Number of requirement rows to skip, for pagination. Default 0.
+        limit: Maximum requirement rows to return. Default 0 = no explicit limit.
     """
     try:
         return _dump(await _get_client().get_compliance_report(
@@ -4732,15 +4786,17 @@ async def map_control_to_requirement(
     confidence: str = "manual",
     notes: str = "",
 ) -> dict:
-    """Map a security control to a compliance framework requirement.
+    """Manually map one security control to one compliance-framework requirement. Mutating: records a control-to-requirement mapping, which re-derives that requirement's coverage in the compliance report.
+
+    Use for a single, deliberate mapping you are asserting by hand. To let the LLM propose mappings across many requirements at once, use auto_map_controls; to close gaps end-to-end (map + exclude + fill), use auto_remediate.
 
     Args:
         model_id: ID of the threat model.
         framework_id: ID of the compliance framework.
-        requirement_id: ID of the requirement (e.g., "V2.1.1").
-        control_id: ID of the control (e.g., "CTRL-01").
-        confidence: Mapping confidence: "llm", "manual", "verified".
-        notes: Optional notes about mapping.
+        requirement_id: ID of the requirement to map to (e.g. "V2.1.1").
+        control_id: ID of the control to map (e.g. "CTRL-01").
+        confidence: Provenance label recorded on the mapping: "manual" (default, operator-asserted), "llm" (machine-suggested), or "verified" (human-confirmed).
+        notes: Optional free-text note explaining the mapping rationale.
     """
     try:
         return _dump(await _get_client().map_control_to_requirement(
@@ -4758,14 +4814,14 @@ async def auto_map_controls(
     ctx: Context,
     control_id: Optional[str] = None,
 ) -> dict:
-    """Use LLM to map controls to framework requirements. Takes 20-45 seconds.
+    """LLM-map a model's existing controls to a framework's requirements. Requires PRO tier. Mutating: writes control-to-requirement mappings. Runs as a background job (typically 20-45s); this tool waits for completion and returns the result.
 
-    Requires PRO tier.
+    Sits between the manual map_control_to_requirement (one mapping at a time) and the full auto_remediate loop (which also excludes non-applicable requirements and proposes new entities for remaining gaps). auto_map_controls only creates mappings from controls that already exist — it never adds or excludes entities.
 
     Args:
         model_id: ID of the threat model.
         framework_id: ID of the compliance framework.
-        control_id: Optional specific control to map.
+        control_id: Optional single control ID to map; omit to map all of the model's controls.
     """
     try:
         client = _get_client()
@@ -4830,7 +4886,13 @@ async def auto_remediate(
 
 @mcp.tool()
 async def list_workspaces(server_version: str) -> dict:
-    """List workspaces the current user belongs to."""
+    """List the workspaces the current user belongs to.
+
+    Read-only; no side effects. Returns each workspace's id and name. Models,
+    controls, and compliance are all scoped to a workspace, so use this to
+    discover the workspace context you're operating in. Takes no arguments
+    beyond the version guard.
+    """
     try:
         return _dump(await _get_client().list_workspaces())
     except Exception as exc:
@@ -4892,7 +4954,14 @@ async def update_organization(
 
 @mcp.tool()
 async def list_systems(server_version: str) -> dict:
-    """List all saved systems in current workspace."""
+    """List all saved systems in the current workspace.
+
+    Read-only; no side effects. A system is a named grouping of threat models
+    for portfolio-level risk and compliance reporting. Use this to discover
+    system ids (e.g. before ``get_system`` or ``get_system_risk_view``); to
+    create one use ``create_system``. Takes no arguments beyond the version
+    guard.
+    """
     try:
         return _dump(await _get_client().list_systems())
     except Exception as exc:
@@ -4901,7 +4970,9 @@ async def list_systems(server_version: str) -> dict:
 
 @mcp.tool()
 async def get_system(server_version: str, system_id: str) -> dict:
-    """Get a system container by ID with member model summaries.
+    """Get a system container by ID, including summaries of its member threat models. Read-only; no side effects.
+
+    A system is a named grouping of threat models for portfolio-level risk and compliance reporting. Discover system IDs with list_systems; add members with add_model_to_system.
 
     Args:
         system_id: ID of the system to retrieve.
@@ -4918,10 +4989,12 @@ async def create_system(
     name: str,
     description: str = "",
 ) -> dict:
-    """Create a new system container.
+    """Create a new system container in the current workspace. Mutating: returns the created system with its new ID.
+
+    A system is a named grouping of threat models for portfolio-level risk and compliance reporting. After creating one, add threat models with add_model_to_system.
 
     Args:
-        name: System name (e.g., "Mobile Banking Platform").
+        name: System name (e.g. "Mobile Banking Platform").
         description: Optional description.
     """
     try:
@@ -4932,7 +5005,9 @@ async def create_system(
 
 @mcp.tool()
 async def add_model_to_system(server_version: str, system_id: str, model_id: str) -> dict:
-    """Add a threat model to a system container.
+    """Add a threat model to a system container as a member. Mutating: links the model into the system — it does not move or copy the model, and the model stays independently editable.
+
+    Use to include a model in a system's portfolio-level risk and compliance reporting. Both the system and the model must already exist (see create_system and list_threat_models).
 
     Args:
         system_id: ID of the system.
@@ -5053,11 +5128,13 @@ async def remove_component(
     model_id: str,
     component_id: str,
 ) -> dict:
-    """Remove a component. Clears component_id from associated controls.
+    """Remove a component from a threat model. Mutating and irreversible — unlike asset/attacker removal there is no restore counterpart.
+
+    Any controls scoped to this component have their component_id cleared (the controls themselves are kept), and the component's trust-boundary contribution to asset reachability is withdrawn. To change a component instead of removing it, use edit_component.
 
     Args:
         model_id: ID of the threat model.
-        component_id: ID of the component to remove.
+        component_id: ID of the component to remove (e.g. "CMP1").
     """
     try:
         return _dump(await _get_client().remove_component(model_id, component_id))
@@ -5073,17 +5150,11 @@ async def get_system_dependencies(
     server_version: str,
     system_id: str,
 ) -> dict:
-    """Get cross-model dependency graph for a system.
+    """Get the cross-model dependency graph for a system. Read-only; no side effects.
 
-    Returns all assumptions linked to other models in the system, with
-    satisfaction status. Each dependency is satisfied when either the
-    target model's mapped controls are implemented or a valid manual
-    attestation exists.
+    Returns every assumption in the system's member models that is linked to another member model (a cross-model dependency), with its satisfaction status. A dependency is satisfied when either the target model's mapped controls are implemented or a valid manual attestation exists.
 
-    Use cases:
-    - View which assumptions are satisfied by other models' controls
-    - Identify unsatisfied cross-model dependencies
-    - Verify system-level completeness (all dependencies met)
+    Use to see which assumptions are met by other models' controls, find unsatisfied dependencies, or check system-level completeness. Create these links with link_dependency.
 
     Args:
         system_id: ID of the system.
@@ -5136,7 +5207,9 @@ async def select_system_compliance_frameworks(
     system_id: str,
     framework_ids: str,
 ) -> dict:
-    """Select compliance frameworks for a system. Requires PRO tier.
+    """Select (activate) compliance frameworks for a system, for portfolio-level compliance reporting. Requires PRO tier. Mutating: sets the system's active frameworks.
+
+    The system-level counterpart to select_compliance_frameworks (which operates on a single threat model). Discover framework IDs with list_compliance_frameworks; view results with get_system_compliance_report.
 
     Args:
         system_id: ID of the system.
@@ -5159,15 +5232,17 @@ async def get_system_compliance_report(
     offset: int = 0,
     limit: int = 0,
 ) -> dict:
-    """Get aggregated compliance report for a system. Requires PRO tier.
+    """Aggregated compliance report for a whole System (a group of related threat models) against one framework. Read-only. Requires PRO tier.
+
+    Rolls every mapped control across all models in the System up to per-requirement coverage against the selected framework, then returns coverage counts plus per-requirement rows. Sibling tools cover narrower/other scopes: ``get_compliance_report`` for a single model, ``get_tag_compliance_report`` for a tag cohort. The framework must first be selected for the system via ``select_system_compliance_frameworks``, otherwise there is nothing to report on.
 
     Args:
-        system_id: ID of the system.
-        framework_id: ID of the compliance framework.
-        level: Optional level filter.
-        status: Filter: "covered", "partial", "uncovered", "unmapped", "excluded".
-        offset: Skip first N.
-        limit: Max to return.
+        system_id: ID of the system to report on.
+        framework_id: ID of a framework already selected for this system.
+        level: Optional framework level/tier filter (e.g., baseline level number). Omit for all levels.
+        status: Optional per-requirement filter, one of "covered", "partial", "uncovered", "unmapped", "excluded". Empty (default) returns all.
+        offset: Skip the first N requirement rows (pagination). Default 0.
+        limit: Max requirement rows to return; 0 (default) returns all.
     """
     try:
         return _dump(await _get_client().get_system_compliance_report(
@@ -5182,6 +5257,12 @@ async def get_system_compliance_report(
 
 _SUBMIT_ASSERTIONS_DOC = f"""\
 Submit assertions for a security control or an assumption.
+
+Mutating: persists new assertion records against the target. It does NOT run \
+verification itself — assertions are checked later in CI (structurally, then \
+semantically) and cryptographically attested; submitting only records the \
+claims to be verified. To read existing assertions use list_assertions; to \
+remove one use delete_assertion.
 
 Each assertion is a typed, machine-verifiable claim about a system property \
 (source code, configuration, infrastructure, or external service settings).
@@ -5219,6 +5300,7 @@ async def submit_assertions(
     control_id: Optional[str] = None,
     assumption_id: Optional[str] = None,
 ) -> dict:
+    """Submit machine-verifiable assertions for a control or assumption."""
     if not control_id and not assumption_id:
         raise ToolError("Exactly one of control_id or assumption_id must be provided.")
     if control_id and assumption_id:
@@ -5278,15 +5360,15 @@ async def delete_assertion(
     control_id: Optional[str] = None,
     assumption_id: Optional[str] = None,
 ) -> dict:
-    """Delete an assertion.
+    """Permanently delete a single assertion from a control or assumption. Mutating and destructive: the assertion record is removed, not soft-deleted, and its contribution to sufficiency/verification is dropped. It does NOT itself re-run verification; sufficiency is re-evaluated on subsequent reads.
 
-    Provide the control_id or assumption_id the assertion belongs to.
+    Use to retract a claim that was submitted in error or that ``get_verification_report`` flagged as misaligned (off-topic for the control's current description). To add assertions use ``submit_assertions``; to inspect them first use ``list_assertions``. Only "own" assertions can be removed here — inherited assertions come from composed models and must be managed on their source model.
 
     Args:
         model_id: ID of the threat model.
         assertion_id: ID of the assertion to delete.
-        control_id: ID of the control (omit if using assumption_id).
-        assumption_id: ID of the assumption (omit if using control_id).
+        control_id: ID of the control the assertion belongs to (omit if it belongs to an assumption).
+        assumption_id: ID of the assumption the assertion belongs to (omit if it belongs to a control).
     """
     try:
         await _get_client().delete_assertion(
@@ -5357,11 +5439,9 @@ async def get_sufficiency(
     model_id: str,
     control_id: str,
 ) -> dict:
-    """Get sufficiency status for a single control.
+    """Sufficiency verdict for a single control: whether its submitted assertions collectively cover every aspect of the control. Read-only.
 
-    Returns whether the submitted assertions collectively cover all
-    aspects of the control. Evaluated server-side when assertions
-    are submitted — no CI round-trip needed.
+    Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict may be reported as stale when the control description or assertion set changed since it was last computed, in which case a fresh evaluation is triggered automatically — call again shortly for the updated result.
 
     Args:
         model_id: ID of the threat model.
@@ -5382,13 +5462,21 @@ async def submit_findings(
     model_id: str,
     findings_json: str,
 ) -> dict:
-    """Submit negative findings discovered by scanning codebase.
+    """Record negative findings (gaps discovered while scanning a codebase against a model's controls). Mutating: persists new finding records against the model.
+
+    Use after a gap-discovery scan (see ``get_scan_prompt``) to log where expected control evidence was NOT found. Findings are the negative counterpart to assertions (positive proof via ``submit_assertions``): a finding says "I looked here for this and it was missing." Once submitted, drive a finding through its lifecycle with ``update_finding`` and review them with ``list_findings``.
 
     Args:
         model_id: ID of the threat model.
-        findings_json: JSON array of finding objects with control_id, title,
-            description, severity, checked_locations, checked_patterns,
-            expected_evidence.
+        findings_json: JSON string of an **array** of finding objects. Each object should carry:
+            - ``control_id`` (str): the control the gap relates to.
+            - ``title`` (str): short summary of the gap.
+            - ``description`` (str): what is missing and why it matters.
+            - ``severity`` (str): finding severity (e.g., "low"/"medium"/"high"/"critical").
+            - ``checked_locations`` (list): files/paths inspected.
+            - ``checked_patterns`` (list): patterns/signals searched for.
+            - ``expected_evidence`` (str): what implemented evidence would have looked like.
+            Must parse as a JSON array; a single object or malformed JSON is rejected.
     """
     try:
         findings = json.loads(findings_json)
@@ -5407,13 +5495,14 @@ async def list_findings(
     control_id: str = "",
     status: str = "",
 ) -> dict:
-    """List negative findings for a threat model.
+    """List negative findings recorded on a threat model. Read-only.
+
+    Returns finding rows with their lifecycle status; use to triage gaps or to find a ``finding_id`` for ``update_finding`` / ``preview_finding_remediation``. Each row carries an ``origin`` ("own" for findings recorded on this model, "inherited" for findings contributed through model composition, with ``inherited_from_*`` context); inherited findings are included in the listing.
 
     Args:
         model_id: ID of the threat model.
-        control_id: Optional filter by control ID.
-        status: Optional filter: "discovered", "acknowledged", "remediated",
-            "verified", "dismissed".
+        control_id: Optional filter to findings on one control. Empty (default) returns findings for all controls.
+        status: Optional lifecycle filter, one of "discovered", "acknowledged", "remediated", "verified", "dismissed". Empty (default) returns all statuses.
     """
     try:
         return _dump(await _get_client().list_findings(model_id, control_id, status))
@@ -5431,15 +5520,17 @@ async def update_finding(
     reason: str = "",
     remediation_assertion_ids: str = "",
 ) -> dict:
-    """Update lifecycle status of a finding.
+    """Advance a finding through its lifecycle. Mutating: updates the finding's status and metadata.
+
+    Use to acknowledge, remediate, verify, or dismiss a finding previously recorded by ``submit_findings`` / ``list_findings``. This records a manual status transition; for gaps whose kind has an automatic fix, ``preview_finding_remediation`` + ``apply_finding_remediation`` perform the actual cleanup instead.
 
     Args:
         model_id: ID of the threat model.
-        finding_id: ID of the finding.
-        status: New status.
-        notes: Optional notes.
-        reason: Optional reason (required for dismissal).
-        remediation_assertion_ids: Comma-separated assertion IDs linking fix.
+        finding_id: ID of the finding to update.
+        status: New lifecycle status, one of "discovered", "acknowledged", "remediated", "verified", "dismissed".
+        notes: Optional free-text notes recorded on the finding.
+        reason: Optional rationale; required when dismissing (status="dismissed").
+        remediation_assertion_ids: Optional comma-separated assertion IDs that evidence the fix, linking the remediation to the assertions that prove it. Empty by default.
     """
     try:
         return _dump(await _get_client().update_finding(
@@ -5649,14 +5740,13 @@ async def get_scan_prompt(
     model_id: str,
     control_id: str = "",
 ) -> dict:
-    """Get scan prompt to guide codebase gap discovery.
+    """Get guidance prompts for scanning a codebase to discover control gaps. Read-only.
 
-    Returns prompts instructing agent what to look for when scanning
-    codebase against controls. Only includes NOT_IMPLEMENTED controls.
+    Returns prompts telling the agent what evidence to look for per control; only NOT_IMPLEMENTED controls are included (implemented ones need no scan). Use this to drive a gap-discovery pass, then record what is missing with ``submit_findings`` and what is present with ``submit_assertions``.
 
     Args:
         model_id: ID of the threat model.
-        control_id: Optional specific control ID.
+        control_id: Optional single control to scope the prompt to. Empty (default) returns prompts for all not-yet-implemented controls.
     """
     try:
         return _dump(await _get_client().get_scan_prompt(model_id, control_id))
@@ -5671,13 +5761,12 @@ async def get_scan_prompt(
 
 @mcp.tool()
 async def complete_setup_step(server_version: str, step_id: str) -> dict:
-    """Mark an onboarding setup step as done.
+    """Mark one onboarding setup step as done. Mutating: updates the workspace onboarding checklist. Call after actually performing the corresponding setup action on the user's behalf.
 
-    Call after completing a setup action on behalf of the user.
+    Check current progress with ``get_setup_status`` first to avoid re-marking completed steps. An unrecognized ``step_id`` is rejected without any state change.
 
     Args:
-        step_id: One of: mcp_configured, mipiti_verify_installed,
-            ci_secret_added, ci_pipeline_added.
+        step_id: The step to mark complete, one of "mcp_configured", "mipiti_verify_installed", "ci_secret_added", "ci_pipeline_added".
     """
     valid = {"mcp_configured", "mipiti_verify_installed", "ci_secret_added", "ci_pipeline_added"}
     if step_id not in valid:
@@ -5690,11 +5779,9 @@ async def complete_setup_step(server_version: str, step_id: str) -> dict:
 
 @mcp.tool()
 async def get_setup_status(server_version: str) -> dict:
-    """Get project onboarding status.
+    """Get the workspace onboarding checklist with completed and pending steps. Read-only.
 
-    Returns the setup checklist with completed and pending steps.
-    Check this before suggesting setup actions to avoid repeating
-    steps that are already done.
+    Call this before suggesting or performing setup actions so already-done steps aren't repeated; mark a step done with ``complete_setup_step``. Takes no arguments beyond the version header.
     """
     try:
         return await _get_client().get_setup_status()
@@ -5804,11 +5891,13 @@ async def edit_trust_boundary(
 
 @mcp.tool()
 async def remove_trust_boundary(server_version: str, model_id: str, tb_id: str) -> dict:
-    """Remove a trust boundary. Creates a new model version.
+    """Remove a trust boundary from a model. Mutating and destructive: deletes the boundary and creates a new model version.
+
+    Removing a boundary widens reachability — any attacker vectors the boundary was filtering now pass freely, and its ``sealed``/isolation claim is dropped, so CO reachability verdicts past it can flip toward reachable/indeterminate. To change a boundary's filter or seal without deleting it, use ``edit_trust_boundary`` instead.
 
     Args:
         model_id: ID of the threat model.
-        tb_id: ID of the trust boundary to remove.
+        tb_id: ID of the trust boundary to remove (e.g., "TB1").
     """
     try:
         return await _get_client().remove_trust_boundary(model_id, tb_id)
@@ -5928,17 +6017,24 @@ async def edit_assumption(
 
     Args:
         model_id: ID of the threat model.
-        assumption_id: ID of the assumption (e.g., "AS1").
-        description: New description.
-        linked_co_ids: New comma-separated CO IDs (replaces existing linkage).
-        exclusion_attacker_id, exclusion_attacker_vector,
-        exclusion_asset_id, exclusion_asset_component_id,
-        exclusion_property_match, exclusion_co_ids: Same semantics as
-            on ``add_assumption`` — supplying any of them rewrites the
-            predicate.
-        clear_exclusion: When True, clears the predicate. Mutually
-            exclusive with the exclusion_* params (those win if both
-            are sent).
+        assumption_id: ID of the assumption to edit (e.g., "AS1").
+        description: New description (omit to leave unchanged).
+        linked_co_ids: New comma-separated CO IDs; replaces the existing
+            linkage (omit to leave unchanged).
+        exclusion_attacker_id: Predicate match — "*" wildcard or a concrete
+            attacker ID.
+        exclusion_attacker_vector: One of "Network" | "Adjacent" | "Local" |
+            "Physical" | "*".
+        exclusion_asset_id: "*" or a concrete asset ID.
+        exclusion_asset_component_id: "*" or a concrete component ID.
+        exclusion_property_match: "C" | "I" | "A" | "U" | "*".
+        exclusion_co_ids: Comma-separated CO IDs the predicate matches
+            explicitly; when non-empty, overrides the match fields. Supplying
+            any exclusion_* param rewrites the whole predicate (unspecified
+            fields default to "*").
+        clear_exclusion: When True, removes the predicate entirely (the
+            assumption becomes prose-only). Mutually exclusive with the
+            exclusion_* params — if both are sent, the exclusion_* params win.
     """
     kwargs: dict = {}
     if description is not None:
@@ -6031,11 +6127,15 @@ async def submit_attestation(
 
 @mcp.tool()
 async def list_attestations(server_version: str, model_id: str, assumption_id: str) -> dict:
-    """List attestation history for an assumption.
+    """List an assumption's attestation history. Read-only; no side effects.
+
+    Returns the chronological record of attestation events recorded against the assumption (each with its actor, timestamp, and status/expiry as recorded), so you can trace why the assumption is currently attested, expired, or never attested. An assumption only mitigates its control objectives while it is active AND currently attested, so use this to diagnose coverage that depends on an attestation.
+
+    To record a new attestation use submit_attestation; for the assumption's current fields (status, description) use get_assumption.
 
     Args:
         model_id: ID of the threat model.
-        assumption_id: ID of the assumption.
+        assumption_id: ID of the assumption whose attestation history to list.
     """
     try:
         return await _get_client().list_attestations(model_id, assumption_id)
@@ -6081,14 +6181,15 @@ async def assume_control(
 
 @mcp.tool()
 async def unassume_control(server_version: str, model_id: str, control_id: str) -> dict:
-    """Clear the externally-handled status on a control.
+    """Clear a control's externally-handled status. Mutating.
 
-    The control reverts to not_implemented and needs to be implemented
-    by the system owner.
+    Shorthand inverse of assume_control: it removes the single-assumption external-handling linkage (group 1 in the common case) so the control is no longer counted as externally handled. The control reverts to not_implemented and must be implemented by the system owner. The referenced assumption itself is NOT deleted — only this control's linkage to it is removed.
+
+    For controls with multiple groups or AND/OR structure, prefer set_control_assumption_groups (pass {} to clear everything, or resubmit the groups you want to keep). Inspect the current structure first with get_control_assumption_groups.
 
     Args:
         model_id: ID of the threat model.
-        control_id: ID of the control.
+        control_id: ID of the control (e.g., "CTRL-03").
     """
     try:
         client = _get_client()
@@ -6311,7 +6412,18 @@ async def generate_functional_objectives(
 
 @mcp.tool()
 async def list_capabilities(server_version: str, model_id: str) -> dict:
-    """List the capabilities (behaviours the feature must deliver) for a model."""
+    """List every capability (a behaviour the feature must deliver) for a model.
+
+    Read-only; no side effects. Use this to enumerate a model's capabilities
+    (e.g. before reviewing functional objectives). To fetch one capability's
+    full detail use ``get_capability`` instead.
+
+    Args:
+        model_id: ID of the threat model whose capabilities to list.
+
+    Returns a list of capabilities, each with its id, name/description, and a
+    summary of its component/asset bindings.
+    """
     try:
         return _dump(await _get_client().list_capabilities(model_id))
     except Exception as exc:
@@ -6320,7 +6432,18 @@ async def list_capabilities(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def get_capability(server_version: str, model_id: str, capability_id: str) -> dict:
-    """Get a single capability with its component and asset bindings."""
+    """Get one capability with its component and asset bindings.
+
+    Read-only; no side effects. Use when you already have a ``capability_id``
+    (e.g. from ``list_capabilities``) and need its full detail; to enumerate
+    all capabilities of a model, use ``list_capabilities`` instead.
+
+    Args:
+        model_id: ID of the threat model the capability belongs to.
+        capability_id: ID of the capability to fetch.
+
+    Returns the capability with its bound components and assets.
+    """
     try:
         return _dump(await _get_client().get_capability(model_id, capability_id))
     except Exception as exc:
@@ -6329,7 +6452,19 @@ async def get_capability(server_version: str, model_id: str, capability_id: str)
 
 @mcp.tool()
 async def list_functional_objectives(server_version: str, model_id: str) -> dict:
-    """List the functional objectives (Capability × Condition test plan)."""
+    """List every functional objective for a model.
+
+    Each functional objective is a Capability × Condition test plan expressed
+    as a Given-When-Then statement. Read-only; no side effects. Use this to
+    enumerate the functional test plan; for one objective's detail use
+    ``get_functional_objective``, and for pass/fail coverage state use
+    ``get_functional_coverage``.
+
+    Args:
+        model_id: ID of the threat model whose functional objectives to list.
+
+    Returns the list of functional objectives.
+    """
     try:
         return _dump(await _get_client().list_functional_objectives(model_id))
     except Exception as exc:
@@ -6340,7 +6475,18 @@ async def list_functional_objectives(server_version: str, model_id: str) -> dict
 async def get_functional_objective(
     server_version: str, model_id: str, functional_objective_id: str,
 ) -> dict:
-    """Get a single functional objective (its Given-When-Then statement)."""
+    """Get one functional objective, including its Given-When-Then statement.
+
+    Read-only; no side effects. Reports the objective's capability and
+    condition and its current test state. Use with a ``functional_objective_id``
+    from ``list_functional_objectives``; to enumerate all, use that tool.
+
+    Args:
+        model_id: ID of the threat model the objective belongs to.
+        functional_objective_id: ID of the functional objective to fetch.
+
+    Returns the functional objective.
+    """
     try:
         return _dump(
             await _get_client().get_functional_objective(model_id, functional_objective_id)
@@ -6351,9 +6497,19 @@ async def get_functional_objective(
 
 @mcp.tool()
 async def get_functional_coverage(server_version: str, model_id: str) -> dict:
-    """Get the functional coverage report — per-objective state (verified /
+    """Get the full functional coverage report for a model.
+
+    Read-only; no side effects. Returns per-objective state (verified /
     covered / failing / untested), the Capabilities × Conditions matrix, and
-    the applicable / missing-objective / not-applicable cell accounting."""
+    the applicable / missing-objective / not-applicable cell accounting. This
+    is the complete picture; when you only need the actionable subset (what to
+    implement or fix next), use ``check_functional_gaps`` instead.
+
+    Args:
+        model_id: ID of the threat model whose functional coverage to report.
+
+    Returns the coverage report (matrix + per-objective states + cell counts).
+    """
     try:
         return _dump(await _get_client().get_functional_coverage(model_id))
     except Exception as exc:
@@ -6362,8 +6518,19 @@ async def get_functional_coverage(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def check_functional_gaps(server_version: str, model_id: str) -> dict:
-    """Get the actionable functional gaps: applicable conditions with no
-    objective yet, and objectives that are failing or have no passing test."""
+    """Get the actionable functional gaps for a model.
+
+    Read-only; no side effects. Returns the subset of the coverage report that
+    needs action: applicable conditions with no objective yet, and objectives
+    that are failing or have no passing test. Use this to decide what to
+    implement or fix next; for the complete coverage matrix and all states use
+    ``get_functional_coverage`` instead.
+
+    Args:
+        model_id: ID of the threat model to analyse for functional gaps.
+
+    Returns the actionable gaps (missing objectives + failing/untested ones).
+    """
     try:
         return _dump(await _get_client().get_functional_gaps(model_id))
     except Exception as exc:
@@ -6372,13 +6539,26 @@ async def check_functional_gaps(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def get_functional_scan_prompt(server_version: str, model_id: str) -> dict:
-    """Get the agent brief for functional conformance. Generation specifies the
-    functional tests, so this returns, for each test not yet verified, its
-    implementation brief and the objectives it proves. Complete each
-    instruction by implementing the described test and submitting TEST_EXISTS +
-    TEST_PASSES assertions with submit_functional_tests so CI verifies it. Also
-    reports objectives_without_tests (regenerate or add a test) and
-    missing_objectives (applicable conditions with no objective yet)."""
+    """Get the agent brief for implementing functional-conformance tests.
+
+    Read-only; no side effects (it only returns instructions — it does not
+    write tests or assertions). Generation specifies the functional tests, so
+    for each test not yet verified this returns its implementation brief and
+    the objectives it proves. Also reports ``objectives_without_tests``
+    (regenerate or add a test) and ``missing_objectives`` (applicable
+    conditions with no objective yet).
+
+    Use this to drive test implementation, then complete each instruction by
+    writing the described test and calling ``submit_functional_tests`` with
+    TEST_EXISTS + TEST_PASSES assertions so CI verifies it. For the resulting
+    pass/fail state afterwards, read ``get_functional_coverage``.
+
+    Args:
+        model_id: ID of the threat model to build the functional brief for.
+
+    Returns the per-test implementation briefs plus objectives_without_tests
+    and missing_objectives.
+    """
     try:
         return _dump(await _get_client().get_functional_scan_prompt(model_id))
     except Exception as exc:
@@ -6391,18 +6571,15 @@ async def add_functional_test(
     functional_objective_ids: str, status: str = "not_implemented",
     component_ids: str = "",
 ) -> dict:
-    """Manually register a functional test that satisfies one or more objectives.
+    """Hand-author a single functional test and map it to one or more objectives. Mutating.
 
-    Generation already specifies the tests to implement, so this is for hand-
-    authoring an extra test; a manually-added test is preserved when the model
-    is regenerated.
+    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_PASSES evidence via submit_functional_tests.
 
     Args:
         model_id: ID of the threat model.
         description: What the test proves.
-        functional_objective_ids: Comma-separated objective ids the test satisfies.
-        status: not_implemented | implemented | verified (an operator claim;
-            an independent CI run is what actually verifies it).
+        functional_objective_ids: Comma-separated objective ids the test satisfies (at least one required; get them from list_functional_objectives).
+        status: not_implemented | implemented | verified — an operator claim only; an independent CI run is what actually verifies the test. Defaults to not_implemented.
         component_ids: Comma-separated component ids the test exercises (optional).
     """
     fo_ids = [x.strip() for x in functional_objective_ids.split(",") if x.strip()]
@@ -6421,26 +6598,13 @@ async def add_functional_test(
 async def import_functional_tests(
     server_version: str, model_id: str, tests_json: str,
 ) -> dict:
-    """Register existing tests from the codebase against a model's functional
-    objectives, so tests you already have count toward functional conformance —
-    not only Mipiti-specified tests.
+    """Register tests that already exist in your codebase against a model's functional objectives, so tests you already have count toward functional conformance — not only Mipiti-specified tests. Mutating (bulk).
 
-    Scan the repo's test suite and pass the tests here. Optionally associate each
-    with the objective ids it covers (from list_functional_objectives); the
-    platform verifies each association is applicable before accepting it and
-    returns any it rejected under ``rejected_mappings``. A test with no (or a
-    rejected) association is still imported, unmapped, so it can be associated
-    later.
+    Scan the repo's test suite and pass the tests here. Optionally associate each with the objective ids it covers (from list_functional_objectives); the platform verifies each association is applicable before accepting it and returns any it rejected under ``rejected_mappings``. A test with no (or a rejected) association is still imported, unmapped, so it can be associated later (see suggest_functional_test_mappings / associate_functional_test). For a single hand-authored test, use add_functional_test instead.
 
     Args:
         model_id: ID of the threat model.
-        tests_json: A JSON array of test objects. Each object supports
-            ``test_name``, ``file_path``, ``framework``, ``description``,
-            ``status`` (not_implemented | implemented | verified — an operator
-            claim; an independent CI run is what verifies it), and
-            ``functional_objective_ids`` (list of objective ids the test covers).
-            At least ``test_name`` or ``description`` is required per test; the
-            rest are optional.
+        tests_json: A JSON array of test objects. Each object supports ``test_name``, ``file_path``, ``framework``, ``description``, ``status`` (not_implemented | implemented | verified — an operator claim; an independent CI run is what verifies it), and ``functional_objective_ids`` (list of objective ids the test covers). At least ``test_name`` or ``description`` is required per test; the rest are optional.
     """
     try:
         tests = json.loads(tests_json)
@@ -6459,15 +6623,14 @@ async def submit_functional_tests(
     server_version: str, model_id: str, functional_test_id: str,
     assertions_json: str,
 ) -> dict:
-    """Submit evidence assertions for a functional test (verified in CI).
+    """Attach machine-verifiable evidence assertions to a functional test so CI can verify it. Mutating.
+
+    This is the functional-conformance analog of submit_assertions (which covers security controls): it binds assertions such as "the test exists" and "the test passes" to a functional test, and an independent CI run against the named repo is what turns an operator's "verified" claim into verified state. Call it after the test is implemented (e.g. following get_functional_scan_prompt), then read the resulting state via get_functional_coverage or get_functional_test_sufficiency.
 
     Args:
         model_id: ID of the threat model.
         functional_test_id: The functional test the assertions prove.
-        assertions_json: JSON array of assertions, each
-            {"type": "test_passes"|..., "params": {...}, "description": "...",
-             "repo": "<owner>/<repo>"}. Each assertion must carry an explicit
-            repo (or the "no_repo" sentinel).
+        assertions_json: JSON array of assertion objects, each {"type": "test_passes" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
     """
     try:
         assertions = json.loads(assertions_json)
@@ -6540,11 +6703,11 @@ async def associate_functional_test(
 async def get_functional_satisfaction_groups(
     server_version: str, model_id: str, functional_objective_id: str,
 ) -> dict:
-    """Get the satisfaction groups for a functional objective.
+    """Read the satisfaction-group structure for a functional objective. Read-only; no side effects.
 
-    A satisfaction group is a set of functional tests that together satisfy the
-    objective; the objective is satisfied when any one complete group is
-    verified. Returns the current groups plus any ungrouped tests.
+    A satisfaction group is a set of functional tests that together satisfy the objective: AND within a group (every test in the group must be verified), OR across groups (any one complete group satisfies the objective). Returns the current numbered groups plus any tests associated with the objective but not placed in a group.
+
+    Use before set_functional_satisfaction_groups to see the current structure, or to trace why an objective is / isn't satisfied. This is the functional analog of get_control_assumption_groups / get_mitigation_groups.
 
     Args:
         model_id: ID of the threat model.
@@ -6563,19 +6726,15 @@ async def set_functional_satisfaction_groups(
     server_version: str, model_id: str, functional_objective_id: str,
     groups_json: str, ungrouped: str = "",
 ) -> dict:
-    """Set the satisfaction groups for a functional objective.
+    """Declaratively set (replace) a functional objective's satisfaction groups. Mutating.
 
-    Replaces the objective's groups wholesale. Each group is a set of functional
-    tests that together satisfy the objective; the objective is satisfied when
-    any one complete group is verified.
+    Replaces the objective's group structure wholesale. Each group is a set of functional tests that together satisfy the objective (AND within a group); the objective counts as satisfied when any one complete group has all its tests verified (OR across groups). Tests you want to keep associated with the objective but outside any group go in ``ungrouped``. Unlike set_control_assumption_groups, there is no AI relevance gate — the structure you submit is applied as-is. Read the current state first with get_functional_satisfaction_groups.
 
     Args:
         model_id: ID of the threat model.
         functional_objective_id: The objective whose groups to set.
-        groups_json: A JSON object mapping group label to a list of functional
-            test ids, e.g. ``{"1": ["FT-1", "FT-2"], "2": ["FT-3"]}``.
-        ungrouped: Comma-separated functional-test ids to keep unassigned to any
-            group (optional).
+        groups_json: JSON object mapping group label to a list of functional test ids, e.g. ``{"1": ["FT-1", "FT-2"], "2": ["FT-3"]}``. Pass ``{}`` to clear all groups.
+        ungrouped: Comma-separated functional-test ids to keep associated with the objective but unassigned to any group (optional).
     """
     try:
         groups = json.loads(groups_json)
@@ -6596,10 +6755,9 @@ async def set_functional_satisfaction_groups(
 async def get_functional_test_sufficiency(
     server_version: str, model_id: str, functional_test_id: str,
 ) -> dict:
-    """Get the sufficiency verdict for a functional test.
+    """Read the sufficiency verdict for a functional test. Read-only; no side effects.
 
-    Reports whether the test's evidence adequately proves the objectives it is
-    associated with, along with the reasoning behind the verdict.
+    Reports whether the test's attached evidence adequately proves the objective(s) it is associated with, together with the reasoning behind the verdict. This is the functional-conformance analog of get_sufficiency (which covers security controls). The verdict is computed asynchronously after evidence is submitted, so it may read as pending or absent until evaluation completes.
 
     Args:
         model_id: ID of the threat model.
