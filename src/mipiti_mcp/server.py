@@ -2072,6 +2072,11 @@ async def get_control_generation_status(
     - ``elapsed_seconds`` — time since queued; if it stays ``queued`` with a
       large elapsed, generation may not be progressing — surface that instead of
       polling forever.
+
+    Read-only; no side effects (polling does not trigger or alter generation).
+
+    Args:
+        model_id: ID of the threat model whose control-generation status to poll.
     """
     try:
         return _dump(
@@ -4555,6 +4560,10 @@ async def revalidate_threat_model_entities(
     May consume credits for the entities that need the deeper review; a model
     already in good shape costs nothing. Returns the updated model envelope:
     ``{"accepted": true, "model": {...}}``.
+
+    Args:
+        model_id: ID of the threat model whose assets and attackers to
+            re-validate.
     """
     try:
         return _dump(await _get_client().revalidate_entities(model_id))
@@ -4567,9 +4576,13 @@ async def revalidate_threat_model_entities(
 
 @mcp.tool()
 async def list_compliance_frameworks(server_version: str) -> dict:
-    """List available compliance frameworks.
+    """List the compliance frameworks available to map controls against.
 
-    Returns built-in frameworks (e.g., OWASP ASVS) and custom frameworks.
+    Read-only; no side effects. Returns both built-in frameworks (e.g. OWASP
+    ASVS) and any custom frameworks in the workspace. Use this to discover
+    framework identifiers before ``select_compliance_frameworks`` (activate one
+    for a model) or ``import_compliance_framework`` (add a custom one). Takes no
+    arguments beyond the version guard.
     """
     try:
         return _dump(await _get_client().list_compliance_frameworks())
@@ -4830,7 +4843,13 @@ async def auto_remediate(
 
 @mcp.tool()
 async def list_workspaces(server_version: str) -> dict:
-    """List workspaces the current user belongs to."""
+    """List the workspaces the current user belongs to.
+
+    Read-only; no side effects. Returns each workspace's id and name. Models,
+    controls, and compliance are all scoped to a workspace, so use this to
+    discover the workspace context you're operating in. Takes no arguments
+    beyond the version guard.
+    """
     try:
         return _dump(await _get_client().list_workspaces())
     except Exception as exc:
@@ -4892,7 +4911,14 @@ async def update_organization(
 
 @mcp.tool()
 async def list_systems(server_version: str) -> dict:
-    """List all saved systems in current workspace."""
+    """List all saved systems in the current workspace.
+
+    Read-only; no side effects. A system is a named grouping of threat models
+    for portfolio-level risk and compliance reporting. Use this to discover
+    system ids (e.g. before ``get_system`` or ``get_system_risk_view``); to
+    create one use ``create_system``. Takes no arguments beyond the version
+    guard.
+    """
     try:
         return _dump(await _get_client().list_systems())
     except Exception as exc:
@@ -5219,6 +5245,41 @@ async def submit_assertions(
     control_id: Optional[str] = None,
     assumption_id: Optional[str] = None,
 ) -> dict:
+    """Submit machine-verifiable assertions as evidence for a control or assumption.
+
+    Mutating: this persists new assertion records against the target. It does
+    NOT run verification itself — assertions are checked in CI (structurally,
+    then semantically) and cryptographically attested; submitting only records
+    the claims to be verified. To read existing assertions use
+    ``list_assertions``; to remove one use ``delete_assertion``.
+
+    Provide exactly one of ``control_id`` or ``assumption_id`` (never both, and
+    never neither).
+
+    Args:
+        model_id: ID of the threat model.
+        assertions_json: JSON string of an **array** of assertion objects. Each
+            object has:
+              - ``type`` (str): the assertion type, e.g. ``function_exists``,
+                ``function_calls``, ``class_exists``, ``pattern_matches``,
+                ``pattern_absent``, ``import_present``, ``decorator_present``,
+                ``test_passes`` (the full set is validated server-side).
+              - ``params`` (object): type-specific fields — e.g.
+                ``function_exists`` → ``{"file", "name"}``; ``function_calls``
+                → ``{"file", "caller", "callee"}``; ``pattern_matches`` →
+                ``{"file", "pattern"}``.
+              - ``description`` (str): a human-readable statement of the claim.
+              - ``repo`` (str, optional): ``"org/repo"`` for multi-repo setups.
+            Must parse as a JSON array; a single object or malformed JSON is
+            rejected.
+        control_id: ID of the control the assertions prove (omit if using
+            assumption_id).
+        assumption_id: ID of the assumption the assertions prove (omit if using
+            control_id).
+
+    Returns the created assertions with their assigned ids and initial
+    verification status (pending until CI runs).
+    """
     if not control_id and not assumption_id:
         raise ToolError("Exactly one of control_id or assumption_id must be provided.")
     if control_id and assumption_id:
@@ -5928,17 +5989,24 @@ async def edit_assumption(
 
     Args:
         model_id: ID of the threat model.
-        assumption_id: ID of the assumption (e.g., "AS1").
-        description: New description.
-        linked_co_ids: New comma-separated CO IDs (replaces existing linkage).
-        exclusion_attacker_id, exclusion_attacker_vector,
-        exclusion_asset_id, exclusion_asset_component_id,
-        exclusion_property_match, exclusion_co_ids: Same semantics as
-            on ``add_assumption`` — supplying any of them rewrites the
-            predicate.
-        clear_exclusion: When True, clears the predicate. Mutually
-            exclusive with the exclusion_* params (those win if both
-            are sent).
+        assumption_id: ID of the assumption to edit (e.g., "AS1").
+        description: New description (omit to leave unchanged).
+        linked_co_ids: New comma-separated CO IDs; replaces the existing
+            linkage (omit to leave unchanged).
+        exclusion_attacker_id: Predicate match — "*" wildcard or a concrete
+            attacker ID.
+        exclusion_attacker_vector: One of "Network" | "Adjacent" | "Local" |
+            "Physical" | "*".
+        exclusion_asset_id: "*" or a concrete asset ID.
+        exclusion_asset_component_id: "*" or a concrete component ID.
+        exclusion_property_match: "C" | "I" | "A" | "U" | "*".
+        exclusion_co_ids: Comma-separated CO IDs the predicate matches
+            explicitly; when non-empty, overrides the match fields. Supplying
+            any exclusion_* param rewrites the whole predicate (unspecified
+            fields default to "*").
+        clear_exclusion: When True, removes the predicate entirely (the
+            assumption becomes prose-only). Mutually exclusive with the
+            exclusion_* params — if both are sent, the exclusion_* params win.
     """
     kwargs: dict = {}
     if description is not None:
@@ -6311,7 +6379,18 @@ async def generate_functional_objectives(
 
 @mcp.tool()
 async def list_capabilities(server_version: str, model_id: str) -> dict:
-    """List the capabilities (behaviours the feature must deliver) for a model."""
+    """List every capability (a behaviour the feature must deliver) for a model.
+
+    Read-only; no side effects. Use this to enumerate a model's capabilities
+    (e.g. before reviewing functional objectives). To fetch one capability's
+    full detail use ``get_capability`` instead.
+
+    Args:
+        model_id: ID of the threat model whose capabilities to list.
+
+    Returns a list of capabilities, each with its id, name/description, and a
+    summary of its component/asset bindings.
+    """
     try:
         return _dump(await _get_client().list_capabilities(model_id))
     except Exception as exc:
@@ -6320,7 +6399,18 @@ async def list_capabilities(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def get_capability(server_version: str, model_id: str, capability_id: str) -> dict:
-    """Get a single capability with its component and asset bindings."""
+    """Get one capability with its component and asset bindings.
+
+    Read-only; no side effects. Use when you already have a ``capability_id``
+    (e.g. from ``list_capabilities``) and need its full detail; to enumerate
+    all capabilities of a model, use ``list_capabilities`` instead.
+
+    Args:
+        model_id: ID of the threat model the capability belongs to.
+        capability_id: ID of the capability to fetch.
+
+    Returns the capability with its bound components and assets.
+    """
     try:
         return _dump(await _get_client().get_capability(model_id, capability_id))
     except Exception as exc:
@@ -6329,7 +6419,19 @@ async def get_capability(server_version: str, model_id: str, capability_id: str)
 
 @mcp.tool()
 async def list_functional_objectives(server_version: str, model_id: str) -> dict:
-    """List the functional objectives (Capability × Condition test plan)."""
+    """List every functional objective for a model.
+
+    Each functional objective is a Capability × Condition test plan expressed
+    as a Given-When-Then statement. Read-only; no side effects. Use this to
+    enumerate the functional test plan; for one objective's detail use
+    ``get_functional_objective``, and for pass/fail coverage state use
+    ``get_functional_coverage``.
+
+    Args:
+        model_id: ID of the threat model whose functional objectives to list.
+
+    Returns the list of functional objectives.
+    """
     try:
         return _dump(await _get_client().list_functional_objectives(model_id))
     except Exception as exc:
@@ -6340,7 +6442,18 @@ async def list_functional_objectives(server_version: str, model_id: str) -> dict
 async def get_functional_objective(
     server_version: str, model_id: str, functional_objective_id: str,
 ) -> dict:
-    """Get a single functional objective (its Given-When-Then statement)."""
+    """Get one functional objective, including its Given-When-Then statement.
+
+    Read-only; no side effects. Reports the objective's capability and
+    condition and its current test state. Use with a ``functional_objective_id``
+    from ``list_functional_objectives``; to enumerate all, use that tool.
+
+    Args:
+        model_id: ID of the threat model the objective belongs to.
+        functional_objective_id: ID of the functional objective to fetch.
+
+    Returns the functional objective.
+    """
     try:
         return _dump(
             await _get_client().get_functional_objective(model_id, functional_objective_id)
@@ -6351,9 +6464,19 @@ async def get_functional_objective(
 
 @mcp.tool()
 async def get_functional_coverage(server_version: str, model_id: str) -> dict:
-    """Get the functional coverage report — per-objective state (verified /
+    """Get the full functional coverage report for a model.
+
+    Read-only; no side effects. Returns per-objective state (verified /
     covered / failing / untested), the Capabilities × Conditions matrix, and
-    the applicable / missing-objective / not-applicable cell accounting."""
+    the applicable / missing-objective / not-applicable cell accounting. This
+    is the complete picture; when you only need the actionable subset (what to
+    implement or fix next), use ``check_functional_gaps`` instead.
+
+    Args:
+        model_id: ID of the threat model whose functional coverage to report.
+
+    Returns the coverage report (matrix + per-objective states + cell counts).
+    """
     try:
         return _dump(await _get_client().get_functional_coverage(model_id))
     except Exception as exc:
@@ -6362,8 +6485,19 @@ async def get_functional_coverage(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def check_functional_gaps(server_version: str, model_id: str) -> dict:
-    """Get the actionable functional gaps: applicable conditions with no
-    objective yet, and objectives that are failing or have no passing test."""
+    """Get the actionable functional gaps for a model.
+
+    Read-only; no side effects. Returns the subset of the coverage report that
+    needs action: applicable conditions with no objective yet, and objectives
+    that are failing or have no passing test. Use this to decide what to
+    implement or fix next; for the complete coverage matrix and all states use
+    ``get_functional_coverage`` instead.
+
+    Args:
+        model_id: ID of the threat model to analyse for functional gaps.
+
+    Returns the actionable gaps (missing objectives + failing/untested ones).
+    """
     try:
         return _dump(await _get_client().get_functional_gaps(model_id))
     except Exception as exc:
@@ -6372,13 +6506,26 @@ async def check_functional_gaps(server_version: str, model_id: str) -> dict:
 
 @mcp.tool()
 async def get_functional_scan_prompt(server_version: str, model_id: str) -> dict:
-    """Get the agent brief for functional conformance. Generation specifies the
-    functional tests, so this returns, for each test not yet verified, its
-    implementation brief and the objectives it proves. Complete each
-    instruction by implementing the described test and submitting TEST_EXISTS +
-    TEST_PASSES assertions with submit_functional_tests so CI verifies it. Also
-    reports objectives_without_tests (regenerate or add a test) and
-    missing_objectives (applicable conditions with no objective yet)."""
+    """Get the agent brief for implementing functional-conformance tests.
+
+    Read-only; no side effects (it only returns instructions — it does not
+    write tests or assertions). Generation specifies the functional tests, so
+    for each test not yet verified this returns its implementation brief and
+    the objectives it proves. Also reports ``objectives_without_tests``
+    (regenerate or add a test) and ``missing_objectives`` (applicable
+    conditions with no objective yet).
+
+    Use this to drive test implementation, then complete each instruction by
+    writing the described test and calling ``submit_functional_tests`` with
+    TEST_EXISTS + TEST_PASSES assertions so CI verifies it. For the resulting
+    pass/fail state afterwards, read ``get_functional_coverage``.
+
+    Args:
+        model_id: ID of the threat model to build the functional brief for.
+
+    Returns the per-test implementation briefs plus objectives_without_tests
+    and missing_objectives.
+    """
     try:
         return _dump(await _get_client().get_functional_scan_prompt(model_id))
     except Exception as exc:
