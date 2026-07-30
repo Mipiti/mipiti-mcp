@@ -1656,6 +1656,20 @@ class MipitiClient:
             f"/api/models/{model_id}/verdict-divergence/recompute/quote",
         )
 
+    async def retry_verdicts(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/verdicts/retry.
+
+        Re-trigger the model's parked/errored verdict re-evals — every kind —
+        by clearing the failure budget on only the failed/backing-off slots so
+        the worker re-runs them on the next tick. Non-destructive: no
+        assertions, controls, or verdict content change.
+
+        Returns ``{"model_id", "model_version", "retried_slots", "governor"}``.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/verdicts/retry", {},
+        )
+
     # ------------------------------------------------------------------
     # Assurance
     # ------------------------------------------------------------------

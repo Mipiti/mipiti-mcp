@@ -4549,6 +4549,45 @@ async def recompute_verdicts(
 
 
 @mcp.tool()
+async def retry_verdicts(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Re-trigger a model's parked verdict re-evals after a transient failure.
+
+    When a verdict re-evaluation fails transiently — a provider outage,
+    exhausted credits, or a timeout — it is parked and reads as "unavailable /
+    treated as unverified", recovering only after a delay. This forces an
+    immediate, non-destructive re-run of ONLY the parked/failed re-eval slots,
+    across every verdict kind (coverage, group-sufficiency, per-control
+    sufficiency, coherence). It changes no assertions, controls, or verdict
+    content, so no IDs churn. Evaluation runs in the background — re-read the
+    sufficiency or verification report shortly after to see updated verdicts.
+
+    Prefer this over ``recompute_verdicts`` when verdicts are stuck due to an
+    outage: ``recompute_verdicts`` force-enqueues coverage + group-sufficiency
+    for the whole model (metered per its estimate) and cannot un-park a job
+    whose inputs are unchanged, whereas this re-arms exactly the failed slots
+    and covers per-control sufficiency + coherence too.
+
+    Args:
+        model_id: ID of the threat model whose parked verdicts to retry.
+
+    Returns:
+        Dict with:
+        - model_id, model_version
+        - retried_slots: number of parked/failed re-eval slots re-armed
+          (0 when nothing was parked)
+        - governor: spend status — when ``governor.exhausted`` is true, re-runs
+          resume automatically at ``governor.resets_at``.
+    """
+    try:
+        return _dump(await _get_client().retry_verdicts(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_recompute_quote(
     server_version: str,
     model_id: str,
