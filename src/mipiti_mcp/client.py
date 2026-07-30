@@ -91,6 +91,11 @@ class MipitiClient:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             headers = dict(self._auth_headers) if self._auth_headers else {"X-API-Key": self.api_key}
+            # Tag every request as MCP-originated. The API reads this on the
+            # create/generate path to attribute new models to the MCP surface
+            # (source_system="mcp") instead of defaulting to "web". Uses
+            # setdefault so an explicit caller-supplied value is preserved.
+            headers.setdefault("X-Mipiti-Source-System", "mcp")
             self._client = httpx.AsyncClient(
                 base_url=self.api_url,
                 headers=headers,
