@@ -50,6 +50,47 @@ def test_auth_headers_bypass_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert http.headers["Authorization"] == "Bearer tok"
 
 
+def test_source_system_header_default() -> None:
+    """The client stamps X-Mipiti-Source-System: mcp on its default headers
+    so models it creates are attributed to the MCP surface."""
+    client = MipitiClient(api_key="k", api_url="https://test.api")
+    http = client._get_client()
+    assert http.headers["X-Mipiti-Source-System"] == "mcp"
+    # It sits alongside auth, never replacing it.
+    assert http.headers["X-API-Key"] == "k"
+
+
+def test_source_system_header_with_auth_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MCP source tag is added even when the caller supplies its own
+    auth headers, without disturbing them."""
+    monkeypatch.delenv("MIPITI_API_KEY", raising=False)
+    client = MipitiClient(
+        api_url="https://test.api",
+        auth_headers={"Authorization": "Bearer tok"},
+    )
+    http = client._get_client()
+    assert http.headers["X-Mipiti-Source-System"] == "mcp"
+    assert http.headers["Authorization"] == "Bearer tok"
+
+
+def test_source_system_header_caller_value_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit caller-supplied X-Mipiti-Source-System is not overwritten."""
+    monkeypatch.delenv("MIPITI_API_KEY", raising=False)
+    client = MipitiClient(
+        api_url="https://test.api",
+        auth_headers={
+            "Authorization": "Bearer tok",
+            "X-Mipiti-Source-System": "custom",
+        },
+    )
+    http = client._get_client()
+    assert http.headers["X-Mipiti-Source-System"] == "custom"
+
+
 # ------------------------------------------------------------------
 # REST endpoint tests
 # ------------------------------------------------------------------
@@ -722,6 +763,28 @@ async def test_stream_generate_omits_parent_id_when_absent(mock_env: None) -> No
     await client.generate_threat_model("Flat service")
     body = json.loads(route.calls.last.request.content)
     assert "parent_id" not in body
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_generate_sends_source_system_header(mock_env: None) -> None:
+    """The generate/create request carries X-Mipiti-Source-System: mcp so the
+    API tags the new model as MCP-originated instead of defaulting to web."""
+    sse_payload = _build_sse_bytes([
+        ("result", {"type": "result", "markdown": "# Model", "csv": "", "threat_model": SAMPLE_THREAT_MODEL, "model_id": "tm-001", "version": 1}),
+    ])
+    route = respx.post("https://test.api.mipiti.io/api/model/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_payload,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    client = MipitiClient()
+    await client.generate_threat_model("User login with OAuth")
+    assert route.calls.last.request.headers["X-Mipiti-Source-System"] == "mcp"
+    # Auth still rides alongside on the same request.
+    assert route.calls.last.request.headers["X-API-Key"] == "test-key-123"
     await client.close()
 
 
