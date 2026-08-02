@@ -4563,6 +4563,132 @@ async def reevaluate_threat_model_factors(
 
 
 @mcp.tool()
+async def get_verdict_divergence(
+    server_version: str,
+    model_id: str,
+    kind: str = "",
+    include_dismissed: bool = False,
+) -> dict:
+    """Where the LLM's verdicts disagree with the model's authored state.
+
+    Two coverage divergence kinds, distinguished by the LLM's ``p_covers``
+    (probability the control covers the CO), shown as "model confidence":
+      - ``missing_mapping``: HIGH p_covers, but the CO is NOT mapped — the LLM
+        is confident the control covers it, so it should be mapped. Accepting
+        ADDS the mapping.
+      - ``spurious_mapping``: LOW p_covers, but the CO IS mapped — the LLM is
+        confident the control does NOT cover it, so the mapping is likely wrong
+        and inflates apparent coverage. Accepting REMOVES the mapping.
+    Only confident rows surface; the uncertain middle band is dropped. So a
+    ~100%-confidence row is a strong "add" and a ~0%-confidence row is a strong
+    "remove" — both are actionable, in opposite directions.
+
+    Also returns ``group_sufficiency`` divergences (observation-only). Apply
+    coverage rows with ``accept_coverage_divergences``; set aside rows the
+    structural model got right with ``dismiss_verdict_divergences``.
+
+    Args:
+        model_id: ID of the threat model.
+        kind: Optional filter — "missing_mapping", "spurious_mapping", or
+            "group_sufficiency". Empty returns all kinds.
+        include_dismissed: When true, return ONLY previously-dismissed rows
+            (the undo view) instead of the active list.
+    """
+    try:
+        return _dump(await _get_client().get_verdict_divergence(
+            model_id, kind=(kind.strip() or None),
+            include_dismissed=include_dismissed,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def accept_coverage_divergences(
+    server_version: str,
+    model_id: str,
+    items: str,
+    change_reason: str,
+) -> dict:
+    """Accept a set of coverage divergences as mapping changes, in one batch.
+
+    Each accepted ``missing_mapping`` ADDS its CO to the control; each
+    ``spurious_mapping`` REMOVES it. Applied as one version per affected
+    control. Each item is validated independently — the response separates
+    ``applied`` from ``skipped`` (stale / would-orphan / already in that
+    state), so a partial batch still lands its valid items.
+
+    Read the rows first with ``get_verdict_divergence``; to accept only the
+    high-confidence ones, filter its coverage rows by ``p_covers`` (near 1.0
+    for missing_mapping, near 0.0 for spurious_mapping) before passing them
+    here.
+
+    Args:
+        model_id: ID of the threat model.
+        items: JSON array of {"control_id", "co_id", "kind"} objects, where
+            kind is "missing_mapping" or "spurious_mapping".
+        change_reason: Why these mapping changes are appropriate (min 10
+            chars). Recorded on every affected control's version history.
+    """
+    import json as _json
+
+    try:
+        parsed = _json.loads(items)
+    except (ValueError, TypeError) as exc:
+        raise ToolError("items must be a JSON array of divergence objects.") from exc
+    if not isinstance(parsed, list) or not parsed:
+        raise ToolError("items must be a non-empty JSON array.")
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().accept_coverage_divergences(
+            model_id, parsed, change_reason.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def dismiss_verdict_divergences(
+    server_version: str,
+    model_id: str,
+    items: str,
+    reason: str,
+) -> dict:
+    """Dismiss a set of divergences (the structural model was right, the LLM
+    was not) WITHOUT changing the model.
+
+    Use for rows you have reviewed and judged not valid. A dismissal is keyed
+    to the divergence's current verdict input hash, so it auto-clears (the row
+    reappears) once the underlying control or objective changes. Works for
+    coverage AND group_sufficiency rows.
+
+    Args:
+        model_id: ID of the threat model.
+        items: JSON array of {"kind", "co_id", "control_id"?, "group_id"?}
+            objects. control_id is required for coverage kinds; group_id for
+            group_sufficiency.
+        reason: Why these divergences are being set aside (min 1 char).
+    """
+    import json as _json
+
+    try:
+        parsed = _json.loads(items)
+    except (ValueError, TypeError) as exc:
+        raise ToolError("items must be a JSON array of divergence objects.") from exc
+    if not isinstance(parsed, list) or not parsed:
+        raise ToolError("items must be a non-empty JSON array.")
+    if not reason.strip():
+        raise ToolError("reason must not be empty.")
+    try:
+        return _dump(await _get_client().dismiss_verdict_divergences(
+            model_id, parsed, reason.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def recompute_verdicts(
     server_version: str,
     model_id: str,
