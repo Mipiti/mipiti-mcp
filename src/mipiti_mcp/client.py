@@ -683,6 +683,32 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def apply_control_changeset(
+        self,
+        model_id: str,
+        ops: list[dict],
+        change_reason: str,
+    ) -> dict:
+        """Apply a batch of control operations atomically as one transaction.
+
+        Ops (remap / delete / add / set_groups) all commit together or not at
+        all. Mapping-only — never re-authors a control's description, so kept or
+        reused controls keep their status, evidence, and assertions. The orphan
+        guard is evaluated on the final post-changeset state, so a delete paired
+        with a covering remap/add in the same batch is allowed.
+        """
+        body: dict[str, Any] = {
+            "ops": list(ops),
+            "change_reason": change_reason,
+        }
+        resp = await self._request_with_idempotency(
+            "POST",
+            f"/api/models/{model_id}/controls/changeset",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def assign_control_to_components(
         self,
         model_id: str,

@@ -2289,6 +2289,61 @@ async def remap_control(
 
 
 @mcp.tool()
+async def apply_control_changeset(
+    server_version: str,
+    model_id: str,
+    ops: str,
+    change_reason: str,
+) -> dict:
+    """Apply a batch of control operations atomically as ONE transaction.
+
+    Use this to reorganize a model's controls in a single step — for example
+    to deduplicate controls (remap several onto the right objectives and delete
+    the redundant ones at once), instead of many separate calls. All operations
+    commit together or not at all.
+
+    Mapping-only: remap/delete/set_groups change objective mappings and retire
+    controls but never re-author a control's description, so a kept or reused
+    control keeps its status, evidence, and assertions. The orphan guard is
+    evaluated on the FINAL state of the batch, so a delete paired with a
+    covering remap or add in the same changeset is allowed; a changeset that
+    would leave any previously-covered control objective uncovered is rejected
+    as a whole and nothing is written.
+
+    Args:
+        model_id: ID of the threat model.
+        ops: JSON array of operation objects. Each object has an "op" of
+            "remap", "delete", "add", or "set_groups":
+              - remap:      {"op": "remap", "control_id": "CTRL-03",
+                             "co_ids": ["CO1", "CO2"]}
+              - delete:     {"op": "delete", "control_id": "CTRL-09",
+                             "reason": "duplicate of CTRL-03"}
+              - add:        {"op": "add", "description": "...",
+                             "co_ids": ["CO5"], "mitigation_group": 1}
+              - set_groups: {"op": "set_groups", "co_id": "CO1",
+                             "groups": {"1": ["CTRL-03"], "2": ["CTRL-04"]}}
+        change_reason: Why this reorganization is appropriate (min 10 chars).
+            Recorded on every affected control's version history.
+    """
+    import json as _json
+
+    try:
+        parsed_ops = _json.loads(ops)
+    except (ValueError, TypeError) as exc:
+        raise ToolError("ops must be a JSON array of operation objects.") from exc
+    if not isinstance(parsed_ops, list) or not parsed_ops:
+        raise ToolError("ops must be a non-empty JSON array.")
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        return _dump(await _get_client().apply_control_changeset(
+            model_id, parsed_ops, change_reason.strip(),
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def assign_control_to_components(
     server_version: str,
     model_id: str,

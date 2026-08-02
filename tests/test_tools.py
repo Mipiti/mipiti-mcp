@@ -93,6 +93,7 @@ from mipiti_mcp.server import (
     submit_findings,
     refine_control,
     remap_control,
+    apply_control_changeset,
     reevaluate_threat_model_factors,
     revalidate_threat_model_entities,
     restore_asset,
@@ -5129,3 +5130,63 @@ class TestControlGenerationStatus:
             out = await generate_threat_model(
                 server_version="0", feature_description="x", ctx=ctx)
         assert "controls_status" not in out
+
+
+class TestApplyControlChangeset:
+    @pytest.mark.asyncio
+    async def test_forwards_parsed_ops_to_client(self) -> None:
+        result = {
+            "model_id": "tm-001", "model_version": 3,
+            "change_reason": "dedup restatements onto originals",
+            "applied": [
+                {"op": "remap", "control_id": "CTRL-03", "co_ids": ["CO1", "CO2"]},
+                {"op": "delete", "control_id": "CTRL-09"},
+            ],
+            "added_control_ids": [],
+            "controls_changed": ["CTRL-03", "CTRL-09"],
+        }
+        mock = _mock_client()
+        mock.apply_control_changeset = AsyncMock(return_value=result)
+        ops = json.dumps([
+            {"op": "remap", "control_id": "CTRL-03", "co_ids": ["CO1", "CO2"]},
+            {"op": "delete", "control_id": "CTRL-09", "reason": "duplicate"},
+        ])
+        with _patch_client(mock):
+            out = await apply_control_changeset(
+                server_version="0", model_id="tm-001", ops=ops,
+                change_reason="dedup restatements onto originals",
+            )
+        assert out["controls_changed"] == ["CTRL-03", "CTRL-09"]
+        mock.apply_control_changeset.assert_awaited_once()
+        args = mock.apply_control_changeset.await_args
+        assert args.args[0] == "tm-001"
+        assert isinstance(args.args[1], list) and len(args.args[1]) == 2
+        assert args.args[1][0]["op"] == "remap"
+
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_ops_json(self) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await apply_control_changeset(
+                    server_version="0", model_id="tm-001",
+                    ops="{not json", change_reason="a valid reason here",
+                )
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_ops(self) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await apply_control_changeset(
+                    server_version="0", model_id="tm-001",
+                    ops="[]", change_reason="a valid reason here",
+                )
+
+    @pytest.mark.asyncio
+    async def test_rejects_short_change_reason(self) -> None:
+        ops = json.dumps([{"op": "delete", "control_id": "CTRL-09"}])
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await apply_control_changeset(
+                    server_version="0", model_id="tm-001",
+                    ops=ops, change_reason="short",
+                )
