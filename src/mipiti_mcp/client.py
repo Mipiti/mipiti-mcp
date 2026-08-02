@@ -1658,6 +1658,74 @@ class MipitiClient:
             f"/api/models/{model_id}/revalidate-entities", {},
         )
 
+    async def get_verdict_divergence(
+        self,
+        model_id: str,
+        kind: str | None = None,
+        include_dismissed: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """GET /api/models/{model_id}/verdict-divergence.
+
+        Divergences between the LLM's verdicts and the model's authored /
+        structural state. Coverage rows carry ``p_covers`` (the LLM's
+        probability the control covers the CO): a ``missing_mapping`` row has a
+        high ``p_covers`` (should be mapped), a ``spurious_mapping`` row a low
+        one (mapped but the LLM disputes it).
+        """
+        params: dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "include_dismissed": include_dismissed,
+        }
+        if kind:
+            params["kind"] = kind
+        return await self._get(
+            f"/api/models/{model_id}/verdict-divergence", params=params,
+        )
+
+    async def accept_coverage_divergences(
+        self,
+        model_id: str,
+        items: list[dict],
+        change_reason: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/verdict-divergence/coverage/accept-batch.
+
+        Accept a set of coverage divergences as mapping changes
+        (``missing_mapping`` adds the CO to the control; ``spurious_mapping``
+        removes it), grouped into one version per affected control. Each item is
+        validated independently; the response separates ``applied`` from
+        ``skipped`` (stale / would-orphan / already-in-that-state).
+        """
+        body: dict[str, Any] = {
+            "items": list(items),
+            "change_reason": change_reason,
+        }
+        return await self._post(
+            f"/api/models/{model_id}/verdict-divergence/coverage/accept-batch",
+            body,
+        )
+
+    async def dismiss_verdict_divergences(
+        self,
+        model_id: str,
+        items: list[dict],
+        reason: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/verdict-divergence/dismiss.
+
+        Mark a set of divergences reviewed-and-not-valid WITHOUT changing the
+        model. A dismissal is keyed to the divergence's current verdict input
+        hash, so it auto-clears (the row reappears) once the underlying control
+        or objective changes.
+        """
+        body: dict[str, Any] = {"items": list(items), "reason": reason}
+        return await self._post(
+            f"/api/models/{model_id}/verdict-divergence/dismiss", body,
+        )
+
     async def recompute_verdicts(self, model_id: str) -> dict:
         """POST /api/models/{model_id}/verdict-divergence/recompute.
 

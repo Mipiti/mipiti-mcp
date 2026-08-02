@@ -94,6 +94,9 @@ from mipiti_mcp.server import (
     refine_control,
     remap_control,
     apply_control_changeset,
+    get_verdict_divergence,
+    accept_coverage_divergences,
+    dismiss_verdict_divergences,
     reevaluate_threat_model_factors,
     revalidate_threat_model_entities,
     restore_asset,
@@ -5189,4 +5192,96 @@ class TestApplyControlChangeset:
                 await apply_control_changeset(
                     server_version="0", model_id="tm-001",
                     ops=ops, change_reason="short",
+                )
+
+
+class TestVerdictDivergenceTools:
+    @pytest.mark.asyncio
+    async def test_get_forwards_kind_and_dismissed(self) -> None:
+        result = {
+            "flag_enabled": True,
+            "coverage": {"divergences": [
+                {"control_id": "CTRL-03", "co_id": "CO-1",
+                 "kind": "missing_mapping", "p_covers": 0.98, "rationale": "x"},
+                {"control_id": "CTRL-04", "co_id": "CO-2",
+                 "kind": "spurious_mapping", "p_covers": 0.01, "rationale": "y"},
+            ]},
+        }
+        mock = _mock_client()
+        mock.get_verdict_divergence = AsyncMock(return_value=result)
+        with _patch_client(mock):
+            out = await get_verdict_divergence(
+                server_version="0", model_id="tm-001",
+                kind="missing_mapping", include_dismissed=False,
+            )
+        assert out["coverage"]["divergences"][0]["kind"] == "missing_mapping"
+        mock.get_verdict_divergence.assert_awaited_once()
+        kwargs = mock.get_verdict_divergence.await_args.kwargs
+        assert kwargs["kind"] == "missing_mapping"
+        assert kwargs["include_dismissed"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_empty_kind_becomes_none(self) -> None:
+        mock = _mock_client()
+        mock.get_verdict_divergence = AsyncMock(return_value={"flag_enabled": True})
+        with _patch_client(mock):
+            await get_verdict_divergence(server_version="0", model_id="tm-001")
+        assert mock.get_verdict_divergence.await_args.kwargs["kind"] is None
+
+    @pytest.mark.asyncio
+    async def test_accept_forwards_parsed_items(self) -> None:
+        result = {"applied": [{"control_id": "CTRL-03", "co_id": "CO-1"}],
+                  "skipped": [], "controls_updated": ["CTRL-03"]}
+        mock = _mock_client()
+        mock.accept_coverage_divergences = AsyncMock(return_value=result)
+        items = json.dumps([
+            {"control_id": "CTRL-03", "co_id": "CO-1", "kind": "missing_mapping"},
+        ])
+        with _patch_client(mock):
+            out = await accept_coverage_divergences(
+                server_version="0", model_id="tm-001", items=items,
+                change_reason="accept high-confidence coverage divergences",
+            )
+        assert out["controls_updated"] == ["CTRL-03"]
+        args = mock.accept_coverage_divergences.await_args.args
+        assert args[1][0]["kind"] == "missing_mapping"
+
+    @pytest.mark.asyncio
+    async def test_accept_rejects_bad_json_and_short_reason(self) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await accept_coverage_divergences(
+                    server_version="0", model_id="tm-001",
+                    items="{bad", change_reason="a valid reason here",
+                )
+            with pytest.raises(ToolError):
+                await accept_coverage_divergences(
+                    server_version="0", model_id="tm-001",
+                    items=json.dumps([{"control_id": "C", "co_id": "CO", "kind": "missing_mapping"}]),
+                    change_reason="short",
+                )
+
+    @pytest.mark.asyncio
+    async def test_dismiss_forwards_items_and_reason(self) -> None:
+        mock = _mock_client()
+        mock.dismiss_verdict_divergences = AsyncMock(
+            return_value={"dismissed": [{"co_id": "CO-2"}], "skipped": []})
+        items = json.dumps([
+            {"kind": "spurious_mapping", "co_id": "CO-2", "control_id": "CTRL-04"},
+        ])
+        with _patch_client(mock):
+            out = await dismiss_verdict_divergences(
+                server_version="0", model_id="tm-001", items=items,
+                reason="structural model is correct here",
+            )
+        assert out["dismissed"][0]["co_id"] == "CO-2"
+        mock.dismiss_verdict_divergences.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dismiss_rejects_empty_reason(self) -> None:
+        items = json.dumps([{"kind": "spurious_mapping", "co_id": "CO-2", "control_id": "C"}])
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await dismiss_verdict_divergences(
+                    server_version="0", model_id="tm-001", items=items, reason="  ",
                 )
