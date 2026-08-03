@@ -4568,6 +4568,8 @@ async def get_verdict_divergence(
     model_id: str,
     kind: str = "",
     include_dismissed: bool = False,
+    limit: int = 100,
+    offset: int = 0,
 ) -> dict:
     """Where the LLM's verdicts disagree with the model's authored state.
 
@@ -4583,6 +4585,11 @@ async def get_verdict_divergence(
     ~100%-confidence row is a strong "add" and a ~0%-confidence row is a strong
     "remove" — both are actionable, in opposite directions.
 
+    Rows are sorted by confidence, so the strongest calls come first. Each
+    section is paginated: its ``pagination.filtered_total`` reports the full
+    count, so when it exceeds the rows returned, raise ``limit`` (up to 500) or
+    page with ``offset`` to review every divergence — not only the first page.
+
     Also returns ``group_sufficiency`` divergences (observation-only). Apply
     coverage rows with ``accept_coverage_divergences``; set aside rows the
     structural model got right with ``dismiss_verdict_divergences``.
@@ -4593,11 +4600,17 @@ async def get_verdict_divergence(
             "group_sufficiency". Empty returns all kinds.
         include_dismissed: When true, return ONLY previously-dismissed rows
             (the undo view) instead of the active list.
+        limit: Max rows per section (clamped to 1-500, default 100). Set to
+            500 to pull an entire section in one call.
+        offset: Skip the first N rows of each section, for pagination.
     """
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
     try:
         return _dump(await _get_client().get_verdict_divergence(
             model_id, kind=(kind.strip() or None),
             include_dismissed=include_dismissed,
+            limit=limit, offset=offset,
         ))
     except Exception as exc:
         raise _api_error(exc) from exc

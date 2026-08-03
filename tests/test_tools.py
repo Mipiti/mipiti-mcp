@@ -5229,6 +5229,34 @@ class TestVerdictDivergenceTools:
         assert mock.get_verdict_divergence.await_args.kwargs["kind"] is None
 
     @pytest.mark.asyncio
+    async def test_get_defaults_and_forwards_pagination(self) -> None:
+        mock = _mock_client()
+        mock.get_verdict_divergence = AsyncMock(return_value={"flag_enabled": True})
+        with _patch_client(mock):
+            await get_verdict_divergence(server_version="0", model_id="tm-001")
+            default_kwargs = mock.get_verdict_divergence.await_args.kwargs
+            assert default_kwargs["limit"] == 100
+            assert default_kwargs["offset"] == 0
+            await get_verdict_divergence(
+                server_version="0", model_id="tm-001", limit=500, offset=100,
+            )
+        kwargs = mock.get_verdict_divergence.await_args.kwargs
+        assert kwargs["limit"] == 500
+        assert kwargs["offset"] == 100
+
+    @pytest.mark.asyncio
+    async def test_get_clamps_pagination_bounds(self) -> None:
+        mock = _mock_client()
+        mock.get_verdict_divergence = AsyncMock(return_value={"flag_enabled": True})
+        with _patch_client(mock):
+            await get_verdict_divergence(
+                server_version="0", model_id="tm-001", limit=9000, offset=-5,
+            )
+        kwargs = mock.get_verdict_divergence.await_args.kwargs
+        assert kwargs["limit"] == 500
+        assert kwargs["offset"] == 0
+
+    @pytest.mark.asyncio
     async def test_accept_forwards_parsed_items(self) -> None:
         result = {"applied": [{"control_id": "CTRL-03", "co_id": "CO-1"}],
                   "skipped": [], "controls_updated": ["CTRL-03"]}
