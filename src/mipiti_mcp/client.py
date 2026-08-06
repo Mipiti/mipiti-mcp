@@ -2272,6 +2272,23 @@ class MipitiClient:
         data = await self._get(f"/api/models/{model_id}/risk-acceptances")
         return list(data) if isinstance(data, list) else data
 
+    async def create_risk_acceptance(
+        self, model_id: str, *, control_objective_id: str,
+        owner: str, justification: str, review_by: str,
+    ) -> dict[str, Any]:
+        """Record an explicit risk acceptance for a control objective.
+
+        Returns the created risk-acceptance dict (server-side shape,
+        passed through unchanged).
+        """
+        body = {
+            "control_objective_id": control_objective_id,
+            "owner": owner,
+            "justification": justification,
+            "review_by": review_by,
+        }
+        return await self._post(f"/api/models/{model_id}/risk-acceptances", body)
+
     # ------------------------------------------------------------------
     # Workspaces & Systems
     # ------------------------------------------------------------------

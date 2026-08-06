@@ -399,6 +399,10 @@ build first for the shortest path to coverage.
 - `list_risk_acceptances` — see which risks have been explicitly accepted \
 on a model (with owner, justification, review deadline) so you can \
 separate intentional acceptances from genuinely unaddressed gaps.
+- `create_risk_acceptance` — record a deliberate acceptance of a control \
+objective's residual risk (owner, justification, review deadline) so a \
+known-and-accepted decision is explicit and auditable rather than an \
+implicit gap.
 - `recompute_verdicts` — force a fresh evaluation of every control's \
 coverage verdict and every live CO's group-sufficiency verdict when the \
 surfaced divergences look stale. Runs in the background; the response \
@@ -5960,6 +5964,46 @@ async def list_risk_acceptances(server_version: str, model_id: str) -> dict:
     """
     try:
         return _dump(await _get_client().list_risk_acceptances(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def create_risk_acceptance(
+    server_version: str,
+    model_id: str,
+    control_objective_id: str,
+    owner: str,
+    justification: str,
+    review_by: str,
+) -> dict:
+    """Record that an operator explicitly ACCEPTS the residual risk on a control
+    objective instead of mitigating it — the write counterpart to
+    ``list_risk_acceptances``.
+
+    Use when a control objective's residual risk is a deliberate, documented
+    decision rather than an unaddressed gap: the acceptance carries an owner, a
+    justification, and a review deadline, and reads as ``active`` until it
+    expires or is revoked. Prefer this over leaving a known-and-accepted risk
+    implicit — it makes the decision auditable and forces a revisit by the
+    deadline. An accepted objective is still surfaced (as accepted, not
+    unaddressed) when triaging at-risk objectives.
+
+    Args:
+        model_id: ID of the threat model.
+        control_objective_id: The control objective whose residual risk is accepted.
+        owner: Who owns the acceptance (name / role).
+        justification: Why the risk is accepted (the rationale of record).
+        review_by: ISO 8601 date to revisit the acceptance (e.g. "2027-02-06T00:00:00Z").
+    """
+    try:
+        return _dump(await _get_client().create_risk_acceptance(
+            model_id,
+            control_objective_id=control_objective_id,
+            owner=owner,
+            justification=justification,
+            review_by=review_by,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
