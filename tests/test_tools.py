@@ -5097,6 +5097,10 @@ class TestVersionCheckMiddleware:
         assert "claude mcp remove" in _INSTRUCTIONS_UPDATE_MESSAGE
         assert "claude mcp add" in _INSTRUCTIONS_UPDATE_MESSAGE
         assert "reauthenticate" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
+        # The corrected recovery: re-add under a NEW name — re-adding under the
+        # same name reuses the pinned schemas — with a worked "-1" example.
+        assert "new name" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
+        assert "-1" in _INSTRUCTIONS_UPDATE_MESSAGE
 
 
 class TestControlGenerationStatus:
