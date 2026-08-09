@@ -35,11 +35,15 @@ _SERVER_VERSION = os.environ["SERVER_VERSION"]
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
     "Tool descriptions are pinned per session — a soft reconnect, reauth, or "
-    "/mcp toggle does NOT refresh them. The MCP server config must be torn "
-    "down and re-added. In Claude Code: exit the session, run "
-    "`claude mcp remove Mipiti` (substitute the name you used when adding "
-    "if different), resume the session, exit again, run your original "
-    "`claude mcp add ...` command, reauthenticate, then resume."
+    "/mcp toggle does NOT refresh them, and re-adding under the same server "
+    "name reuses the pinned schemas. In Claude Code, do a full teardown and "
+    "re-add under a NEW name: (1) exit the session entirely; (2) run "
+    "`claude mcp remove Mipiti` (substitute the name you used when adding if "
+    "different); (3) re-run your original `claude mcp add ...` command but "
+    "with a new server name — e.g. append `-1` (Mipiti -> Mipiti-1); "
+    "(4) reauthenticate; (5) resume. The new name is what forces the client "
+    "to load the fresh tool schemas; there is no need to start and exit an "
+    "extra session in between."
 )
 
 _INSTRUCTIONS_BASE = """\

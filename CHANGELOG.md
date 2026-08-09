@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Corrected the server-version-changed recovery message. When the pinned tool schemas go stale mid-session, re-adding the MCP server under the **same** name reuses the pinned schemas, so the previous "remove, resume, exit again, re-add" dance did not reliably refresh them. The message now instructs a full teardown and re-add under a **new** server name (e.g. `Mipiti` → `Mipiti-1`), which forces the client to load the fresh schemas, and drops the unnecessary extra session start/exit.
+
 ### Added
 
 - Functional-conformance tools, closing the coding-agent loop for behaviour verification (the functional analogue of the security control loop): `generate_functional_objectives` (derive capabilities + Given-When-Then objectives **and the concrete tests to implement** from the feature spec — the agent implements the specified tests rather than deciding what to test), `list_capabilities` / `get_capability`, `list_functional_objectives` / `get_functional_objective`, `get_functional_coverage` (per-objective + per-test state + the Capabilities × Conditions matrix), `check_functional_gaps` (applicable conditions with no objective + failing/untested objectives), `get_functional_scan_prompt` (per not-yet-verified test, its implementation brief + the objectives it proves), `add_functional_test` (manually add an extra test), and `submit_functional_tests` (evidence assertions verified by the same CI runner as security controls). The loop: generate objectives + tests → scan-prompt → implement each test → submit_functional_tests → CI verifies → get_functional_coverage.
