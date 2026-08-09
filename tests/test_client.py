@@ -109,6 +109,25 @@ async def test_list_models(mock_env: None) -> None:
     await client.close()
 
 
+@respx.mock
+async def test_update_finding_splits_comma_separated_assertion_ids(mock_env: None) -> None:
+    """remediation_assertion_ids is documented as a comma-separated string, but
+    the API expects a JSON list (a raw string 422s). The client must split it."""
+    route = respx.patch(
+        "https://test.api.mipiti.io/api/models/tm-001/findings/f1"
+    ).mock(return_value=httpx.Response(200, json={"id": "f1", "status": "remediated"}))
+    client = MipitiClient()
+    await client.update_finding(
+        model_id="tm-001",
+        finding_id="f1",
+        status="remediated",
+        remediation_assertion_ids="asrt_1, asrt_2 ,asrt_3",
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["remediation_assertion_ids"] == ["asrt_1", "asrt_2", "asrt_3"]
+    await client.close()
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_get_model_latest(mock_env: None) -> None:
