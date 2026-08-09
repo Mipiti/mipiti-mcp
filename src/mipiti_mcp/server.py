@@ -811,8 +811,8 @@ But an empty `repo_url` covers two different things, and the \
 component's trust boundary tells them apart. A component in one of \
 YOUR internal zones (your own backend/frontend/service repos) is your \
 code — ground it to the repo. A component in an EXTERNAL trust zone — \
-a third-party service, the customer's IdP, infrastructure you call \
-but do not own — has no repo of yours; leave it unbound, where \
+e.g. a third-party service, the customer's IdP, or other \
+infrastructure you call but do not own — has no repo of yours; leave it unbound, where \
 `component_unbound` is the correct permanent marker of an external \
 dependency, not a TODO. The test is the trust boundary, never "does \
 some client code touch it": client code for almost every dependency \
@@ -2496,8 +2496,9 @@ async def model_coherence_report(
       cases, told apart by the component's trust boundary. An
       internal-zone component (your own code) that isn't linked yet:
       resolve with ``edit_component`` pointing at the real repo. An
-      external-zone component (a third-party service, the customer's
-      IdP, external infrastructure you call but don't own): leave it
+      external-zone component (e.g. a third-party service, the
+      customer's IdP, or other external infrastructure you call but
+      don't own): leave it
       unbound — the finding is a permanent, auditor-visible external-
       dependency marker, NOT a TODO. Never bind an external component
       to your repo to silence this; "some client code touches it" is
@@ -5300,8 +5301,9 @@ async def add_component(
     ``trust_boundary_ids``.
 
     A component with empty ``repo_url`` is either speculative (your own
-    code, not linked to a repo yet) or external (a third-party service,
-    the customer's IdP, external infrastructure you call but don't own).
+    code, not linked to a repo yet) or external (e.g. a third-party
+    service, the customer's IdP, or other external infrastructure you
+    call but don't own).
     The component's trust boundary tells them apart: bind an
     internal-zone component to its repo via ``edit_component``; leave an
     external-zone component unbound — its ``component_unbound`` finding
