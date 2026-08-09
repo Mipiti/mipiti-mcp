@@ -395,7 +395,8 @@ from workspace-wide to a specific target.
 - `get_remediation_leverage` — for one model, the not-yet-satisfied \
 controls ranked by how many control objectives each closes, plus a greedy \
 minimal fix order. Use to prioritize implementation: which controls to \
-build first for the shortest path to coverage.
+build first for the shortest path to coverage; each entry names its owning \
+model, so a high-leverage control inherited from a parent model is clear.
 - `list_risk_acceptances` — see which risks have been explicitly accepted \
 on a model (with owner, justification, review deadline) so you can \
 separate intentional acceptances from genuinely unaddressed gaps.
@@ -5918,6 +5919,15 @@ async def get_remediation_leverage(server_version: str, model_id: str) -> dict:
     work: a single call tells the agent which controls give the highest
     leverage, so it can tackle the shortest path to coverage instead of
     fixing objectives one at a time. Read-only.
+
+    Composed models: each entry in ``ranked`` and ``greedy_plan`` also
+    carries its owning model — ``owner_model_id`` and ``owner_model_title``
+    — and an ``inherited`` flag. ``inherited`` is true when the control is
+    authored on an ancestor model, meaning the fix lands on that model
+    rather than the one being assessed; ``summary.inherited_candidate_controls``
+    counts them. Surface the owning model so the operator knows which
+    high-leverage fixes belong to a parent model. A flat (non-composed)
+    model reports every control as owned by the assessed model.
 
     Args:
         model_id: ID of the threat model.

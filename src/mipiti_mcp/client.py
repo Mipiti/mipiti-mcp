@@ -2172,7 +2172,12 @@ class MipitiClient:
         if reason:
             body["reason"] = reason
         if remediation_assertion_ids:
-            body["remediation_assertion_ids"] = remediation_assertion_ids
+            # The tool accepts a comma-separated string (agent-friendly), but the
+            # API expects a JSON list — split here so the documented format works
+            # instead of 422-ing on a raw string.
+            body["remediation_assertion_ids"] = [
+                a.strip() for a in remediation_assertion_ids.split(",") if a.strip()
+            ]
         data = await self._patch(f"/api/models/{model_id}/findings/{finding_id}", body)
         return Finding.model_validate(data)
 
