@@ -806,6 +806,18 @@ A component with empty `repo_url` is the natural signal "speculative \
 — not yet bound to code." A component with a populated `repo_url` is \
 grounded. There is no separate status field — the binding is the \
 state.
+
+But an empty `repo_url` covers two different things, and the \
+component's trust boundary tells them apart. A component in one of \
+YOUR internal zones (your own backend/frontend/service repos) is your \
+code — ground it to the repo. A component in an EXTERNAL trust zone — \
+e.g. a third-party service, the customer's IdP, or other \
+infrastructure you call but do not own — has no repo of yours; leave it unbound, where \
+`component_unbound` is the correct permanent marker of an external \
+dependency, not a TODO. The test is the trust boundary, never "does \
+some client code touch it": client code for almost every dependency \
+lives in your repo, so that alone never justifies binding an external \
+component.
 """
 
 _INSTRUCTIONS_ASYNC = """\
@@ -2480,12 +2492,18 @@ async def model_coherence_report(
       unscoped, but its assertions all carry a single component's
       ``repo``. Resolve: ``assign_control_to_components`` to that
       component.
-    - ``component_unbound`` — a component has no ``repo_url``
-      (speculative; LLM-proposed during generation, or operator-
-      added without a binding yet). Resolve: ``edit_component`` with
-      the real repo URL once the codebase exists. Speculative is a
-      valid lifecycle state, not an error — surfaced so the gap is
-      visible to auditors.
+    - ``component_unbound`` — a component has no ``repo_url``. Two
+      cases, told apart by the component's trust boundary. An
+      internal-zone component (your own code) that isn't linked yet:
+      resolve with ``edit_component`` pointing at the real repo. An
+      external-zone component (e.g. a third-party service, the
+      customer's IdP, or other external infrastructure you call but
+      don't own): leave it
+      unbound — the finding is a permanent, auditor-visible external-
+      dependency marker, NOT a TODO. Never bind an external component
+      to your repo to silence this; "some client code touches it" is
+      not a reason to bind (that client code lives in your repo for
+      every dependency).
 
     Reachability findings (deterministic composer; indeterminate
     verdicts surface as findings, never auto-decided by an LLM):
@@ -5282,12 +5300,16 @@ async def add_component(
     trust-boundary footprint is the union of its components'
     ``trust_boundary_ids``.
 
-    A component with empty ``repo_url`` is speculative — a topology
-    waypoint that hasn't been bound to code yet. The coherence report
-    surfaces these as ``component_unbound`` findings. Speculative
-    components are valid in the lifecycle (LLM-proposed during
-    generation, or operator-added during planning); ground them via
-    ``edit_component`` once the code exists.
+    A component with empty ``repo_url`` is either speculative (your own
+    code, not linked to a repo yet) or external (e.g. a third-party
+    service, the customer's IdP, or other external infrastructure you
+    call but don't own).
+    The component's trust boundary tells them apart: bind an
+    internal-zone component to its repo via ``edit_component``; leave an
+    external-zone component unbound — its ``component_unbound`` finding
+    is a permanent external-dependency marker, not a gap to close.
+    Binding by "some client code touches it" is wrong: client code for
+    external dependencies lives in your repo too.
 
     Args:
         model_id: ID of the threat model.

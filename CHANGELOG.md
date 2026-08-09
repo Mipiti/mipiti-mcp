@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Corrected the server-version-changed recovery message. When the pinned tool schemas go stale mid-session, re-adding the MCP server under the **same** name reuses the pinned schemas, so the previous "remove, resume, exit again, re-add" dance did not reliably refresh them. The message now instructs a full teardown and re-add under a **new** server name (e.g. `Mipiti` → `Mipiti-1`), which forces the client to load the fresh schemas, and drops the unnecessary extra session start/exit.
+- Clarified component repo-binding guidance across the `add_component` docstring, the components-lifecycle instructions, and the `model_coherence_report` `component_unbound` note. An empty `repo_url` covers two distinct cases, told apart by the component's **trust boundary**: an internal-zone component (your own code) should be bound to its repo, while an external-zone component (e.g. a third-party service, the customer's IdP, or other external infrastructure) should stay unbound — its `component_unbound` finding is a permanent external-dependency marker, not a TODO. Previously the docs framed every unbound component as "not bound yet," which could lead an agent to wrongly bind an external component to the repo.
 
 ### Added
 
