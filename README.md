@@ -143,10 +143,8 @@ uvx mipiti-mcp
 | `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
 | `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. |
 | `list_attestations` | Attestation history for an assumption. |
-| `set_control_assumption_groups` | Shorthand: mark a control as externally handled by a single assumption (writes to group 1). Counts as active for mitigation group completeness when attested. |
-| `set_control_assumption_groups` | Shorthand: clear externally-handled status; control reverts to not_implemented. Removes all assumption groups. |
+| `set_control_assumption_groups` | Declaratively set a control's assumption group structure: mark it externally handled by a single assumption (shorthand), clear that status (control reverts to not_implemented), or express compound cases with multiple groups (within a group = AND, across groups = OR; e.g. "AWS KMS + quarterly review"). Attested groups count as active for mitigation group completeness. |
 | `get_control_assumption_groups` | Inspect the current assumption group structure on a control. Groups express alternative sets of external claims (within = AND, across = OR). |
-| `set_control_assumption_groups` | Declaratively set the assumption group structure. Use for compound cases (e.g. "AWS KMS + quarterly review") or multiple independent paths. |
 | `convert_assumption_to_controls` | Generate controls for assumption-covered COs and retire the assumption linkage. |
 
 ### Assertions and Evidence
@@ -185,7 +183,7 @@ Proves a feature *does what it was specified to do* (Capability × Condition), v
 |------|-------------|
 | `generate_functional_objectives` | Derive capabilities (behaviours the feature must deliver), Given-When-Then functional objectives (walking each capability against a taxonomy of operating conditions), **and a concrete implementable test per objective** — so the agent implements the tests rather than deciding what to test. Requires a Pro plan; billable. `refresh=true` re-derives. |
 | `list_capabilities` / `get_capability` | Read the capability decomposition. |
-| `get_functional_objectives` / `get_functional_objectives` | Read the functional objectives (the test plan). |
+| `get_functional_objectives` | Read the functional objectives (the test plan). |
 | `get_functional_coverage` | Per-objective + per-test state (verified / covered / failing / untested), the Capabilities × Conditions matrix, and applicable / missing-objective / not-applicable cell accounting. |
 | `check_functional_gaps` | Actionable gaps: applicable conditions with no objective yet, plus objectives that are failing or untested. |
 | `get_scan_prompt (kind="functional")` | The agent brief: per not-yet-verified test, its implementation brief and the objectives it proves; plus objectives with no test and applicable conditions with no objective. |
