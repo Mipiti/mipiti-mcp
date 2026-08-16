@@ -1,4 +1,4 @@
-"""Unit tests for the recompute_verdicts / get_recompute_quote tools + client methods."""
+"""Unit tests for the merged recompute_verdicts tool (enqueue + dry_run quote) + client methods."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -8,7 +8,7 @@ import respx
 from fastmcp.exceptions import ToolError
 
 from mipiti_mcp.client import MipitiClient
-from mipiti_mcp.server import build_instructions, get_recompute_quote, recompute_verdicts
+from mipiti_mcp.server import build_instructions, recompute_verdicts
 
 
 _RESULT = {
@@ -85,7 +85,9 @@ class TestGetRecomputeQuote:
         client = AsyncMock()
         client.get_recompute_quote = AsyncMock(return_value=_QUOTE)
         with patch("mipiti_mcp.server._get_client", return_value=client):
-            result = await get_recompute_quote(server_version="0", model_id="tm-001")
+            result = await recompute_verdicts(
+                server_version="0", model_id="tm-001", dry_run=True,
+            )
         client.get_recompute_quote.assert_awaited_once_with("tm-001")
         assert result == _QUOTE
         assert result["informational"] is True
@@ -145,4 +147,4 @@ def test_recompute_verdicts_listed_in_instructions(tier: str, role: str) -> None
     """The tools are discoverable in the instructions catalog across tiers."""
     text = build_instructions(tier, role)
     assert "recompute_verdicts" in text
-    assert "get_recompute_quote" in text
+    assert "quote" in text

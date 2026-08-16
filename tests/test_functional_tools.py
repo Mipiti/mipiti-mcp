@@ -13,15 +13,14 @@ from mipiti_mcp.server import (
     generate_functional_objectives,
     get_capability,
     get_functional_coverage,
-    get_functional_objective,
+    get_functional_objectives,
     get_functional_satisfaction_groups,
-    get_functional_scan_prompt,
+    get_scan_prompt,
     get_functional_test_sufficiency,
     import_functional_tests,
     list_capabilities,
-    list_functional_objectives,
     set_functional_satisfaction_groups,
-    submit_functional_tests,
+    submit_functional_test_assertions,
     suggest_functional_test_mappings,
 )
 
@@ -70,11 +69,11 @@ async def test_read_tools_passthrough():
     with _patch(c):
         assert (await list_capabilities(server_version="0", model_id="tm-1"))["capabilities"][0]["id"] == "CAP-1"
         assert (await get_capability(server_version="0", model_id="tm-1", capability_id="CAP-1"))["id"] == "CAP-1"
-        assert (await list_functional_objectives(server_version="0", model_id="tm-1"))["functional_objectives"][0]["id"] == "FO-1"
-        assert (await get_functional_objective(server_version="0", model_id="tm-1", functional_objective_id="FO-1"))["id"] == "FO-1"
+        assert (await get_functional_objectives(server_version="0", model_id="tm-1"))["functional_objectives"][0]["id"] == "FO-1"
+        assert (await get_functional_objectives(server_version="0", model_id="tm-1", functional_objective_id="FO-1"))["id"] == "FO-1"
         assert (await get_functional_coverage(server_version="0", model_id="tm-1"))["summary"]["percent_verified"] == 50
         assert "gaps" in await check_functional_gaps(server_version="0", model_id="tm-1")
-        assert "instructions" in await get_functional_scan_prompt(server_version="0", model_id="tm-1")
+        assert "instructions" in await get_scan_prompt(server_version="0", model_id="tm-1", kind="functional")
 
 
 @pytest.mark.asyncio
@@ -105,7 +104,7 @@ async def test_submit_functional_tests_parses_json():
     c = _client()
     payload = [{"type": "test_passes", "params": {"pattern": "x"}, "description": "d", "repo": "o/r"}]
     with _patch(c):
-        await submit_functional_tests(
+        await submit_functional_test_assertions(
             server_version="0", model_id="tm-1", functional_test_id="FT-1",
             assertions_json=json.dumps(payload),
         )
@@ -116,12 +115,12 @@ async def test_submit_functional_tests_parses_json():
 async def test_submit_functional_tests_rejects_bad_json():
     with _patch(_client()):
         with pytest.raises(ToolError):
-            await submit_functional_tests(
+            await submit_functional_test_assertions(
                 server_version="0", model_id="tm-1", functional_test_id="FT-1",
                 assertions_json="{not json",
             )
         with pytest.raises(ToolError):
-            await submit_functional_tests(
+            await submit_functional_test_assertions(
                 server_version="0", model_id="tm-1", functional_test_id="FT-1",
                 assertions_json='{"not": "a list"}',
             )
