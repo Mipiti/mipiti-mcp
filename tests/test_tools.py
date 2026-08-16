@@ -23,12 +23,12 @@ from mipiti_mcp.server import (
     add_asset,
     add_attacker,
     add_evidence,
-    add_model_to_system,
+    add_model_to_group,
     assess_model,
-    auto_remediate,
+    auto_remediate_compliance,
     auto_map_controls,
     check_control_gaps,
-    create_system,
+    create_group,
     delete_assertion,
     delete_control,
     delete_threat_model,
@@ -36,59 +36,48 @@ from mipiti_mcp.server import (
     set_control_assumption_groups,
     edit_asset,
     edit_attacker,
-    export_threat_model,
-    export_threat_model_archive,
+    export_report,
     generate_threat_model,
     import_threat_model_archive,
     get_compliance_report,
     get_control_generation_status,
     get_control_objectives,
     get_controls,
+    get_entity,
     get_findings_risks,
-    get_model_risk_view,
+    get_group,
     get_review_queue,
+    get_risk_view,
     get_scan_prompt,
-    get_system,
-    get_system_compliance_report,
-    get_system_risk_view,
     get_threat_model,
     get_verification_report,
     import_controls,
     list_assertions,
     list_compliance_frameworks,
     list_findings,
+    list_groups,
+    list_model_groups,
     list_risk_acceptances,
-    list_systems,
     list_threat_models,
     list_workspaces,
     map_control_to_requirement,
     query_threat_model,
     refine_threat_model,
     regenerate_controls,
-    remove_asset,
-    remove_attacker,
+    remove_entity,
     remove_evidence,
+    remove_model_from_group,
     rename_threat_model,
     set_threat_model_parent,
     attach_foundation,
     confirm_reliance,
     create_reliance,
     declare_foundation,
+    delete_group,
     delete_reliance,
     list_reliance,
     propose_attach_foundation,
-    add_model_to_tag,
-    create_tag,
-    delete_tag,
-    get_tag_risk_view,
-    list_model_tags,
-    list_tags,
-    remove_model_from_tag,
-    export_tag_report,
-    get_tag_compliance_report,
-    select_tag_compliance_frameworks,
     select_compliance_frameworks,
-    select_system_compliance_frameworks,
     submit_assertions,
     submit_findings,
     refine_control,
@@ -98,9 +87,8 @@ from mipiti_mcp.server import (
     accept_coverage_divergences,
     dismiss_verdict_divergences,
     reevaluate_threat_model_factors,
-    revalidate_threat_model_entities,
-    restore_asset,
-    restore_attacker,
+    revalidate_entity_quality,
+    restore_entity,
     update_control_status,
     update_finding,
     model_coherence_report,
@@ -109,28 +97,17 @@ from mipiti_mcp.server import (
     list_effective_entities,
     list_effective_control_objectives,
     get_effective_coverage,
-    get_reach_verdicts,
     list_effective_attack_paths,
     list_reconciliation_candidates,
     apply_certain_reconciliation_match,
     reject_reconciliation_candidate,
     unreject_reconciliation_candidate,
-    list_reconciliation_rejections,
     lift_composition_entity,
     split_composition_entity,
-    preview_undo_lift_composition,
-    undo_lift_composition_event,
-    preview_undo_split_composition,
-    undo_split_composition_event,
-    get_control_objective,
-    get_asset,
+    preview_undo_composition,
+    undo_composition_event,
     add_trust_boundary,
     edit_trust_boundary,
-    get_attacker,
-    get_component,
-    get_trust_boundary,
-    get_assumption,
-    get_control,
     get_cwe_catalog,
     get_model_cwe_tags,
     classify_model_cwe,
@@ -1284,8 +1261,8 @@ class TestTags:
             list_tags=AsyncMock(return_value={"tags": [{"id": "tag1"}]}),
         )
         with _patch_client(mock):
-            created = await create_tag(server_version="0", name="Scope")
-            listed = await list_tags(server_version="0")
+            created = await create_group(server_version="0", kind="tag", name="Scope")
+            listed = await list_groups(server_version="0", kind="tag")
         assert created["id"] == "tag1"
         assert len(listed["tags"]) == 1
         mock.create_tag.assert_awaited_once_with("Scope", "", [])
@@ -1297,8 +1274,10 @@ class TestTags:
             remove_model_from_tag=AsyncMock(return_value=None),
         )
         with _patch_client(mock):
-            added = await add_model_to_tag(server_version="0", tag_id="tag1", model_id="m1")
-            removed = await remove_model_from_tag(
+            added = await add_model_to_group(
+                server_version="0", kind="tag", group_id="tag1", model_id="m1",
+            )
+            removed = await remove_model_from_group(
                 server_version="0", tag_id="tag1", model_id="m1",
             )
         assert "m1" in added["model_ids"]
@@ -1312,9 +1291,9 @@ class TestTags:
             get_tag_risk_view=AsyncMock(return_value={"tag_id": "tag1", "total": 0}),
         )
         with _patch_client(mock):
-            deleted = await delete_tag(server_version="0", tag_id="tag1")
-            mtags = await list_model_tags(server_version="0", model_id="m1")
-            rv = await get_tag_risk_view(server_version="0", tag_id="tag1")
+            deleted = await delete_group(server_version="0", tag_id="tag1")
+            mtags = await list_model_groups(server_version="0", model_id="m1")
+            rv = await get_risk_view(server_version="0", scope="tag", scope_id="tag1")
         assert deleted["deleted"] is True
         assert mtags["model_id"] == "m1"
         assert rv["tag_id"] == "tag1"
@@ -1331,7 +1310,7 @@ class TestTags:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await create_tag(server_version="0", name="Dup")
+                await create_group(server_version="0", kind="tag", name="Dup")
 
     @pytest.mark.asyncio
     async def test_compliance_and_export(self) -> None:
@@ -1345,13 +1324,16 @@ class TestTags:
             export_tag=AsyncMock(return_value="<html>audit</html>"),
         )
         with _patch_client(mock):
-            sel = await select_tag_compliance_frameworks(
-                server_version="0", tag_id="tag1", framework_ids=["soc2"],
+            sel = await select_compliance_frameworks(
+                server_version="0", scope="tag", scope_id="tag1", framework_ids="soc2",
             )
-            rep = await get_tag_compliance_report(
-                server_version="0", tag_id="tag1", framework_id="soc2",
+            rep = await get_compliance_report(
+                server_version="0", scope="tag", scope_id="tag1", framework_id="soc2",
             )
-            exported = await export_tag_report(server_version="0", tag_id="tag1")
+            exported = await export_report(
+                server_version="0", scope="tag", scope_id="tag1",
+                ctx=_mock_ctx(), format="html",
+            )
         assert sel["selected"] == ["soc2"]
         assert rep["framework_id"] == "soc2"
         assert exported["format"] == "html"
@@ -1389,8 +1371,9 @@ class TestExportThreatModelArchive:
         )
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await export_threat_model_archive(
-                server_version="0", model_id="tm-001", ctx=ctx,
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001",
+                ctx=ctx, format="archive",
             )
         assert result["envelope"] == envelope
         mock.start_export_model_full.assert_awaited_once_with("tm-001")
@@ -1457,8 +1440,8 @@ class TestExportThreatModel:
         )
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await export_threat_model(
-                server_version="0", model_id="tm-001", ctx=ctx, format="csv",
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001", ctx=ctx, format="csv",
             )
         assert result["format"] == "csv"
         assert result["filename"] == "report.csv"
@@ -1479,8 +1462,8 @@ class TestExportThreatModel:
         )
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await export_threat_model(
-                server_version="0", model_id="tm-001", ctx=ctx, format="pdf",
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001", ctx=ctx, format="pdf",
             )
         assert result["format"] == "pdf"
         assert result["filename"] == "report.pdf"
@@ -1492,8 +1475,8 @@ class TestExportThreatModel:
     async def test_invalid_format(self) -> None:
         ctx = _mock_ctx()
         with pytest.raises(ToolError, match="format must be"):
-            await export_threat_model(
-                server_version="0", model_id="tm-001", ctx=ctx, format="xml",
+            await export_report(
+                server_version="0", scope="model", scope_id="tm-001", ctx=ctx, format="xml",
             )
 
 
@@ -1652,8 +1635,9 @@ class TestRestoreAssetAttacker:
     async def test_restore_asset(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await restore_asset(
-                server_version="0", model_id="tm-001", asset_id="A1",
+            result = await restore_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="asset", entity_id="A1",
             )
         assert result["deleted"] is False
         mock.restore_asset.assert_awaited_once_with("tm-001", "A1")
@@ -1662,8 +1646,9 @@ class TestRestoreAssetAttacker:
     async def test_restore_attacker(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await restore_attacker(
-                server_version="0", model_id="tm-001", attacker_id="T1",
+            result = await restore_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="attacker", entity_id="T1",
             )
         assert result["deleted"] is False
         mock.restore_attacker.assert_awaited_once_with("tm-001", "T1")
@@ -1742,15 +1727,15 @@ class TestReevaluateThreatModelFactors:
 class TestRevalidateEntities:
     @pytest.mark.asyncio
     async def test_tool_is_registered(self) -> None:
-        tool = await server.mcp.get_tool("revalidate_threat_model_entities")
+        tool = await server.mcp.get_tool("revalidate_entity_quality")
         assert tool is not None
-        assert tool.name == "revalidate_threat_model_entities"
+        assert tool.name == "revalidate_entity_quality"
 
     @pytest.mark.asyncio
     async def test_success_returns_envelope(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await revalidate_threat_model_entities(
+            result = await revalidate_entity_quality(
                 server_version="0", model_id="tm-001",
             )
         assert result["accepted"] is True
@@ -1771,7 +1756,7 @@ class TestRevalidateEntities:
         ))
         with _patch_client(mock):
             with pytest.raises(ToolError, match="Model not found"):
-                await revalidate_threat_model_entities(
+                await revalidate_entity_quality(
                     server_version="0", model_id="tm-001",
                 )
 
@@ -2103,7 +2088,10 @@ class TestRemoveAsset:
         """Soft-delete: asset stays in model with deleted=True."""
         mock = _mock_client()
         with _patch_client(mock):
-            result = await remove_asset(server_version="0", model_id="tm-001", asset_id="A1")
+            result = await remove_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="asset", entity_id="A1",
+            )
         assert "model" in result
 
 
@@ -2220,7 +2208,10 @@ class TestRemoveAttacker:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await remove_attacker(server_version="0", model_id="tm-001", attacker_id="T1")
+            result = await remove_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="attacker", entity_id="T1",
+            )
         assert "model" in result
 
 
@@ -2243,7 +2234,7 @@ class TestSelectComplianceFrameworks:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await select_compliance_frameworks(server_version="0", model_id="tm-001", framework_ids="owasp-asvs")
+            result = await select_compliance_frameworks(server_version="0", scope="model", scope_id="tm-001", framework_ids="owasp-asvs")
         assert result["selected"] == 1
 
 
@@ -2252,7 +2243,7 @@ class TestGetComplianceReport:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_compliance_report(server_version="0", model_id="tm-001", framework_id="owasp-asvs")
+            result = await get_compliance_report(server_version="0", scope="model", scope_id="tm-001", framework_id="owasp-asvs")
         assert result["coverage"] == 0.8
 
 
@@ -2303,7 +2294,7 @@ class TestAutoRemediate:
         })
         ctx = _mock_ctx()
         with _patch_client(mock):
-            result = await auto_remediate(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx)
+            result = await auto_remediate_compliance(server_version="0", model_id="tm-001", framework_id="owasp-asvs", ctx=ctx)
         assert result["coverage"] == 0.95
 
 
@@ -2557,7 +2548,7 @@ class TestListSystems:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await list_systems(server_version="0")
+            result = await list_groups(server_version="0", kind="system")
         assert "systems" in result
 
 
@@ -2566,7 +2557,7 @@ class TestGetSystem:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_system(server_version="0", system_id="sys-1")
+            result = await get_group(server_version="0", system_id="sys-1")
         assert result["id"] == "sys-1"
 
 
@@ -2575,7 +2566,7 @@ class TestCreateSystem:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await create_system(server_version="0", name="Platform")
+            result = await create_group(server_version="0", kind="system", name="Platform")
         assert result["id"] == "sys-2"
 
 
@@ -2584,7 +2575,7 @@ class TestAddModelToSystem:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await add_model_to_system(server_version="0", system_id="sys-1", model_id="tm-001")
+            result = await add_model_to_group(server_version="0", kind="system", group_id="sys-1", model_id="tm-001")
         assert result["added"] is True
 
 
@@ -2598,7 +2589,7 @@ class TestSelectSystemComplianceFrameworks:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await select_system_compliance_frameworks(server_version="0", system_id="sys-1", framework_ids="owasp-asvs")
+            result = await select_compliance_frameworks(server_version="0", scope="system", scope_id="sys-1", framework_ids="owasp-asvs")
         assert result["selected"] == 1
 
 
@@ -2607,7 +2598,7 @@ class TestGetSystemComplianceReport:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_system_compliance_report(server_version="0", system_id="sys-1", framework_id="owasp-asvs")
+            result = await get_compliance_report(server_version="0", scope="system", scope_id="sys-1", framework_id="owasp-asvs")
         assert result["coverage"] == 0.9
 
 
@@ -2858,7 +2849,7 @@ class TestPerIdGets:
     async def test_get_control_objective(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_control_objective(
+            result = await get_control_objectives(
                 server_version="0", model_id="tm-001", co_id="CO3",
             )
         assert result["control_objective"]["id"] == "CO3"
@@ -2869,8 +2860,9 @@ class TestPerIdGets:
     async def test_get_asset(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_asset(
-                server_version="0", model_id="tm-001", asset_id="A1",
+            result = await get_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="asset", entity_id="A1",
             )
         assert result["asset"]["id"] == "A1"
 
@@ -2878,8 +2870,9 @@ class TestPerIdGets:
     async def test_get_attacker(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_attacker(
-                server_version="0", model_id="tm-001", attacker_id="T1",
+            result = await get_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="attacker", entity_id="T1",
             )
         assert result["attacker"]["id"] == "T1"
 
@@ -2887,8 +2880,9 @@ class TestPerIdGets:
     async def test_get_component(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_component(
-                server_version="0", model_id="tm-001", component_id="C1",
+            result = await get_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="component", entity_id="C1",
             )
         assert result["component"]["id"] == "C1"
 
@@ -2896,8 +2890,9 @@ class TestPerIdGets:
     async def test_get_trust_boundary(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_trust_boundary(
-                server_version="0", model_id="tm-001", tb_id="TB1",
+            result = await get_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="trust_boundary", entity_id="TB1",
             )
         assert result["trust_boundary"]["id"] == "TB1"
         assert "Network" in result["trust_boundary"]["passes"]
@@ -2942,8 +2937,9 @@ class TestPerIdGets:
     async def test_get_assumption(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_assumption(
-                server_version="0", model_id="tm-001", assumption_id="AS1",
+            result = await get_entity(
+                server_version="0", model_id="tm-001",
+                entity_type="assumption", entity_id="AS1",
             )
         assert result["assumption"]["id"] == "AS1"
 
@@ -2951,8 +2947,9 @@ class TestPerIdGets:
     async def test_get_control(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_control(
-                server_version="0", model_id="tm-001", control_id="CTRL-01",
+            result = await get_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                control_id="CTRL-01",
             )
         assert result["control"]["id"] == "CTRL-01"
         # Default version=0 maps to latest at the API layer.
@@ -3024,8 +3021,8 @@ class TestGetModelRiskView:
     async def test_returns_rows_for_model(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_model_risk_view(
-                server_version="0", model_id="tm-001",
+            result = await get_risk_view(
+                server_version="0", scope="model", scope_id="tm-001",
             )
         assert result["model_id"] == "tm-001"
         assert result["total"] == 1
@@ -3038,8 +3035,8 @@ class TestGetModelRiskView:
     async def test_model_id_threaded_through(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            await get_model_risk_view(
-                server_version="0", model_id="tm-xyz",
+            await get_risk_view(
+                server_version="0", scope="model", scope_id="tm-xyz",
             )
         mock.get_model_risk_view.assert_awaited_once_with("tm-xyz")
 
@@ -3051,8 +3048,8 @@ class TestGetSystemRiskView:
         so callers can group by source model without an extra lookup."""
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_system_risk_view(
-                server_version="0", system_id="sys-1",
+            result = await get_risk_view(
+                server_version="0", scope="system", scope_id="sys-1",
             )
         assert result["system_id"] == "sys-1"
         assert result["total"] == 2
@@ -3373,8 +3370,8 @@ class TestGetReachVerdicts:
     async def test_flag_on(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_reach_verdicts(
-                server_version="0", model_id="tm-001",
+            result = await get_reachability_verdicts(
+                server_version="0", model_id="tm-001", composed=True,
             )
         assert result["flag_enabled"] is True
         v = result["verdicts"][0]
@@ -3390,8 +3387,8 @@ class TestGetReachVerdicts:
             composition_reachability=AsyncMock(return_value=_FLAG_OFF_REACHABILITY),
         )
         with _patch_client(mock):
-            result = await get_reach_verdicts(
-                server_version="0", model_id="tm-001",
+            result = await get_reachability_verdicts(
+                server_version="0", model_id="tm-001", composed=True,
             )
         assert result["flag_enabled"] is False
         assert result["verdicts"] == []
@@ -3403,17 +3400,18 @@ class TestGetReachVerdicts:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await get_reach_verdicts(
-                    server_version="0", model_id="tm-missing",
+                await get_reachability_verdicts(
+                    server_version="0", model_id="tm-missing", composed=True,
                 )
 
     @pytest.mark.asyncio
     async def test_forwards_pagination_and_kind_filter(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            await get_reach_verdicts(
+            await get_reachability_verdicts(
                 server_version="0",
                 model_id="tm-001",
+                composed=True,
                 page=4,
                 page_size=10,
                 kind_filter="indeterminate",
@@ -4020,8 +4018,8 @@ class TestListReconciliationRejections:
             list_reconciliation_rejections=AsyncMock(return_value=payload),
         )
         with _patch_client(mock):
-            result = await list_reconciliation_rejections(
-                server_version="0", model_id="tm-001",
+            result = await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001", disposition="rejected",
             )
         assert result == payload
         assert len(result["rejections"]) == 2
@@ -4041,8 +4039,8 @@ class TestListReconciliationRejections:
             list_reconciliation_rejections=AsyncMock(return_value=payload),
         )
         with _patch_client(mock):
-            result = await list_reconciliation_rejections(
-                server_version="0", model_id="tm-001",
+            result = await list_reconciliation_candidates(
+                server_version="0", model_id="tm-001", disposition="rejected",
             )
         assert result["flag_enabled"] is False
         assert result["rejections"] == []
@@ -4052,8 +4050,8 @@ class TestListReconciliationRejections:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await list_reconciliation_rejections(
-                    server_version="0", model_id="",
+                await list_reconciliation_candidates(
+                    server_version="0", model_id="", disposition="rejected",
                 )
         mock.list_reconciliation_rejections.assert_not_awaited()
 
@@ -4064,8 +4062,8 @@ class TestListReconciliationRejections:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await list_reconciliation_rejections(
-                    server_version="0", model_id="tm-missing",
+                await list_reconciliation_candidates(
+                    server_version="0", model_id="tm-missing", disposition="rejected",
                 )
 
 
@@ -4535,10 +4533,10 @@ class TestPreviewUndoLiftComposition:
             preview_lift_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_lift_composition(
+            result = await preview_undo_composition(
                 server_version="0",
                 model_id="tm-lca",
-                lift_id="lift-XYZ",
+                event_type="lift", event_id="lift-XYZ",
             )
         assert result == envelope
         mock.preview_lift_undo.assert_awaited_once_with("tm-lca", "lift-XYZ")
@@ -4562,10 +4560,10 @@ class TestPreviewUndoLiftComposition:
             preview_lift_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_lift_composition(
+            result = await preview_undo_composition(
                 server_version="0",
                 model_id="tm-lca",
-                lift_id="lift-XYZ",
+                event_type="lift", event_id="lift-XYZ",
             )
         assert result == envelope
         assert result["refusal"]["reasons"][0]["code"] == "downstream_assertion_present"
@@ -4575,10 +4573,10 @@ class TestPreviewUndoLiftComposition:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await preview_undo_lift_composition(
+                await preview_undo_composition(
                     server_version="0",
                     model_id="",
-                    lift_id="lift-XYZ",
+                    event_type="lift", event_id="lift-XYZ",
                 )
         mock.preview_lift_undo.assert_not_awaited()
 
@@ -4586,11 +4584,11 @@ class TestPreviewUndoLiftComposition:
     async def test_empty_lift_id_rejected_preflight(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            with pytest.raises(ToolError, match="lift_id is required"):
-                await preview_undo_lift_composition(
+            with pytest.raises(ToolError, match="event_id is required"):
+                await preview_undo_composition(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="",
+                    event_type="lift", event_id="",
                 )
         mock.preview_lift_undo.assert_not_awaited()
 
@@ -4605,10 +4603,10 @@ class TestPreviewUndoLiftComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await preview_undo_lift_composition(
+                await preview_undo_composition(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="lift-missing",
+                    event_type="lift", event_id="lift-missing",
                 )
 
     @pytest.mark.asyncio
@@ -4624,10 +4622,10 @@ class TestPreviewUndoLiftComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await preview_undo_lift_composition(
+                await preview_undo_composition(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="lift-XYZ",
+                    event_type="lift", event_id="lift-XYZ",
                 )
 
 
@@ -4652,10 +4650,10 @@ class TestUndoLiftCompositionEvent:
             undo_lift=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await undo_lift_composition_event(
+            result = await undo_composition_event(
                 server_version="0",
                 model_id="tm-lca",
-                lift_id="lift-XYZ",
+                event_type="lift", event_id="lift-XYZ",
             )
         assert result == envelope
         mock.undo_lift.assert_awaited_once_with("tm-lca", "lift-XYZ")
@@ -4665,10 +4663,10 @@ class TestUndoLiftCompositionEvent:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await undo_lift_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="",
-                    lift_id="lift-XYZ",
+                    event_type="lift", event_id="lift-XYZ",
                 )
         mock.undo_lift.assert_not_awaited()
 
@@ -4676,11 +4674,11 @@ class TestUndoLiftCompositionEvent:
     async def test_empty_lift_id_rejected_preflight(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            with pytest.raises(ToolError, match="lift_id is required"):
-                await undo_lift_composition_event(
+            with pytest.raises(ToolError, match="event_id is required"):
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="   ",
+                    event_type="lift", event_id="   ",
                 )
         mock.undo_lift.assert_not_awaited()
 
@@ -4715,10 +4713,10 @@ class TestUndoLiftCompositionEvent:
         mock = _mock_client(undo_lift=AsyncMock(side_effect=err))
         with _patch_client(mock):
             with pytest.raises(ToolError) as excinfo:
-                await undo_lift_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="lift-XYZ",
+                    event_type="lift", event_id="lift-XYZ",
                 )
         msg = str(excinfo.value)
         assert "409" in msg
@@ -4738,10 +4736,10 @@ class TestUndoLiftCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await undo_lift_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="lift-missing",
+                    event_type="lift", event_id="lift-missing",
                 )
 
     @pytest.mark.asyncio
@@ -4757,10 +4755,10 @@ class TestUndoLiftCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await undo_lift_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
-                    lift_id="lift-XYZ",
+                    event_type="lift", event_id="lift-XYZ",
                 )
 
 
@@ -4782,10 +4780,10 @@ class TestPreviewUndoSplitComposition:
             preview_split_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_split_composition(
+            result = await preview_undo_composition(
                 server_version="0",
                 model_id="tm-anc",
-                split_id="split-XYZ",
+                event_type="split", event_id="split-XYZ",
             )
         assert result == envelope
         mock.preview_split_undo.assert_awaited_once_with("tm-anc", "split-XYZ")
@@ -4806,10 +4804,10 @@ class TestPreviewUndoSplitComposition:
             preview_split_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_split_composition(
+            result = await preview_undo_composition(
                 server_version="0",
                 model_id="tm-anc",
-                split_id="split-XYZ",
+                event_type="split", event_id="split-XYZ",
             )
         assert result["refusal"]["reasons"][0]["code"] == "target_entity_edited"
 
@@ -4818,10 +4816,10 @@ class TestPreviewUndoSplitComposition:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await preview_undo_split_composition(
+                await preview_undo_composition(
                     server_version="0",
                     model_id="",
-                    split_id="split-XYZ",
+                    event_type="split", event_id="split-XYZ",
                 )
         mock.preview_split_undo.assert_not_awaited()
 
@@ -4829,11 +4827,11 @@ class TestPreviewUndoSplitComposition:
     async def test_empty_split_id_rejected_preflight(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            with pytest.raises(ToolError, match="split_id is required"):
-                await preview_undo_split_composition(
+            with pytest.raises(ToolError, match="event_id is required"):
+                await preview_undo_composition(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="",
+                    event_type="split", event_id="",
                 )
         mock.preview_split_undo.assert_not_awaited()
 
@@ -4848,10 +4846,10 @@ class TestPreviewUndoSplitComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await preview_undo_split_composition(
+                await preview_undo_composition(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="split-missing",
+                    event_type="split", event_id="split-missing",
                 )
 
     @pytest.mark.asyncio
@@ -4867,10 +4865,10 @@ class TestPreviewUndoSplitComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await preview_undo_split_composition(
+                await preview_undo_composition(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="split-XYZ",
+                    event_type="split", event_id="split-XYZ",
                 )
 
 
@@ -4899,10 +4897,10 @@ class TestUndoSplitCompositionEvent:
             undo_split=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await undo_split_composition_event(
+            result = await undo_composition_event(
                 server_version="0",
                 model_id="tm-anc",
-                split_id="split-XYZ",
+                event_type="split", event_id="split-XYZ",
             )
         assert result == envelope
         mock.undo_split.assert_awaited_once_with("tm-anc", "split-XYZ")
@@ -4912,10 +4910,10 @@ class TestUndoSplitCompositionEvent:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await undo_split_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="",
-                    split_id="split-XYZ",
+                    event_type="split", event_id="split-XYZ",
                 )
         mock.undo_split.assert_not_awaited()
 
@@ -4923,11 +4921,11 @@ class TestUndoSplitCompositionEvent:
     async def test_empty_split_id_rejected_preflight(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            with pytest.raises(ToolError, match="split_id is required"):
-                await undo_split_composition_event(
+            with pytest.raises(ToolError, match="event_id is required"):
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="",
+                    event_type="split", event_id="",
                 )
         mock.undo_split.assert_not_awaited()
 
@@ -4957,10 +4955,10 @@ class TestUndoSplitCompositionEvent:
         mock = _mock_client(undo_split=AsyncMock(side_effect=err))
         with _patch_client(mock):
             with pytest.raises(ToolError) as excinfo:
-                await undo_split_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="split-XYZ",
+                    event_type="split", event_id="split-XYZ",
                 )
         msg = str(excinfo.value)
         assert "409" in msg
@@ -4977,10 +4975,10 @@ class TestUndoSplitCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await undo_split_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="split-missing",
+                    event_type="split", event_id="split-missing",
                 )
 
     @pytest.mark.asyncio
@@ -4996,10 +4994,10 @@ class TestUndoSplitCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await undo_split_composition_event(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
-                    split_id="split-XYZ",
+                    event_type="split", event_id="split-XYZ",
                 )
 
 

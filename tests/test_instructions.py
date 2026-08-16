@@ -78,13 +78,13 @@ def test_tags_section_present(tier: str, role: str) -> None:
     text = build_instructions(tier=tier, role=role)
     assert "## Tags (grouping)" in text
     for tool in (
-        "create_tag",
-        "add_model_to_tag",
-        "list_tags",
-        "get_tag_risk_view",
-        "select_tag_compliance_frameworks",
-        "get_tag_compliance_report",
-        "export_tag_report",
+        "create_group",
+        "add_model_to_group",
+        "list_groups",
+        "get_risk_view",
+        "select_compliance_frameworks",
+        "get_compliance_report",
+        "export_report",
     ):
         assert tool in text
 
@@ -103,7 +103,7 @@ def test_functional_conformance_section_present(tier: str, role: str) -> None:
     assert "## Functional conformance" in text
     for tool in (
         "generate_functional_objectives",
-        "get_functional_scan_prompt",
+        "get_scan_prompt",
         "add_functional_test",
         "import_functional_tests",
         "suggest_functional_test_mappings",

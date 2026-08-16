@@ -1331,6 +1331,32 @@ class MipitiClient:
         )
         return ThreatModel.model_validate(data)
 
+
+    async def restore_assumption(self, model_id: str, as_id: str) -> ThreatModel:
+        """Un-soft-delete an assumption. It returns to active status;
+        re-attestation is required before it mitigates COs again."""
+        data = await self._post(
+            f"/api/models/{model_id}/assumptions/{as_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
+
+    async def restore_component(self, model_id: str, component_id: str) -> ThreatModel:
+        """Un-soft-delete a component. Reinstates it under its original ID,
+        restoring its trust-boundary contribution to asset reachability."""
+        data = await self._post(
+            f"/api/models/{model_id}/components/{component_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
+
+    async def restore_trust_boundary(self, model_id: str, tb_id: str) -> ThreatModel:
+        """Un-soft-delete a trust boundary. Reinstates the boundary; the
+        reachability it filtered re-narrows and its seal/isolation claim is
+        restored."""
+        data = await self._post(
+            f"/api/models/{model_id}/trust-boundaries/{tb_id}/restore", {},
+        )
+        return ThreatModel.model_validate(data)
+
     async def get_mitigation_groups(
         self, model_id: str, co_id: str,
     ) -> dict:
