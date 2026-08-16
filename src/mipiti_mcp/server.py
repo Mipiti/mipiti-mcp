@@ -47,674 +47,249 @@ _INSTRUCTIONS_UPDATE_MESSAGE = (
 )
 
 _INSTRUCTIONS_BASE = """\
-Mipiti generates threat models from feature descriptions and tracks security \
-controls with machine-verifiable assertions.
+Mipiti generates threat models from feature descriptions and tracks security controls with machine-verifiable assertions.
 
-Every tool call must include `server_version` set to """ + f'`{_SERVER_VERSION}`' + """.
-If the server responds with an `instructions_updated` field, relay the message \
-to the user, in a way appropriate to your environment, then continue with the \
-current task.
+Every tool call must include `server_version` set to `{_SERVER_VERSION}`. If the server responds with an `instructions_updated` field, relay the message to the user, in a way appropriate to your environment, then continue with the current task.
 
 ## When to use
 
-Before implementing changes, call `generate_threat_model` with a description \
-of the change. It automatically discovers similar existing models — either \
-returning matches to refine or proceeding with generation. Use the resulting \
-controls to guide your implementation.
+Before implementing changes, call `generate_threat_model` with a description of the change. It automatically discovers similar existing models — either returning matches to refine or proceeding with generation. Use the resulting controls to guide your implementation.
 
 ## Constructing `feature_description`
 
-Output quality scales with input quality. A one-line "this is a backend \
-that handles payments" produces a generic, shallow model; a multi-paragraph \
-spec with concrete components, integrations, and trust boundaries produces a \
-useful one. Two scenarios require different gathering strategies:
+Output quality scales with input quality. A one-line "this is a backend that handles payments" produces a generic, shallow model; a multi-paragraph spec with concrete components, integrations, and trust boundaries produces a useful one. Two scenarios require different gathering strategies:
 
-**Scenario A — planned change (you're about to implement something).** The \
-in-progress design discussion or PR description is usually enough. Pass it \
-verbatim or lightly edited. Don't pad with unrelated repo context.
+**Scenario A — planned change (you're about to implement something).** The in-progress design discussion or PR description is usually enough. Pass it verbatim or lightly edited. Don't pad with unrelated repo context.
 
-**Scenario B — existing repo (operator said "threat-model this repo" or \
-similar).** The conversation context alone is almost never enough. Before \
-calling `generate_threat_model`, gather:
+**Scenario B — existing repo (operator said "threat-model this repo" or similar).** The conversation context alone is almost never enough. Before calling `generate_threat_model`, gather:
 
-1. **Purpose** — open `README.md` (and any `docs/` overview). One or two \
-sentences on what the system does and who uses it.
-2. **Components / processes** — entry points, services, daemons, workers. \
-Look at `Procfile`, `docker-compose.yml`, `fly.toml`, k8s manifests, the \
-`scripts` block in `package.json`, `__main__.py` / top-level `main.py` / \
-`cmd/` directories, the `[project.scripts]` table in `pyproject.toml`. \
-List each component with a short purpose.
-3. **External integrations** — third-party APIs, databases, queues, auth \
-providers, payment processors. Grep env-var references (`os.environ`, \
-`process.env`), SDK imports (`stripe`, `boto3`, `@octokit`, etc.), and \
-infrastructure definitions. Name each one and what it's used for.
-4. **Data flows / assets** — what data enters the system and where it \
-goes. Skim HTTP route files, webhook handlers, message-queue consumers, \
-schema/model files. Note PII, secrets, credentials, regulated data.
-5. **Trust boundaries** — where requests cross from less-trusted to \
-more-trusted (network ingress, auth middleware, service-to-service calls, \
-worker IPC). At minimum: "anonymous internet → authenticated API → \
-internal services → datastore."
-6. **Deployment shape** — SaaS / on-prem / hybrid / library. Single-tenant \
-vs. multi-tenant. Look at `Dockerfile`, `fly.toml`, `helm/`, `terraform/`, \
-or absence thereof.
+1. **Purpose** — open `README.md` (and any `docs/` overview). One or two sentences on what the system does and who uses it.
+2. **Components / processes** — entry points, services, daemons, workers. Look at `Procfile`, `docker-compose.yml`, `fly.toml`, k8s manifests, the `scripts` block in `package.json`, `__main__.py` / top-level `main.py` / `cmd/` directories, the `[project.scripts]` table in `pyproject.toml`. List each component with a short purpose.
+3. **External integrations** — third-party APIs, databases, queues, auth providers, payment processors. Grep env-var references (`os.environ`, `process.env`), SDK imports (`stripe`, `boto3`, `@octokit`, etc.), and infrastructure definitions. Name each one and what it's used for.
+4. **Data flows / assets** — what data enters the system and where it goes. Skim HTTP route files, webhook handlers, message-queue consumers, schema/model files. Note PII, secrets, credentials, regulated data.
+5. **Trust boundaries** — where requests cross from less-trusted to more-trusted (network ingress, auth middleware, service-to-service calls, worker IPC). At minimum: "anonymous internet → authenticated API → internal services → datastore."
+6. **Deployment shape** — SaaS / on-prem / hybrid / library. Single-tenant vs. multi-tenant. Look at `Dockerfile`, `fly.toml`, `helm/`, `terraform/`, or absence thereof.
 
-Pass all of this as a multi-paragraph `feature_description`. The backend \
-will detect similar existing models — if one matches, prefer \
-`refine_threat_model` on it instead of `force=True`.
+Pass all of this as a multi-paragraph `feature_description`. The backend will detect similar existing models — if one matches, prefer `refine_threat_model` on it instead of `force=True`.
 
 ## Threat modeling
 
-- `generate_threat_model` — creates a new model with trust boundaries, \
-assets, attackers, and control objectives. Automatically detects similar \
-existing models and routes accordingly. Progress reported automatically.
-- `refine_threat_model` — updates an existing model when you already have \
-a model ID and want to change it. Progress reported automatically.
-- `add_asset` / `edit_asset` / `remove_asset` — targeted single-entity \
-changes without full refinement. Each asset has a `status` field: \
-`unverified` (default), `confirmed` (assertions prove it exists), \
-`absent` (agent confirmed it is not applicable). Use `edit_asset` to \
-update status after verifying.
-- `add_attacker` / `edit_attacker` / `remove_attacker` — same for attackers. \
-Attacker `status` works the same way: `confirmed` means the attack \
-surface exists, `absent` means it is not applicable.
-- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor \
-decomposition (subscores + blast/recoverability/regulatory on assets; \
-CVSS-Base + capability_prevalence on attackers) for every live entity in \
-a model. Use this to re-baseline an existing model after the feature \
-description changes meaningfully, or to refresh stale ratings — without \
-regenerating the whole model (which would destroy controls, assertions, \
-components). The platform's factor judgment is a calibrated *starting \
-point*; layer deployment-specific reality on top via `edit_asset` / \
-`edit_attacker` with a `change_reason` documenting the override (e.g., \
-"regulatory_scope=Legal — tenant is HIPAA-covered", \
-"capability_prevalence=Commodity — endpoint is public-internet \
-exposed"). The rating-revision audit trail distinguishes platform \
-suggestions from operator overrides.
-- `revalidate_threat_model_entities` — re-run quality validation over an \
-existing model's assets and attackers (a fast first-pass check on every \
-entity, a deeper review only on the ones it flags). Use it to apply \
-validation improvements to an already-generated model or clear stale quality \
-warnings, without regenerating. Non-destructive (it flags rather than \
-deletes) and saves a new version.
-- `get_threat_model` — retrieve a model's full structure (excludes COs by \
-default; use `include_cos=True` to include them).
+- `generate_threat_model` — creates a new model with trust boundaries, assets, attackers, and control objectives. Automatically detects similar existing models and routes accordingly. Progress reported automatically.
+- `refine_threat_model` — updates an existing model when you already have a model ID and want to change it. Progress reported automatically.
+- `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. Each asset has a `status` field: `unverified` (default), `confirmed` (assertions prove it exists), `absent` (agent confirmed it is not applicable). Use `edit_asset` to update status after verifying.
+- `add_attacker` / `edit_attacker` — same for attackers. Attacker `status` works the same way: `confirmed` means the attack surface exists, `absent` means it is not applicable.
+- `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
+- `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (removals are audit-preserving; restore applies to `asset`, `attacker`, and `assumption`).
+- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
+- `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and saves a new version.
+- `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
 - `list_threat_models` — browse existing models.
-- `rename_threat_model` — rename a model (metadata only, no new version). \
-Model titles must be unique within a workspace (case-insensitive); pick a \
-distinct name on the first try to avoid a 409 retry.
-- `set_threat_model_parent` — wire a model under (or detach it from) a \
-parent on the recursive composition tree. Pass `parent_id=None` to clear. \
-Server rejects cycles and over-deep chains; bumps version on success.
+- `rename_threat_model` — rename a model (metadata only, no new version). Model titles must be unique within a workspace (case-insensitive); pick a distinct name on the first try to avoid a 409 retry.
+- `set_threat_model_parent` — wire a model under (or detach it from) a parent on the recursive composition tree. Pass `parent_id=None` to clear. Server rejects cycles and over-deep chains; bumps version on success.
 - `delete_threat_model` — permanently delete a model and all its data.
-- `export_threat_model` — download as PDF, HTML, or CSV.
-- `export_threat_model_archive` — download the self-contained JSON audit \
-archive (every version, controls, assertions with CI verdicts, findings, \
-attestations, sufficiency signatures). Independently verifiable without \
-origin-instance access.
-- `import_threat_model_archive` — restore an audit archive into a \
-workspace. Assigns a fresh model_id every time; title collisions \
-auto-suffix `(imported YYYY-MM-DD)`.
+- `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive (every version, controls, assertions with CI verdicts, findings, attestations, sufficiency signatures — independently verifiable without origin-instance access). The same tool produces the group/tag auditor report (see Tags).
+- `import_threat_model_archive` — restore an audit archive into a workspace. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`.
 
 ## Controls and assertions
 
-A threat model produces control objectives. Controls are derived from these \
-and represent specific security requirements to implement. Assertions are \
-typed, machine-verifiable claims about system properties that prove a \
-control is satisfied. A system property can be verified by examining \
-source code, configuration files, infrastructure definitions, or \
-external service settings.
+A threat model produces control objectives. Controls are derived from these and represent specific security requirements to implement. Assertions are typed, machine-verifiable claims about system properties that prove a control is satisfied. A system property can be verified by examining source code, configuration files, infrastructure definitions, or external service settings.
 
 **Key tools:**
-- `get_controls` — lists controls with current status. Use `summary_only=True` \
-for a compact response (id, description, status, assertion_count, assumed_by).
-- `get_control_objectives` — lists COs with which controls cover each one. \
-Pair with `get_reachability_verdicts` to surface composer reachability \
-state per CO before linking assumptions or regenerating.
-- `submit_assertions` — provide proof for a control. See that tool's docstring for \
-assertion types and required params. Always verify locally first: \
-`mipiti-verify verify <type> -p key=value --project-root .` \
-Read the target file and confirm a reviewer would agree with the claim.
-- **Assertion design: prefer decomposition over breadth.** Tier 2 \
-(semantic LLM check) evaluates each assertion with only its own \
-check-type evidence. A single broad claim like "X calls Y to do \
-A and B using C" will pass Tier 1 but fail Tier 2 — the mechanical \
-evidence (e.g., a function_calls result) doesn't surface facts \
-A, B, C. Split into multiple atomic assertions — one for each \
-narrow aspect — each with a check type that directly shows the \
-relevant code (`pattern_matches` on the specific line, \
-`function_exists` for the named function, etc.). Submit them as \
-a group on the same control. Sufficiency combines them; \
-individually each is trivially provable.
-- `list_assertions` / `delete_assertion` — list active assertions for a control; \
-delete stale or incorrect ones before resubmitting.
-- `update_control_status` — mark implemented or not_implemented. Requires \
-at least one assertion BEFORE marking implemented. Always submit \
-assertions first, then update status.
-- `get_verification_report` — shows which controls are verified, which \
-have sufficiency gaps, and which lack assertions entirely. Read \
-`sufficiency_details` for the specific aspects that still need proof. \
-Each `sufficiency` block also carries `misaligned_assertion_ids` \
-(off-topic assertions that should be rebound, superseded, or rewritten — \
-do not treat them as evidence) and `stale: true` (cached verdict no \
-longer matches current inputs; a background re-eval was triggered on \
-read — call again shortly for a refreshed verdict).
-- `get_sufficiency` — quick check: do assertions for a single control \
-collectively cover all aspects? Evaluated server-side at submission.
-- `get_mitigation_groups` — get the current group structure for a CO with \
-control details (id, description, status) for each entry. Shows numbered \
-groups (AND within, OR across), defense-in-depth controls, and unmapped \
-controls available for assignment. Use before `set_mitigation_groups`, \
-when reviewing why a CO is at_risk, or to find unmapped controls.
-- `set_mitigation_groups` — set which controls are required vs defense-in-depth \
-for a CO. Use when a control is blocking a CO but is redundant with existing \
-mitigations (e.g., HMAC signing redundant with TLS + content hash), or when \
-restructuring alternative mitigation paths. Groups define: within group AND \
-(all required), across groups OR (any complete group mitigates). AI-gated: \
-rejected if the new structure doesn't satisfy the CO.
-- `refine_control` — modify a control's description if it doesn't match \
-the actual security requirement. **Side effect on accepted refinements**: \
-every assertion attached to the control is superseded — their claims \
-were authored against the prior description and may not be on-topic for \
-the new one. Response carries `superseded_assertions: <count>`. Re-submit \
-any assertion that still applies; superseded rows remain in history.
-- `delete_control` — soft-delete a control with justification. Blocked if \
-it is the only control covering a CO — add a replacement first.
-- `import_controls` — import existing controls from JSON or free text, \
-auto-mapped to COs and deduplicated against existing controls.
-- `add_evidence` / `remove_evidence` — attach auxiliary metadata (docs, links, \
-artifacts) to a control. Evidence is contextual only — it does NOT prove \
-a control is implemented. Only assertions do that.
-- `regenerate_controls` — regenerate controls. Supports `mode="per_co"` \
-for thorough single-responsibility generation, and `co_ids="CO1,CO5"` \
-to regenerate only specific COs (preserving other controls). Controls \
-whose descriptions survive unchanged keep their implementation status, \
-assertions, and mappings.
+- `get_controls` — lists controls with current status; pass a single control id to read just one. Use `summary_only=True` for a compact response (id, description, status, assertion_count, assumed_by).
+- `get_control_objectives` — lists COs with which controls cover each one; pass a single CO id to read just one. Pair with `get_reachability_verdicts` to surface composer reachability state per CO before linking assumptions or regenerating.
+- `submit_assertions` — provide proof for a control. See that tool's docstring for assertion types and required params. Always verify locally first: `mipiti-verify verify <type> -p key=value --project-root .` Read the target file and confirm a reviewer would agree with the claim.
+- **Assertion design: prefer decomposition over breadth.** Tier 2 (semantic LLM check) evaluates each assertion with only its own check-type evidence. A single broad claim like "X calls Y to do A and B using C" will pass Tier 1 but fail Tier 2 — the mechanical evidence (e.g., a function_calls result) doesn't surface facts A, B, C. Split into multiple atomic assertions — one for each narrow aspect — each with a check type that directly shows the relevant code (`pattern_matches` on the specific line, `function_exists` for the named function, etc.). Submit them as a group on the same control. Sufficiency combines them; individually each is trivially provable.
+- `list_assertions` / `delete_assertion` — list active assertions for a control; delete stale or incorrect ones before resubmitting.
+- `update_control_status` — mark implemented or not_implemented. Requires at least one assertion BEFORE marking implemented. Always submit assertions first, then update status.
+- `get_verification_report` — shows which controls are verified, which have sufficiency gaps, and which lack assertions entirely. Read `sufficiency_details` for the specific aspects that still need proof. Each `sufficiency` block also carries `misaligned_assertion_ids` (off-topic assertions that should be rebound, superseded, or rewritten — do not treat them as evidence) and `stale: true` (cached verdict no longer matches current inputs; a background re-eval was triggered on read — call again shortly for a refreshed verdict).
+- `get_sufficiency` — quick check: do assertions for a single control collectively cover all aspects? Evaluated server-side at submission.
+- `get_mitigation_groups` — get the current group structure for a CO with control details (id, description, status) for each entry. Shows numbered groups (AND within, OR across), defense-in-depth controls, and unmapped controls available for assignment. Use before `set_mitigation_groups`, when reviewing why a CO is at_risk, or to find unmapped controls.
+- `set_mitigation_groups` — set which controls are required vs defense-in-depth for a CO. Use when a control is blocking a CO but is redundant with existing mitigations (e.g., HMAC signing redundant with TLS + content hash), or when restructuring alternative mitigation paths. Groups define: within group AND (all required), across groups OR (any complete group mitigates). AI-gated: rejected if the new structure doesn't satisfy the CO.
+- `refine_control` — modify a control's description if it doesn't match the actual security requirement. **Side effect on accepted refinements**: every assertion attached to the control is superseded — their claims were authored against the prior description and may not be on-topic for the new one. Response carries `superseded_assertions: <count>`. Re-submit any assertion that still applies; superseded rows remain in history.
+- `delete_control` — soft-delete a control with justification. Blocked if it is the only control covering a CO — add a replacement first.
+- `import_controls` — import existing controls from JSON or free text, auto-mapped to COs and deduplicated against existing controls.
+- `add_evidence` / `remove_evidence` — attach auxiliary metadata (docs, links, artifacts) to a control. Evidence is contextual only — it does NOT prove a control is implemented. Only assertions do that.
+- `regenerate_controls` — regenerate controls. Supports `mode="per_co"` for thorough single-responsibility generation, and `co_ids="CO1,CO5"` to regenerate only specific COs (preserving other controls). Controls whose descriptions survive unchanged keep their implementation status, assertions, and mappings.
 
 **Workflow — handle in this order:**
 
-1. **Controls outside the system boundary** (externally handled): Read each \
-not_implemented control description. If it describes something the system \
-owner cannot implement (e.g., "restrict CI runner egress", "vendor maintains \
-PCI DSS certification") — it belongs outside your trust boundary. Use \
-`assume_control` to link it to an existing assumption, or create an \
-assumption first with `add_assumption`. Do NOT submit codebase assertions \
-for controls outside your boundary. The platform runs an AI relevance gate \
-on every assumption-to-control linkage; if the assumption's description \
-doesn't cover what the control requires, the call raises and there is no \
-override. If rejected, either pick an assumption that covers the control or \
-edit the assumption's description to make coverage explicit. For compound \
-("AS1 AND AS2") or multi-path ("AS1 OR AS2") cases, use \
-`set_control_assumption_groups` instead of `assume_control`.
+1. **Controls outside the system boundary** (externally handled): Read each not_implemented control description. If it describes something the system owner cannot implement (e.g., "restrict CI runner egress", "vendor maintains PCI DSS certification") — it belongs outside your trust boundary. Use `set_control_assumption_groups` to link it to an existing assumption, or create an assumption first with `add_assumption`. Do NOT submit codebase assertions for controls outside your boundary. The platform runs an AI relevance gate on every assumption-to-control linkage; if the assumption's description doesn't cover what the control requires, the call raises and there is no override. If rejected, either pick an assumption that covers the control or edit the assumption's description to make coverage explicit. `set_control_assumption_groups` handles both the simple single-assumption, single-group case and compound ("AS1 AND AS2") or multi-path ("AS1 OR AS2") cases.
 
-2. **Controls already satisfied by existing code** (no code changes): \
-use `get_controls` to list controls. For each, search the codebase for \
-code that already implements it. If found, craft assertions that prove \
-the implementation, verify locally, submit assertions, then call \
-`update_control_status` to mark as implemented.
+2. **Controls already satisfied by existing code** (no code changes): use `get_controls` to list controls. For each, search the codebase for code that already implements it. If found, craft assertions that prove the implementation, verify locally, submit assertions, then call `update_control_status` to mark as implemented.
 
-3. **Sufficiency gaps on verified controls** (no code changes): call \
-`get_verification_report` and read `sufficiency_details` for controls \
-that are partially verified. These are implemented but some aspects \
-lack proof. Search the codebase for code that proves the missing \
-aspects and submit additional assertions. If you cannot find proof \
-for specific aspects, call `check_control_gaps` — the control's \
-prescribed mechanism may need refinement.
+3. **Sufficiency gaps on verified controls** (no code changes): call `get_verification_report` and read `sufficiency_details` for controls that are partially verified. These are implemented but some aspects lack proof. Search the codebase for code that proves the missing aspects and submit additional assertions. If you cannot find proof for specific aspects, call `check_control_gaps` — the control's prescribed mechanism may need refinement.
 
-4. **Controls requiring implementation** (code changes needed): before \
-implementing, call `check_control_gaps` to verify the control's \
-mechanism is appropriate. Then search the codebase for existing \
-mechanisms that may already address the control. If found, call \
-`refine_control` with `codebase_findings` — the platform evaluates \
-whether the existing mechanism satisfies the objective and proposes \
-a revised control if so. If accepted, submit assertions for the \
-refined control. If rejected or no existing mechanism found, implement \
-as prescribed, submit assertions, and update status.
+4. **Controls requiring implementation** (code changes needed): before implementing, call `check_control_gaps` to verify the control's mechanism is appropriate. Then search the codebase for existing mechanisms that may already address the control. If found, call `refine_control` with `codebase_findings` — the platform evaluates whether the existing mechanism satisfies the objective and proposes a revised control if so. If accepted, submit assertions for the refined control. If rejected or no existing mechanism found, implement as prescribed, submit assertions, and update status.
 
-Sufficiency is evaluated automatically server-side when assertions \
-are submitted — no manual trigger needed.
+Sufficiency is evaluated automatically server-side when assertions are submitted — no manual trigger needed.
 
 ## When you hit an implementation constraint mid-coding
 
-When a reviewer, hardware limit, library bound, or operator decision \
-forces you off the prescribed mechanism (e.g., "this device only \
-supports AES-128, not AES-256"), do NOT silently weaken the existing \
-control or its assertions. Record the constraint structurally so the \
-threat model reflects reality and the audit trail captures the \
-reasoning. Use this 3-step pattern:
+When a reviewer, hardware limit, library bound, or operator decision forces you off the prescribed mechanism (e.g., "this device only supports AES-128, not AES-256"), do NOT silently weaken the existing control or its assertions. Record the constraint structurally so the threat model reflects reality and the audit trail captures the reasoning. Use this 3-step pattern:
 
-1. **Add the alternative control** — call `import_controls` with a \
-single-entry `controls_json` describing the weaker-but-feasible \
-mechanism. Set `co_ids` to the affected CO. Set `framework_refs` \
-**honestly**: include only bindings the alternative actually \
-satisfies — drop any that the weaker mechanism cannot meet. Then \
-call `assign_control_to_components` to scope it to the constrained \
-component(s) only, so the original control still applies elsewhere.
+1. **Add the alternative control** — call `import_controls` with a single-entry `controls_json` describing the weaker-but-feasible mechanism. Set `co_ids` to the affected CO. Set `framework_refs` **honestly**: include only bindings the alternative actually satisfies — drop any that the weaker mechanism cannot meet. Then call `assign_to_components` to scope it to the constrained component(s) only, so the original control still applies elsewhere.
 
-2. **Declare them as OR-alternatives** — call `set_mitigation_groups` \
-on the affected CO with the original (strict) control in one group \
-and the new (weaker) control in another (across groups = OR). Pass \
-the operator's plain-language constraint reason in `justification` \
-— it flows into the AI gate's verdict and the activity log.
+2. **Declare them as OR-alternatives** — call `set_mitigation_groups` on the affected CO with the original (strict) control in one group and the new (weaker) control in another (across groups = OR). Pass the operator's plain-language constraint reason in `justification` — it flows into the AI gate's verdict and the activity log.
 
-3. **Record the constraint context** — call `add_assumption` with \
-`linked_co_ids=[<co>]` capturing what reviewer or system imposed \
-the constraint, the rationale, and any expiry conditions (e.g., \
-"hardware refresh in 2027 lifts the AES-128 limit"). Then \
-`submit_attestation` so the assumption is active.
+3. **Record the constraint context** — call `add_assumption` with `linked_co_ids=[<co>]` capturing what reviewer or system imposed the constraint, the rationale, and any expiry conditions (e.g., "hardware refresh in 2027 lifts the AES-128 limit"). Then `submit_attestation` so the assumption is active.
 
-If the alternative drops a framework binding the original carried, \
-the platform automatically emits a `framework_binding_asymmetry` \
-finding for the security team to triage — surfaced via \
-`list_findings` and `get_findings_risks`.
+If the alternative drops a framework binding the original carried, the platform automatically emits a `framework_binding_asymmetry` finding for the security team to triage — surfaced via `list_findings` and `get_findings_risks`.
 
 ## Assurance posture
 
-- `assess_model` — deterministic assessment of all control objectives. \
-Returns mitigated/at_risk/unassessed counts and progressive metrics \
-(defined/implemented/verified COs). Use `summary_only=True` for a \
-compact response with just the counts and a contextual `message` \
-explaining the current state (e.g., "13 controls not implemented, \
-blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. \
-Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` \
-— `"assumption"` is a fully resolved state, not a gap. Only `at_risk` \
-and `unassessed` COs require action.
+- `assess_model` — deterministic assessment of all control objectives. Returns mitigated/at_risk/unassessed counts and progressive metrics (defined/implemented/verified COs). Use `summary_only=True` for a compact response with just the counts and a contextual `message` explaining the current state (e.g., "13 controls not implemented, blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` and `unassessed` COs require action.
 
-**Reachability and risk reason**: Reachability per CO is exposed by \
-`get_reachability_verdicts` (deterministic-computation provenance — \
-re-derived from structural primitives, never persisted). Each CO \
-assessment also includes:
-- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` \
-(implement controls), `pending_attestation` (submit an attestation for \
-the linked boundary assumption), `expired_attestation` (renew an expired \
-attestation), `unassessed` (generate controls or create an assumption), \
-`asset_absent` (asset is not applicable — skip this CO), \
-`attacker_irrelevant` (attack surface is not applicable — skip this CO), \
-`coverage_gap` (controls are implemented but do not span the CO's full \
-threat — add controls to close the gap, or dismiss/accept if intentional), \
-`insufficient_by_design` (the controls *defined* for the CO's mitigation \
-group would not mitigate the objective even if fully implemented — a design \
-gap, not an implementation gap; redesign or add controls so the group can \
-span the threat). `insufficient_by_design` is more binding than \
-`missing_controls` and takes precedence over it.
-- `asset_status` / `attacker_status` — verification status of the \
-asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
-- `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs \
-that need attestation action.
+**Reachability and risk reason**: Reachability per CO is exposed by `get_reachability_verdicts` (deterministic-computation provenance — re-derived from structural primitives, never persisted). Each CO assessment also includes:
+- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` (implement controls), `pending_attestation` (submit an attestation for the linked boundary assumption), `expired_attestation` (renew an expired attestation), `unassessed` (generate controls or create an assumption), `asset_absent` (asset is not applicable — skip this CO), `attacker_irrelevant` (attack surface is not applicable — skip this CO), `coverage_gap` (controls are implemented but do not span the CO's full threat — add controls to close the gap, or dismiss/accept if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented — a design gap, not an implementation gap; redesign or add controls so the group can span the threat). `insufficient_by_design` is more binding than `missing_controls` and takes precedence over it.
+- `asset_status` / `attacker_status` — verification status of the asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
+- `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs that need attestation action.
 
-**Action routing by risk_reason**: \
-`missing_controls` → implement controls and submit assertions. \
-`pending_attestation` → call `submit_attestation` for the assumption IDs \
-listed in `pending_assumption_ids` — do NOT try to implement controls \
-for boundary-excluded COs. \
-`expired_attestation` → call `submit_attestation` to renew for the \
-assumption IDs listed in `expired_assumption_ids`. \
-`unassessed` → generate controls with `regenerate_controls`. If the \
-composer says the CO is unreachable or indeterminate (per \
-`get_reachability_verdicts`), author a structured `Assumption.exclusion` \
-predicate via `add_assumption` instead of generating controls. \
-`asset_absent` → the asset is not applicable. No action \
-needed — skip controls for this CO. \
-`attacker_irrelevant` → the attack surface is not applicable. No action \
-needed — skip controls for this CO. \
-`coverage_gap` → the controls are implemented but leave part of the CO's \
-threat unaddressed. Inspect the linked `coverage_gap` finding via \
-`list_findings` for the uncovered aspects + suggested control, add controls \
-(`regenerate_controls` / `import_controls`) and submit assertions; if it's a \
-false positive `dismiss` the finding, or if intentional record a risk \
-acceptance / assumption. \
-`insufficient_by_design` → the controls *defined* for the CO's mitigation \
-group would not mitigate the objective even if fully implemented. Do NOT \
-just implement the defined controls — that will not help. Inspect the linked \
-`insufficient_by_design` finding via `list_findings` for the rationale, then \
-redesign or ADD controls to the mitigation group (`regenerate_controls` / \
-`import_controls`, then `set_mitigation_groups`) so the group can actually \
-span the objective's threat, and submit assertions; if it's a false positive \
-`dismiss` the finding, or if intentional record a risk acceptance / \
-assumption. (Contrast with `missing_controls`, where the defined controls \
-*would* mitigate the CO and you simply implement them and submit assertions.)
+**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is unreachable or indeterminate (per `get_reachability_verdicts`), author a structured `Assumption.exclusion` predicate via `add_assumption` instead of generating controls. `asset_absent` → the asset is not applicable. No action needed — skip controls for this CO. `attacker_irrelevant` → the attack surface is not applicable. No action needed — skip controls for this CO. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
 
 ## Gap discovery
 
-For controls with status not_implemented, determine whether the code \
-already implements them (submit assertions) or genuinely lacks them \
-(submit findings):
-- `get_review_queue` — start here for periodic maintenance: returns controls \
-not reviewed in 90+ days. For each stale control, verify its assertions \
-still hold against the current codebase.
-- `get_scan_prompt` — returns targeted prompts for scanning the codebase \
-against specific not_implemented controls.
+For controls with status not_implemented, determine whether the code already implements them (submit assertions) or genuinely lacks them (submit findings):
+- `get_review_queue` — start here for periodic maintenance: returns controls not reviewed in 90+ days. For each stale control, verify its assertions still hold against the current codebase.
+- `get_scan_prompt` — returns targeted prompts for scanning the codebase against specific not_implemented controls (this is the security-control kind; the same tool serves the functional-conformance per-test briefs when you pass the functional kind — see Functional conformance).
 - `check_control_gaps` — AI-powered gap analysis across all controls.
 - `submit_findings` — report confirmed gaps where controls are missing.
 - `list_findings` / `update_finding` — track finding lifecycle.
-- `get_findings_risks` — workspace-wide dashboard: open findings, active \
-risk acceptances, and at-risk Control Objectives in one call. Use as the \
-triage entry point when the operator asks "what's open?" / "what should \
-I work on next?".
-- `get_model_risk_view` / `get_system_risk_view` — Prioritized Risk View \
-rows for a specific model or system with risk dimensions, control \
-coverage counts, and open-finding counts per CO. Use when narrowing \
-from workspace-wide to a specific target.
-- `get_remediation_leverage` — for one model, the not-yet-satisfied \
-controls ranked by how many control objectives each closes, plus a greedy \
-minimal fix order. Use to prioritize implementation: which controls to \
-build first for the shortest path to coverage; each entry names its owning \
-model, so a high-leverage control inherited from a parent model is clear.
-- `list_risk_acceptances` — see which risks have been explicitly accepted \
-on a model (with owner, justification, review deadline) so you can \
-separate intentional acceptances from genuinely unaddressed gaps.
-- `create_risk_acceptance` — record a deliberate acceptance of a control \
-objective's residual risk (owner, justification, review deadline) so a \
-known-and-accepted decision is explicit and auditable rather than an \
-implicit gap.
-- `recompute_verdicts` — force a fresh evaluation of every control's \
-coverage verdict and every live CO's group-sufficiency verdict when the \
-surfaced divergences look stale. Runs in the background; the response \
-includes an informational cost estimate and a spend status object (an \
-exhausted status means the work is queued and resumes automatically — \
-never dropped). `get_recompute_quote` returns the estimate alone, \
-pre-flight.
+- `get_findings_risks` — workspace-wide dashboard: open findings, active risk acceptances, and at-risk Control Objectives in one call. Use as the triage entry point when the operator asks "what's open?" / "what should I work on next?".
+- `get_risk_view` — Prioritized Risk View rows for a specific target (pass the scope — a model, a system, or a tag/group) with risk dimensions, control coverage counts, and open-finding counts per CO. Use when narrowing from workspace-wide to a specific target.
+- `get_remediation_leverage` — for one model, the not-yet-satisfied controls ranked by how many control objectives each closes, plus a greedy minimal fix order. Use to prioritize implementation: which controls to build first for the shortest path to coverage; each entry names its owning model, so a high-leverage control inherited from a parent model is clear.
+- `list_risk_acceptances` — see which risks have been explicitly accepted on a model (with owner, justification, review deadline) so you can separate intentional acceptances from genuinely unaddressed gaps.
+- `create_risk_acceptance` — record a deliberate acceptance of a control objective's residual risk (owner, justification, review deadline) so a known-and-accepted decision is explicit and auditable rather than an implicit gap.
+- `recompute_verdicts` — force a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale. Runs in the background; the response includes an informational cost estimate and a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped). Pass its quote-only param to get the cost estimate alone, pre-flight, without enqueuing the recompute.
 
 ## Remediating findings (structural drift)
 
-The platform emits structural-drift findings (e.g. duplicate controls \
-that accumulated from prior platform behavior, framework-binding \
-asymmetries when mitigation groups have inconsistent compliance \
-coverage) via list_findings. For findings whose kind supports \
-automatic remediation, you can offer the operator a one-click cleanup \
-flow:
+The platform emits structural-drift findings (e.g. duplicate controls that accumulated from prior platform behavior, framework-binding asymmetries when mitigation groups have inconsistent compliance coverage) via list_findings. For findings whose kind supports automatic remediation, you can offer the operator a one-click cleanup flow:
 
-1. Call preview_finding_remediation(finding_id) to see the proposed \
-   change. The response is a structured diff scoped to that one \
-   finding — typically very small.
+1. Call preview_finding_remediation(finding_id) to see the proposed change. The response is a structured diff scoped to that one finding — typically very small.
 
-2. SHOW THE OPERATOR THE DIFF. Do not commit silently. The operator \
-   should see exactly which controls would be merged, what framework \
-   refs would consolidate, etc.
+2. SHOW THE OPERATOR THE DIFF. Do not commit silently. The operator should see exactly which controls would be merged, what framework refs would consolidate, etc.
 
-3. Get the operator's confirmation AND a one-line rationale (e.g. \
-   "cleaning up duplicates from pre-fix trigger bug").
+3. Get the operator's confirmation AND a one-line rationale (e.g. "cleaning up duplicates from pre-fix trigger bug").
 
-4. Call apply_finding_remediation(finding_id, justification=<rationale>) \
-   to commit. The platform records who, what, and why for the audit \
-   trail.
+4. Call apply_finding_remediation(finding_id, justification=<rationale>) to commit. The platform records who, what, and why for the audit trail.
 
-Never apply remediation without preview. The platform does not \
-enforce this — it's the agent's responsibility to surface the change \
-before committing.
+Never apply remediation without preview. The platform does not enforce this — it's the agent's responsibility to surface the change before committing.
 
-**Diagnose-and-hand-off findings.** Some finding kinds have NO automatic \
-remediation handler (`preview_finding_remediation` / \
-`apply_finding_remediation` return 422) — they describe a gap for you to \
-resolve directly with the control tools, then submit assertions / \
-`update_finding`: \
-`coverage_gap` (the CO's controls do not span its full threat → add the \
-missing controls via `regenerate_controls` / `import_controls`, or `dismiss` \
-if a false positive, or record a risk acceptance / assumption if \
-intentional), \
-`insufficient_by_design` (the controls *defined* for the CO's mitigation \
-group would not mitigate it even if fully implemented → do NOT just \
-implement the defined controls; redesign or add controls to the mitigation \
-group via `regenerate_controls` / `import_controls` + `set_mitigation_groups` \
-so the group can span the threat, or `dismiss` if a false positive, or \
-record a risk acceptance / assumption if intentional), \
-`control_mechanism` (an existing control's mechanism is wrong and could not \
-be corrected automatically → edit, split, or remove it; the finding's \
-details list the control's full CO-set so you see the blast radius before \
-changing a shared control), \
-`misclassified_defense_in_depth` (a defense-in-depth control is load-bearing \
-for a CO's coverage → promote it into that CO's mitigation group via \
-`set_mitigation_groups`). Do not call `apply_finding_remediation` for these \
-kinds.
+**Diagnose-and-hand-off findings.** Some finding kinds have NO automatic remediation handler (`preview_finding_remediation` / `apply_finding_remediation` return 422) — they describe a gap for you to resolve directly with the control tools, then submit assertions / `update_finding`: `coverage_gap` (the CO's controls do not span its full threat → add the missing controls via `regenerate_controls` / `import_controls`, or `dismiss` if a false positive, or record a risk acceptance / assumption if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate it even if fully implemented → do NOT just implement the defined controls; redesign or add controls to the mitigation group via `regenerate_controls` / `import_controls` + `set_mitigation_groups` so the group can span the threat, or `dismiss` if a false positive, or record a risk acceptance / assumption if intentional), `control_mechanism` (an existing control's mechanism is wrong and could not be corrected automatically → edit, split, or remove it; the finding's details list the control's full CO-set so you see the blast radius before changing a shared control), `misclassified_defense_in_depth` (a defense-in-depth control is load-bearing for a CO's coverage → promote it into that CO's mitigation group via `set_mitigation_groups`). Do not call `apply_finding_remediation` for these kinds.
 
 ## Project setup
 
-- `get_setup_status` — check which onboarding steps are done and which \
-are pending. Call before suggesting setup actions to avoid repeating \
-completed steps.
-- `complete_setup_step` — mark an onboarding step as done. Call after \
-completing a setup action: `mcp_configured` (after MCP server is \
-connected), `mipiti_verify_installed` (after installing mipiti-verify), \
-`ci_secret_added` (after adding the API key to CI secrets), \
-`ci_pipeline_added` (after adding the verification job to CI).
+- `get_setup_status` — check which onboarding steps are done and which are pending. Call before suggesting setup actions to avoid repeating completed steps.
+- `complete_setup_step` — mark an onboarding step as done. Call after completing a setup action: `mcp_configured` (after MCP server is connected), `mipiti_verify_installed` (after installing mipiti-verify), `ci_secret_added` (after adding the API key to CI secrets), `ci_pipeline_added` (after adding the verification job to CI).
 
 ## Trust boundaries and assumptions
 
-Trust boundaries and assumptions are versioned (CRUD creates new model \
-versions with carry-forward).
+Trust boundaries and assumptions are versioned (CRUD creates new model versions with carry-forward).
 
-**Decision rule — control or assumption?** \
-If a security requirement can be implemented and machine-verified in the \
-codebase → it is a **control**. If it describes a property that must be \
-upheld by an external party (customer, vendor, operator) and cannot be \
-implemented by the system owner → it is an **assumption**. The trust boundary \
-is the dividing line. When in doubt: if you cannot write a codebase assertion \
-that proves it, it is an assumption.
+**Decision rule — control or assumption?** If a security requirement can be implemented and machine-verified in the codebase → it is a **control**. If it describes a property that must be upheld by an external party (customer, vendor, operator) and cannot be implemented by the system owner → it is an **assumption**. The trust boundary is the dividing line. When in doubt: if you cannot write a codebase assertion that proves it, it is an assumption.
 
-- `get_threat_model` — returns existing trust boundaries (along with assets, \
-attackers, and assumptions). Use this to review current boundaries before \
-adding or modifying them.
-- `add_trust_boundary` / `edit_trust_boundary` / `remove_trust_boundary` \
-— CRUD for trust boundaries (defines where trust transitions occur).
-- `add_assumption` — add an assumption, optionally linking it to COs it \
-covers via `linked_co_ids`. Linked assumptions can mitigate COs when attested.
+- `get_threat_model` — returns existing trust boundaries (along with assets, attackers, and assumptions). Use this to review current boundaries before adding or modifying them.
+- `add_trust_boundary` / `edit_trust_boundary` — create or edit trust boundaries (defines where trust transitions occur); soft-delete one with `remove_entity(entity_type="trust_boundary")`.
+- `add_assumption` — add an assumption, optionally linking it to COs it covers via `linked_co_ids`. Linked assumptions can mitigate COs when attested.
 - `edit_assumption` — update description and/or linked COs.
-- `remove_assumption` — soft-delete an assumption (preserved for audit). \
-Linked COs are no longer mitigated by it; controls with `assumed_by` pointing \
-to it become inert (pointer preserved to enable restore).
-- `restore_assumption` — restore a soft-deleted assumption. Controls with \
-`assumed_by` pointing to it automatically reconnect. Re-attestation required \
-before the assumption mitigates COs again.
-- `submit_attestation` — record that a responsible party affirmed an \
-assumption holds. Provide `attested_by`, `statement`, and `expires_at` \
-(ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation.
+- `remove_entity(entity_type="assumption")` — soft-delete an assumption (preserved for audit). Linked COs are no longer mitigated by it; controls with `assumed_by` pointing to it become inert (pointer preserved to enable restore).
+- `restore_entity(entity_type="assumption")` — restore a soft-deleted assumption. Controls with `assumed_by` pointing to it automatically reconnect. Re-attestation required before the assumption mitigates COs again.
+- `submit_attestation` — record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, and `expires_at` (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation.
 - `list_attestations` — attestation history for an assumption.
 
 **Assumption types**: Two types, set via `assumption_type` in `add_assumption`:
-- `non_applicability` — entity is not applicable to the feature. Requires CI \
-verification (submit assertions + run mipiti-verify). Manual attestation is \
-rejected. Originates from the taxonomy-classification step (which judges the \
-feature against the closed 17-primitive taxonomy) or from operator-authored \
-declarations. Generation-time validation failures on individual assets / \
-attackers do NOT auto-create non-applicability assumptions; entities that \
-exhaust the validation loop's retries receive a `quality_warning` field for \
-the operator to review.
-- `external` (default) — responsibility handled by a third party \
-that cannot be CI-verified against the codebase (e.g., vendor SLAs, \
-infrastructure isolation, customer CI hardening). Allows manual attestation \
-via `submit_attestation`.
+- `non_applicability` — entity is not applicable to the feature. Requires CI verification (submit assertions + run mipiti-verify). Manual attestation is rejected. Originates from the taxonomy-classification step (which judges the feature against the closed 17-primitive taxonomy) or from operator-authored declarations. Generation-time validation failures on individual assets / attackers do NOT auto-create non-applicability assumptions; entities that exhaust the validation loop's retries receive a `quality_warning` field for the operator to review.
+- `external` (default) — responsibility handled by a third party that cannot be CI-verified against the codebase (e.g., vendor SLAs, infrastructure isolation, customer CI hardening). Allows manual attestation via `submit_attestation`.
 
-**Assumption-based mitigation**: An active assumption with linked COs and \
-a current (non-expired) attestation mitigates those COs. The assessment \
-reports `mitigated_by: "assumption"` — this is a resolved state, not a gap.
+**Assumption-based mitigation**: An active assumption with linked COs and a current (non-expired) attestation mitigates those COs. The assessment reports `mitigated_by: "assumption"` — this is a resolved state, not a gap.
 
-**Control-level assumption groups**: For COs that span trust boundaries, \
-individual controls can be marked as externally handled by assumptions. \
-Assumption groups express alternative sets of external claims: within a \
-group all assumptions must be active+attested (AND), any complete group \
-suffices (OR).
-- `get_control_assumption_groups` / `set_control_assumption_groups` — \
-inspect and set the full group structure. Use for compound cases \
-("AWS KMS + quarterly review" or "HSM + FIPS certification") or \
-multiple independent paths.
-- `assume_control` / `unassume_control` — shorthand for the common \
-single-assumption, single-group case (writes to group 1).
+**Control-level assumption groups**: For COs that span trust boundaries, individual controls can be marked as externally handled by assumptions. Assumption groups express alternative sets of external claims: within a group all assumptions must be active+attested (AND), any complete group suffices (OR).
+- `get_control_assumption_groups` / `set_control_assumption_groups` — inspect and set the full group structure. Use `set_control_assumption_groups` for every case: the common single-assumption, single-group case (write one assumption into group 1), compound cases ("AWS KMS + quarterly review" or "HSM + FIPS certification"), and multiple independent paths.
 
-**Violation workflow**: When an assumption is violated or attestation \
-expires, affected COs become at-risk. Four remediation paths:
+**Violation workflow**: When an assumption is violated or attestation expires, affected COs become at-risk. Four remediation paths:
 1. Re-attest — `submit_attestation` with new expiry (assumption still valid)
-2. Restore — `restore_assumption` if assumption was soft-deleted and is \
-still valid; re-attest after restoring
-3. Convert to controls — `convert_assumption_to_controls` generates \
-controls for affected COs and retires the assumption linkage
-4. Accept risk — use the Mipiti web interface (no MCP tool available for \
-risk acceptance)
+2. Restore — `restore_entity(entity_type="assumption")` if assumption was soft-deleted and is still valid; re-attest after restoring
+3. Convert to controls — `convert_assumption_to_controls` generates controls for affected COs and retires the assumption linkage
+4. Accept risk — use the Mipiti web interface (no MCP tool available for risk acceptance)
 
 ## Composition (recursive-tree multi-model)
 
-Threat models can compose hierarchically — a child model inherits assets, \
-attackers, components, trust boundaries, and baseline controls from its \
-parent (and transitively from ancestors). With composition enabled, the \
-effective model = own ⊕ inherited; the platform computes effective control \
-objectives, coverage, compliance, reachability, attack paths, and finding \
-inheritance over that composed view.
+Threat models can compose hierarchically — a child model inherits assets, attackers, components, trust boundaries, and baseline controls from its parent (and transitively from ancestors). With composition enabled, the effective model = own ⊕ inherited; the platform computes effective control objectives, coverage, compliance, reachability, attack paths, and finding inheritance over that composed view.
 
-**When to use**: a child model that shares a security baseline with its \
-parent (e.g., a feature built on top of a multi-tenant platform that already \
-has auth / MFA / RBAC / KMS controls). Composition lets the child operator \
-focus on the feature's delta while the parent's controls credit the child \
-automatically.
+**When to use**: a child model that shares a security baseline with its parent (e.g., a feature built on top of a multi-tenant platform that already has auth / MFA / RBAC / KMS controls). Composition lets the child operator focus on the feature's delta while the parent's controls credit the child automatically.
 
 ### Reading the composed view
 
 Start with the overview, then drill in:
-- `get_composition_overview` — flag state, tree position, own-vs-inherited \
-counts, reconciliation badge. Cheapest call (~1-2KB). Use first.
+- `get_composition_overview` — flag state, tree position, own-vs-inherited counts, reconciliation badge. Cheapest call (~1-2KB). Use first.
 - `composition_entities` — full own + inherited entity set per kind.
-- `composition_control_objectives` — effective CO list (classified own / \
-cross / inherited).
+- `composition_control_objectives` — effective CO list (classified own / cross / inherited).
 - `composition_coverage` — effective coverage / compliance numbers.
 - `composition_reachability` — composed reachability verdicts.
-- `composition_attack_paths` — AttackPath references resolved against the \
-effective entity set (paths spanning inherited entities resolve cleanly).
+- `composition_attack_paths` — AttackPath references resolved against the effective entity set (paths spanning inherited entities resolve cleanly).
 
 ### Reconciliation — surfaced cross-tree duplicates
 
-When the same entity is authored on both the child and an ancestor (e.g., \
-both name an "API Gateway" component), the detector surfaces it as a \
-reconciliation candidate. Two tiers:
-- `certain` — identical name AND identical structural refs (same trust \
-boundary / asset attachments). Auto-merge eligible.
+When the same entity is authored on both the child and an ancestor (e.g., both name an "API Gateway" component), the detector surfaces it as a reconciliation candidate. Two tiers:
+- `certain` — identical name AND identical structural refs (same trust boundary / asset attachments). Auto-merge eligible.
 - `heuristic` — identical name only; structural refs differ. Triage needed.
 
 Tools:
-- `composition_reconciliation` — paginated candidate list with names, \
-source-model titles, and reasons.
-- `reject_reconciliation_candidate` — record "these are NOT duplicates"; \
-the detector filters the pair out of future queues, durable at org scope.
+- `composition_reconciliation` — paginated candidate list with names, source-model titles, and reasons.
+- `reject_reconciliation_candidate` — record "these are NOT duplicates"; the detector filters the pair out of future queues, durable at org scope.
 - `unreject_reconciliation_candidate` — undo a rejection.
-- `list_reconciliation_rejections` — rejected pairs for a model.
+- `list_reconciliation_candidates` — the unified candidate reader; pass its rejections param to list the rejected pairs for a model instead of the active candidates.
 
 ### Mutations — lift and split
 
-When the operator confirms a duplicate should be reconciled, lift it to \
-the lowest common ancestor (LCA). Inverse: split an ancestor entity down \
-to specific descendants when the entity isn't shared after all.
-- `lift_composition_entity` — promote shared-anchor entity from two \
-descendants to their LCA. Carries operator confirmations (LCA, third-party \
-subtree acknowledgements, field-resolutions, attached-state resolutions, \
-optional over-application-gate override). Emits `lift_applied`; audit pack \
-surfaces under `lift_history`.
-- `split_composition_entity` — push an ancestor entity down to operator- \
-chosen descendants. Emits `split_applied`; audit pack `split_history`.
+When the operator confirms a duplicate should be reconciled, lift it to the lowest common ancestor (LCA). Inverse: split an ancestor entity down to specific descendants when the entity isn't shared after all.
+- `lift_composition_entity` — promote shared-anchor entity from two descendants to their LCA. Carries operator confirmations (LCA, third-party subtree acknowledgements, field-resolutions, attached-state resolutions, optional over-application-gate override). Emits `lift_applied`; audit pack surfaces under `lift_history`.
+- `split_composition_entity` — push an ancestor entity down to operator-chosen descendants. Emits `split_applied`; audit pack `split_history`.
 
 ### Undo with divergence detection
 
-Both lift and split mutations are reversible. The divergence detector \
-refuses the undo with enumerated reasons if state has continued to evolve \
-since the mutation (e.g., entity edited after lift, re-lifted further up, \
-descendant collision, attached-state mutation, model deletion).
-- `preview_undo_lift_composition` / `preview_undo_split_composition` — \
-read-only; returns `{plan, refusal}`. Always preview FIRST.
-- `undo_lift_composition_event` / `undo_split_composition_event` — apply \
-the inverse mutation. Emits `lift_undone` / `split_undone` citing \
-`original_event_id`.
+Both lift and split mutations are reversible. The divergence detector refuses the undo with enumerated reasons if state has continued to evolve since the mutation (e.g., entity edited after lift, re-lifted further up, descendant collision, attached-state mutation, model deletion).
+- `preview_undo_composition(…)` — read-only preview of undoing a lift or split (pass the event type / id); returns `{plan, refusal}`. Always preview FIRST.
+- `undo_composition_event(…)` — apply the inverse of a prior lift or split mutation. Emits `lift_undone` / `split_undone` citing `original_event_id`.
 
-**Operator pattern**: preview → inspect plan or refusal-reasons → if clean \
-proceed with apply; if refused, surface the enumerated reasons (operator \
-decides whether to edit the divergence manually or accept it).
+**Operator pattern**: preview → inspect plan or refusal-reasons → if clean proceed with apply; if refused, surface the enumerated reasons (operator decides whether to edit the divergence manually or accept it).
 
 ## Cross-model dependencies (delegation)
 
-Distinct from the parent/composition tree (containment): a *reliance* edge \
-declares that one model depends on a control implemented in ANOTHER model — \
-the right tool when a product is built on shared services (auth, logging, a \
-shared datastore) rather than being a sub-part of them. The target is always a \
-provider *control*, so credit terminates at a proven mechanism. Reliance is \
-scoped to the current workspace: a consumer can only delegate to provider \
-models in the SAME workspace (these tools don't see models across workspace \
-boundaries), so pick the foundation from this workspace's models. These tools \
-are available when the recursive-tree feature is enabled.
+Distinct from the parent/composition tree (containment): a *reliance* edge declares that one model depends on a control implemented in ANOTHER model — the right tool when a product is built on shared services (auth, logging, a shared datastore) rather than being a sub-part of them. The target is always a provider *control*, so credit terminates at a proven mechanism. Reliance is scoped to the current workspace: a consumer can only delegate to provider models in the SAME workspace (these tools don't see models across workspace boundaries), so pick the foundation from this workspace's models. These tools are available when the recursive-tree feature is enabled.
 
-- `declare_foundation` — mark a shared-service model as a foundation that \
-advertises specific controls other models can delegate to.
-- `propose_attach_foundation` → `attach_foundation` — bulk flow: propose which \
-of a consumer's objectives each foundation capability covers (read-only, \
-scored), then create draft delegation edges for the chosen subset.
-- `create_reliance` — declare a single dependency. `delegated` (consumer has \
-no local control for an objective; the provider handles it — pass \
-`source_objective_id`) or `relied_upon` (consumer keeps its own control but \
-its validity depends on the provider's — pass `source_control_id`).
-- `confirm_reliance` — promote a draft edge to active. Edges run LLM semantic \
-validation on creation and carry NO credit until confirmed, and only when \
-validation returned `valid` (a `partial` or mode-mismatch is refused — never \
-silently credited).
-- `list_reliance` — a model's dependency edges (as consumer) plus who relies on \
-it (as provider — the blast radius before changing its controls).
+- `declare_foundation` — mark a shared-service model as a foundation that advertises specific controls other models can delegate to.
+- `propose_attach_foundation` → `attach_foundation` — bulk flow: propose which of a consumer's objectives each foundation capability covers (read-only, scored), then create draft delegation edges for the chosen subset.
+- `create_reliance` — declare a single dependency. `delegated` (consumer has no local control for an objective; the provider handles it — pass `source_objective_id`) or `relied_upon` (consumer keeps its own control but its validity depends on the provider's — pass `source_control_id`).
+- `confirm_reliance` — promote a draft edge to active. Edges run LLM semantic validation on creation and carry NO credit until confirmed, and only when validation returned `valid` (a `partial` or mode-mismatch is refused — never silently credited).
+- `list_reliance` — a model's dependency edges (as consumer) plus who relies on it (as provider — the blast radius before changing its controls).
 - `delete_reliance` — remove an edge.
 
-A delegated objective is credited only while the provider control stays \
-verified; if the provider control regresses or a refined mechanism no longer \
-satisfies the consumer, the edge breaks and a finding is raised on the consumer.
+A delegated objective is credited only while the provider control stays verified; if the provider control regresses or a refined mechanism no longer satisfies the consumer, the edge breaks and a finding is raised on the consumer.
 
 ## Tags (grouping)
 
-A *tag* is an overlapping, semantics-free grouping of models — for audit \
-scopes, ad-hoc selections, or portfolios. It is a label, not a relationship: a \
-model may carry MANY tags, and a tag never affects posture or credit (that's \
-what delegation and composition are for). Use tags to organize and to get an \
-aggregate risk view across a chosen set of models.
+A *tag* is an overlapping, semantics-free grouping of models — for audit scopes, ad-hoc selections, or portfolios. It is a label, not a relationship: a model may carry MANY tags, and a tag never affects posture or credit (that's what delegation and composition are for). Use tags to organize and to get an aggregate risk view across a chosen set of models. Tags and systems are both *groups*; the `kind` param on the group tools selects which kind.
 
-- `create_tag` / `delete_tag` — create or remove a tag (deleting affects the \
-grouping only, never the member models).
-- `add_model_to_tag` / `remove_model_from_tag` — manage membership; a model can \
-be in many tags at once.
-- `list_tags` / `list_model_tags` — browse tags, or a model's tags.
-- `get_tag_risk_view` — aggregate per-CO risk across a tag's members. \
-Delegation-aware, so a CO mitigated via a verified cross-model delegation reads \
-as covered, consistent with the per-model assessment.
+- `create_group(kind="tag")` / `delete_group` — create or remove a tag (deleting affects the grouping only, never the member models).
+- `add_model_to_group(kind="tag")` / `remove_model_from_group` — manage membership; a model can be in many tags at once.
+- `list_groups(kind="tag")` / `list_model_groups` — browse tags, or a model's tags.
+- `get_risk_view` — aggregate per-CO risk across a tag's members (pass the tag/group as scope). Delegation-aware, so a CO mitigated via a verified cross-model delegation reads as covered, consistent with the per-model assessment.
 
-A tag can also be a **compliance / audit scope** spanning several models: \
-`select_tag_compliance_frameworks` selects frameworks for the tag and \
-propagates them to its members; `get_tag_compliance_report` gives cross-model \
-requirement coverage; `export_tag_report` produces the signed auditor HTML \
-(member reports + cross-model dependency graph + attestation status) — the tag \
-equivalents of the system-level compliance report and auditor export.
+A tag can also be a **compliance / audit scope** spanning several models: `select_compliance_frameworks` scoped to the tag selects frameworks for the tag and propagates them to its members; `get_compliance_report` scoped to the tag gives cross-model requirement coverage; `export_report` scoped to the tag produces the signed auditor HTML (member reports + cross-model dependency graph + attestation status) — the tag equivalents of the system-level compliance report and auditor export.
 
 ## Functional conformance
 
-Functional conformance proves a feature does what it was *specified* to do — the \
-parallel of security controls, verified by the same assertion + CI engine. \
-Capabilities are the behaviours the feature must deliver; each is tested against a \
-taxonomy of operating conditions (nominal, boundary, dependency-failure, …), and a \
-Functional Objective is a Given-When-Then acceptance criterion. Two ways to \
-establish coverage:
+Functional conformance proves a feature does what it was *specified* to do — the parallel of security controls, verified by the same assertion + CI engine. Capabilities are the behaviours the feature must deliver; each is tested against a taxonomy of operating conditions (nominal, boundary, dependency-failure, …), and a Functional Objective is a Given-When-Then acceptance criterion. Two ways to establish coverage:
 
-**Generate (top-down).** `generate_functional_objectives` derives capabilities, \
-objectives, and the concrete tests to write; `get_functional_scan_prompt` returns \
-the per-test brief; implement each test, register it with `add_functional_test`, \
-then submit `TEST_EXISTS` + `TEST_PASSES` evidence with `submit_functional_tests` \
-so CI verifies it.
+**Generate (top-down).** `generate_functional_objectives` derives capabilities, objectives, and the concrete tests to write; `get_scan_prompt` (pass the functional kind) returns the per-test brief; implement each test, register it with `add_functional_test`, then submit `TEST_EXISTS` + `TEST_PASSES` evidence with `submit_functional_test_assertions` so CI verifies it.
 
-**Import (bottom-up) — bring the tests you already have.** \
-`import_functional_tests` registers your existing codebase tests (optionally with \
-the objectives they cover; the platform verifies each association is applicable \
-before accepting it). For tests you don't map yourself, \
-`suggest_functional_test_mappings` proposes which objective each one actually \
-proves (judged on behaviour, with a confidence) and `associate_functional_test` \
-confirms a mapping — so an existing suite counts toward conformance, not only \
-Mipiti-specified tests.
+**Import (bottom-up) — bring the tests you already have.** `import_functional_tests` registers your existing codebase tests (optionally with the objectives they cover; the platform verifies each association is applicable before accepting it). For tests you don't map yourself, `suggest_functional_test_mappings` proposes which objective each one actually proves (judged on behaviour, with a confidence) and `associate_functional_test` confirms a mapping — so an existing suite counts toward conformance, not only Mipiti-specified tests.
 
-- `get_functional_coverage` / `check_functional_gaps` — the Capability × Condition \
-coverage report and the actionable gaps (uncovered cells, failing/untested \
-objectives).
-- `set_functional_satisfaction_groups` / `get_functional_satisfaction_groups` — \
-when several tests must *together* prove an objective, group them (within a group \
-all must pass; any complete group proves the objective).
-- `get_functional_test_sufficiency` — whether a test's submitted evidence is \
-sufficient to prove the objective it targets.
-
+- `get_functional_coverage` / `check_functional_gaps` — the Capability × Condition coverage report and the actionable gaps (uncovered cells, failing/untested objectives).
+- `set_functional_satisfaction_groups` / `get_functional_satisfaction_groups` — when several tests must *together* prove an objective, group them (within a group all must pass; any complete group proves the objective).
+- `get_functional_test_sufficiency` — whether a test's submitted evidence is sufficient to prove the objective it targets.
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -722,123 +297,58 @@ _INSTRUCTIONS_COMPLIANCE = """\
 ## Compliance
 
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
-2. `import_compliance_framework` — import a customer-specific framework \
-(regulatory, contractual, or internal program not covered by the 11 \
-built-ins). Accepts a JSON body with `name`, `requirements`, and the \
-optional `level_definitions` per-level legend.
-3. `select_compliance_frameworks` — activate frameworks for a model. \
-**Automatically triggers auto-remediation**: maps existing controls, \
-excludes non-applicable requirements by taxonomy, and suggests/applies \
-new entities for remaining gaps. Returns `auto_remediate_jobs` with \
-job IDs for polling.
-4. `get_compliance_report` — coverage report (run after auto-remediation completes).
-5. `auto_remediate` — re-trigger auto-remediation manually (e.g. after model changes).
-6. `auto_map_controls` — map controls to framework requirements (runs automatically \
-during auto-remediation, but can be triggered independently).
-7. `map_control_to_requirement` — manually map a specific control to a \
-specific requirement (use when auto-mapping misses or misassigns).
+2. `import_compliance_framework` — import a customer-specific framework (regulatory, contractual, or internal program not covered by the 11 built-ins). Accepts a JSON body with `name`, `requirements`, and the optional `level_definitions` per-level legend.
+3. `select_compliance_frameworks` — activate frameworks for a model (or, by scope, for a system or tag/group). **Automatically triggers auto-remediation**: maps existing controls, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for remaining gaps. Returns `auto_remediate_jobs` with job IDs for polling.
+4. `get_compliance_report` — coverage report for a model, system, or tag/group by scope (run after auto-remediation completes).
+5. `auto_remediate_compliance` — re-trigger auto-remediation manually (e.g. after model changes).
+6. `auto_map_controls` — map controls to framework requirements (runs automatically during auto-remediation, but can be triggered independently).
+7. `map_control_to_requirement` — manually map a specific control to a specific requirement (use when auto-mapping misses or misassigns).
 
 ### Per-entity grades
 
-Some frameworks (IEC 62443, ISO/SAE 21434, NIST CSF, FIPS 140-3, \
-Common Criteria) carry per-entity level grades alongside the \
-control-to-requirement mapping:
+Some frameworks (IEC 62443, ISO/SAE 21434, NIST CSF, FIPS 140-3, Common Criteria) carry per-entity level grades alongside the control-to-requirement mapping:
 
-- `edit_component` with `target_sl` / `eal` / `fips_level` — set per-\
-component IEC 62443 SL (1-4), CC EAL (1-7), FIPS 140-3 (1-4). \
-Orthogonal axes; set whichever the customer program requires.
-- `set_co_cal` — set per-CO ISO/SAE 21434 Cybersecurity Assurance \
-Level (1-4). Lives on the CO identity table; survives soft-delete.
-- `update_organization` — set per-org IEC 62443-4-1 Maturity Level \
-(1-5) and NIST CSF Tier (1-4). Admin-only.
+- `edit_component` with `target_sl` / `eal` / `fips_level` — set per-component IEC 62443 SL (1-4), CC EAL (1-7), FIPS 140-3 (1-4). Orthogonal axes; set whichever the customer program requires.
+- `set_control_objective_cal` — set per-CO ISO/SAE 21434 Cybersecurity Assurance Level (1-4). Lives on the CO identity table; survives soft-delete.
+- `update_organization` — set per-org IEC 62443-4-1 Maturity Level (1-5) and NIST CSF Tier (1-4). Admin-only.
 
 ## Systems and workspaces
 
-- `list_workspaces` — list workspaces the current user can access. Use to \
-find the right workspace when working across team contexts.
-- `list_systems` / `get_system` — browse and retrieve system groups.
-- `create_system` / `add_model_to_system` — group related models into a system.
-- `get_system_dependencies` — view cross-model dependency graph. Shows \
-which assumptions are linked to other models and whether they are satisfied.
-- `link_dependency` — link an external assumption to a target model in the \
-same system. Makes it a cross-model dependency that appears as a compliance \
-requirement on the target model. Two independent satisfaction paths: \
-auto-attestation from target controls (no manual action needed), or manual \
-attestation via `submit_attestation`. Either alone suffices.
-- `select_system_compliance_frameworks` / `get_system_compliance_report` — \
-cross-model compliance reporting.
+- `list_workspaces` — list workspaces the current user can access. Use to find the right workspace when working across team contexts.
+- `list_groups(kind="system")` / `get_group` — browse and retrieve system groups. Systems and tags are both *groups*; the `kind` param selects which kind.
+- `create_group(kind="system")` / `add_model_to_group(kind="system")` — group related models into a system.
+- `get_system_dependencies` — view cross-model dependency graph. Shows which assumptions are linked to other models and whether they are satisfied.
+- `link_system_dependency` — link an external assumption to a target model in the same system. Makes it a cross-model dependency that appears as a compliance requirement on the target model. Two independent satisfaction paths: auto-attestation from target controls (no manual action needed), or manual attestation via `submit_attestation`. Either alone suffices.
+- `select_compliance_frameworks` / `get_compliance_report` (both scoped to the system) — cross-model compliance reporting.
 
 ## Components
 
-Components bridge security architecture (trust boundaries) to code \
-organization (repos). Add components to a model to scope controls \
-to specific codebases AND to ground the deterministic reachability \
-composer's asset-boundary derivation.
+Components bridge security architecture (trust boundaries) to code organization (repos). Add components to a model to scope controls to specific codebases AND to ground the deterministic reachability composer's asset-boundary derivation.
 
-- `add_component` — create a component with name, repo_url, and \
-optional path (for monorepos) and trust_boundary_ids.
-- `edit_component` / `remove_component` — modify or delete a component.
+- `add_component` — create a component with name, repo_url, and optional path (for monorepos) and trust_boundary_ids.
+- `edit_component` — modify a component; delete one with `remove_entity(entity_type="component")`.
 - `get_controls` with `component_id` — filter controls by component.
-- `assign_asset_to_components` — link an asset to one or more \
-components. Drives the reachability composer's per-CO verdicts.
+- `assign_to_components` — link an asset (or a control) to one or more components. For an asset this drives the reachability composer's per-CO verdicts.
 
 ### When to populate components
 
-`generate_threat_model` proposes speculative components (with \
-`repo_url=""`) when no topology has been supplied. These are a \
-starting point — refine them as code grounding emerges:
+`generate_threat_model` proposes speculative components (with `repo_url=""`) when no topology has been supplied. These are a starting point — refine them as code grounding emerges:
 
-- **Existing codebase**: when you've scanned the repo and know \
-the real services, call `add_component` (with grounded `repo_url` \
-and `path`) BEFORE `generate_threat_model`. The generation prompts \
-will scope assets and boundaries to the components you supplied. \
-Alternatively, call `generate_threat_model` first and then \
-`edit_component` on each speculative component the LLM proposed, \
-swapping `repo_url` to the real URL.
-- **Planning conversation, no code yet**: call `generate_threat_model` \
-directly; the LLM-proposed speculative components serve as a \
-topology starting point the user/developer refines as the design \
-firms up. `repo_url` stays empty until code exists; the coherence \
-report flags `component_unbound` findings on speculative components \
-so they're visible to auditors.
+- **Existing codebase**: when you've scanned the repo and know the real services, call `add_component` (with grounded `repo_url` and `path`) BEFORE `generate_threat_model`. The generation prompts will scope assets and boundaries to the components you supplied. Alternatively, call `generate_threat_model` first and then `edit_component` on each speculative component the LLM proposed, swapping `repo_url` to the real URL.
+- **Planning conversation, no code yet**: call `generate_threat_model` directly; the LLM-proposed speculative components serve as a topology starting point the user/developer refines as the design firms up. `repo_url` stays empty until code exists; the coherence report flags `component_unbound` findings on speculative components so they're visible to auditors.
 
-A component with empty `repo_url` is the natural signal "speculative \
-— not yet bound to code." A component with a populated `repo_url` is \
-grounded. There is no separate status field — the binding is the \
-state.
+A component with empty `repo_url` is the natural signal "speculative — not yet bound to code." A component with a populated `repo_url` is grounded. There is no separate status field — the binding is the state.
 
-But an empty `repo_url` covers two different things, and the \
-component's trust boundary tells them apart. A component in one of \
-YOUR internal zones (your own backend/frontend/service repos) is your \
-code — ground it to the repo. A component in an EXTERNAL trust zone — \
-e.g. a third-party service, the customer's IdP, or other \
-infrastructure you call but do not own — has no repo of yours; leave it unbound, where \
-`component_unbound` is the correct permanent marker of an external \
-dependency, not a TODO. The test is the trust boundary, never "does \
-some client code touch it": client code for almost every dependency \
-lives in your repo, so that alone never justifies binding an external \
-component.
+But an empty `repo_url` covers two different things, and the component's trust boundary tells them apart. A component in one of YOUR internal zones (your own backend/frontend/service repos) is your code — ground it to the repo. A component in an EXTERNAL trust zone — e.g. a third-party service, the customer's IdP, or other infrastructure you call but do not own — has no repo of yours; leave it unbound, where `component_unbound` is the correct permanent marker of an external dependency, not a TODO. The test is the trust boundary, never "does some client code touch it": client code for almost every dependency lives in your repo, so that alone never justifies binding an external component.
 """
 
 _INSTRUCTIONS_ASYNC = """\
 
 ## Long-running operations
 
-`generate_threat_model`, `refine_threat_model`, `auto_remediate`, \
-`auto_map_controls`, `regenerate_controls`, and `check_control_gaps` \
-run LLM pipelines that may take several minutes. They block until complete \
-and report progress automatically — no polling needed for the operation itself.
+`generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, `regenerate_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
 
-**Controls may be generated asynchronously.** `generate_threat_model` and \
-`refine_threat_model` return the model as soon as it is built, but the \
-implementation controls can then be authored in the background. If the result \
-carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, \
-`deferred`), the controls are NOT ready yet — do not report them as done. Poll \
-`get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) \
-until the status is terminal, then read the controls with `get_controls`. \
-`deferred` means the workspace's daily background-analysis budget is used up; \
-generation resumes automatically at the daily reset — surface that, no action \
-needed.
+**Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed.
 """
 
 
@@ -1285,7 +795,7 @@ async def refine_threat_model(
       surface these to the operator.
     - **Entities the LLM drops** from the refined output are re-
       appended to the model unchanged. The only sanctioned removal
-      path is ``remove_asset`` / ``remove_attacker`` (soft-delete).
+      path is ``remove_entity (entity_type="asset")`` / ``remove_entity (entity_type="attacker")`` (soft-delete).
     - **CO IDs are stable** across refinements; pairs (asset,
       attacker) that disappear come back as tombstones with
       ``removed=True`` (not renumbered). Controls that only mapped
@@ -1648,189 +1158,12 @@ async def attach_foundation(
 
 
 @mcp.tool()
-async def list_tags(server_version: str) -> dict:
-    """List the workspace's tags.
-
-    Read-only; no side effects. Returns ``{tags: [...]}``. A tag is an overlapping, semantics-free grouping of models — for audit scopes, ad-hoc selections, or portfolios. Unlike a system, a model may carry many tags, and a tag never affects posture or credit.
-
-    Use this to discover tag IDs before calling tag risk/compliance/export tools or before adding/removing members.
-
-    Args:
-        (none beyond the version guard)
-    """
-    try:
-        return await _get_client().list_tags()
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def create_tag(
-    server_version: str,
-    name: str,
-    description: str = "",
-    model_ids: list[str] | None = None,
-) -> dict:
-    """Create a tag, optionally seeding it with member models.
-
-    Tags group models for viewing/reporting without asserting any relationship
-    between them and without moving credit. Tag names are unique per workspace.
-
-    Args:
-        name: the tag name (unique within the workspace).
-        description: optional description.
-        model_ids: optional initial member model ids.
-    """
-    try:
-        return await _get_client().create_tag(name, description, model_ids or [])
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def delete_tag(server_version: str, tag_id: str) -> dict:
-    """Delete a tag (the grouping only; member models are not affected).
-
-    Args:
-        tag_id: ID of the tag to delete.
-    """
-    try:
-        await _get_client().delete_tag(tag_id)
-        return {"deleted": True, "tag_id": tag_id}
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def add_model_to_tag(server_version: str, tag_id: str, model_id: str) -> dict:
-    """Add a model to a tag. A model may belong to many tags (overlapping).
-
-    Args:
-        tag_id: the tag.
-        model_id: the model to add.
-    """
-    try:
-        return await _get_client().add_model_to_tag(tag_id, model_id)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def remove_model_from_tag(
-    server_version: str, tag_id: str, model_id: str,
-) -> dict:
-    """Remove a model from a tag (the model itself is not deleted).
-
-    Args:
-        tag_id: the tag.
-        model_id: the model to remove.
-    """
-    try:
-        await _get_client().remove_model_from_tag(tag_id, model_id)
-        return {"removed": True, "tag_id": tag_id, "model_id": model_id}
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def list_model_tags(server_version: str, model_id: str) -> dict:
-    """List every tag a given model belongs to.
-
-    Read-only; no side effects. Membership is overlapping — a model may appear under many tags. Use this to see a single model's groupings; use ``list_tags`` for all tags in the workspace.
-
-    Args:
-        model_id: the model whose tags to list.
-    """
-    try:
-        return await _get_client().list_model_tags(model_id)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_tag_risk_view(server_version: str, tag_id: str) -> dict:
-    """Aggregate per-control-objective risk rows across a tag's member models.
-
-    Read-only; no side effects. The tag-based aggregate posture view: one row per CO across all member models. Each row is delegation-aware (``delegation_mitigated`` / ``delegating_controls``), so a CO mitigated via a verified cross-model delegation reads as covered — consistent with each model's own assessment.
-
-    Use this for a portfolio/audit-scope posture rollup. For a single model, use ``assess_model``; for a system (rather than a freely-composed tag), use ``get_system_risk_view``.
-
-    Args:
-        tag_id: the tag to aggregate over.
-    """
-    try:
-        return await _get_client().get_tag_risk_view(tag_id)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def select_tag_compliance_frameworks(
-    server_version: str,
-    tag_id: str,
-    framework_ids: list[str],
-) -> dict:
-    """Select compliance frameworks for a tag (scope-level). Mutating.
-
-    Records the given frameworks against the tag AND propagates them to every member model, so the tag becomes a compliance scope (e.g. an audit boundary) spanning several models — the same capability a system has. Re-calling replaces the tag's framework selection. Discover valid ids with ``list_compliance_frameworks``.
-
-    Args:
-        tag_id: the tag to scope compliance to.
-        framework_ids: framework ids to select (from ``list_compliance_frameworks``).
-    """
-    try:
-        return await _get_client().select_tag_compliance_frameworks(tag_id, framework_ids)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_tag_compliance_report(
-    server_version: str,
-    tag_id: str,
-    framework_id: str,
-    level: int = 0,
-) -> dict:
-    """Cross-model compliance coverage report scoped to a tag's members.
-
-    Read-only; no side effects. Aggregates requirement coverage across every model the tag contains — the same as a system-level compliance report but over a freely-composed set of models. Select the tag's frameworks first with ``select_tag_compliance_frameworks``.
-
-    Args:
-        tag_id: the tag (compliance scope).
-        framework_id: the framework to report on.
-        level: optional framework level filter; 0 (default) reports all levels.
-    """
-    try:
-        return await _get_client().get_tag_compliance_report(tag_id, framework_id, level)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def export_tag_report(server_version: str, tag_id: str) -> dict:
-    """Export the signed auditor report for a tag as HTML.
-
-    Read-only; no side effects. Aggregates every member model's report plus the cross-model dependency graph and attestation status into one signed HTML document — the tag equivalent of the system auditor export. Returns ``{tag_id, format, content}`` where ``content`` is the HTML body.
-
-    Use for a portfolio/audit-scope deliverable. For a single model use ``export_threat_model``.
-
-    Args:
-        tag_id: the tag to export.
-    """
-    try:
-        content = await _get_client().export_tag(tag_id, "html")
-        return {"tag_id": tag_id, "format": "html", "content": content}
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def delete_threat_model(server_version: str, model_id: str) -> dict:
     """Delete a threat model and all associated data. Destructive and permanent — cannot be undone.
 
     Mutating: removes the model along with every version, its controls, assertions, findings, attestations, and tag/reliance memberships. Reliance edges from other models that pointed at this one are invalidated, which can move those consumers' posture.
 
-    Confirm intent before calling. To keep a copy first, use ``export_threat_model_archive`` (a self-contained, re-importable JSON archive). Returns ``{deleted: True, model_id}``.
+    Confirm intent before calling. To keep a copy first, use ``export_report (scope="model", format="archive")`` (a self-contained, re-importable JSON archive). Returns ``{deleted: True, model_id}``.
 
     Args:
         model_id: ID of the threat model to delete.
@@ -1859,7 +1192,7 @@ async def get_threat_model(
     - Assets and attackers may carry ``deleted: true`` (soft-deleted).
       Exclude these when showing "what's in the model now"; include
       them only when discussing history or offering restore. Restore
-      an entity via ``restore_asset`` / ``restore_attacker``.
+      an entity via ``restore_entity (entity_type="asset")`` / ``restore_entity (entity_type="attacker")``.
     - Control objectives may carry ``removed: true`` (tombstone — the
       (asset, attacker) pair was removed in a later version). Exclude
       these from coverage math and LLM prompts; they exist to keep
@@ -1879,102 +1212,12 @@ async def get_threat_model(
 
 
 @mcp.tool()
-async def export_threat_model(
-    server_version: str,
-    model_id: str,
-    ctx: Context,
-    format: Literal["csv", "pdf", "html"] = "csv",
-) -> dict:
-    """Export a threat model as CSV, PDF, or HTML.
-
-    Read-only; no side effects on the model. Renders the model's current state into a downloadable document. The export runs server-side and may take some time for large models; progress is reported automatically while it completes.
-
-    For CSV the content is returned inline as UTF-8 text; for PDF/HTML it is returned base64-encoded. For a re-importable, fully self-contained audit bundle (all versions, controls, assertions, attestations) use ``export_threat_model_archive`` instead.
-
-    Args:
-        model_id: ID of the threat model to export.
-        format: Export format — "csv" (default), "pdf", or "html".
-
-    Returns:
-        ``{format, filename, content}`` for CSV (inline UTF-8 text).
-        ``{format, filename, content_b64, content_type}`` for PDF/HTML (base64-encoded bytes).
-    """
-    if format not in ("csv", "pdf", "html"):
-        raise ToolError("format must be 'csv', 'pdf', or 'html'.")
-    try:
-        client = _get_client()
-        job_id = await client.start_export_model(model_id, format)
-        result = await _await_backend_job(client, job_id, ctx)
-        # The backend job result is the file envelope.
-        filename = (result or {}).get("filename") or f"threat_model.{format}"
-        content_type = (result or {}).get("content_type") or ""
-        content_bytes = await client.fetch_operation_result(job_id)
-        if format == "csv":
-            return {
-                "format": "csv",
-                "filename": filename,
-                "content": content_bytes.decode("utf-8"),
-            }
-        import base64 as _b64
-        return {
-            "format": format,
-            "filename": filename,
-            "content_type": content_type or (
-                "application/pdf" if format == "pdf" else "text/html"
-            ),
-            "content_b64": _b64.b64encode(content_bytes).decode("ascii"),
-        }
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def export_threat_model_archive(
-    server_version: str, model_id: str, ctx: Context,
-) -> dict:
-    """Export the self-contained JSON audit archive for a threat model.
-
-    Read-only; no side effects on the source model. Runs as a backend
-    job: this tool starts the job, waits for it to finish (reporting
-    progress as it goes), then fetches and decodes the JSON envelope.
-
-    The archive is a complete, independently-verifiable snapshot: every
-    version, controls, assertions (with Tier 1 / Tier 2 verification
-    verdicts and attested flags), findings, risk acceptances, assumption
-    overrides, attestations, and instance sufficiency signatures. It
-    verifies standalone — CI OIDC JWTs against the issuer's public JWKS,
-    workspace signatures against the workspace's published key, and
-    sufficiency signatures against the origin instance's key.
-
-    To restore the archive into a workspace (same or different instance),
-    pass the returned envelope to ``import_threat_model_archive``. For a
-    rendered document (PDF / HTML / CSV) rather than a machine-verifiable
-    archive, use ``export_threat_model`` instead.
-
-    Args:
-        model_id: ID of the threat model to export.
-
-    Returns:
-        ``{"envelope": <full archive dict>}``.
-    """
-    try:
-        client = _get_client()
-        job_id = await client.start_export_model_full(model_id)
-        await _await_backend_job(client, job_id, ctx)
-        content_bytes = await client.fetch_operation_result(job_id)
-        envelope = json.loads(content_bytes.decode("utf-8"))
-        return {"envelope": envelope}
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def import_threat_model_archive(
     server_version: str,
     envelope: dict,
     workspace_id: str,
 ) -> dict:
-    """Import a JSON audit archive (from ``export_threat_model_archive``)
+    """Import a JSON audit archive (from ``export_report (scope="model", format="archive")``)
     into a target workspace.
 
     Mutating: creates a NEW threat model in the target workspace. Requires
@@ -1985,12 +1228,12 @@ async def import_threat_model_archive(
     overwrites or touches an existing model.
 
     Use to move or clone a model between workspaces or across instances;
-    the envelope round-trips through ``export_threat_model_archive``
+    the envelope round-trips through ``export_report (scope="model", format="archive")``
     first.
 
     Args:
         envelope: The full archive dict returned by
-            ``export_threat_model_archive``.
+            ``export_report (scope="model", format="archive")``.
         workspace_id: Target workspace to import into.
 
     Returns:
@@ -2007,81 +1250,6 @@ async def import_threat_model_archive(
 
 
 # === Controls ===
-
-
-@mcp.tool()
-async def get_controls(
-    server_version: str,
-    model_id: str,
-    ctx: Context,
-    control_id: Optional[str] = None,
-    status: Optional[str] = None,
-    co_id: Optional[str] = None,
-    component_id: Optional[str] = None,
-    offset: int = 0,
-    limit: int = 0,
-    include_deleted: bool = False,
-    include_orphaned: bool = False,
-    summary_only: bool = False,
-) -> dict:
-    """Get implementation controls for a threat model.
-
-    Returns the controls that should be implemented to satisfy the model's
-    control objectives. Mostly read-only, with one side effect: if
-    controls have never been generated for this model, the first call
-    triggers generation. Generation may finish inline or continue in the
-    background — if results look incomplete, poll
-    ``get_control_generation_status`` and re-read once it reports
-    ``complete``.
-
-    By default excludes ORPHANED controls (controls whose every mapped CO
-    is tombstoned because its asset/attacker pair was removed in a later
-    version). Pass ``include_orphaned=True`` to include them; each
-    returned control carries a boolean ``orphaned`` field so callers can
-    render the distinction.
-
-    For one control's full detail pass ``control_id``; for a lightweight
-    listing pass ``summary_only=True``.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: Optional specific control id for detail mode.
-        status: Filter by "implemented", "not_implemented", or "verified".
-        co_id: Filter by control objective ID.
-        component_id: Filter by component ID (e.g., "CMP1").
-        offset: Skip the first N controls (pagination).
-        limit: Max controls to return (0 = all).
-        include_deleted: Include soft-deleted controls (default False).
-        include_orphaned: Include controls mapped only to tombstoned COs
-            (default False).
-        summary_only: If True, returns only id, description, status,
-            assertion_count, and assumed_by per control (much smaller
-            response).
-
-    Returns a dict with ``controls`` plus ``total`` and ``returned``
-    counts.
-    """
-    try:
-        data = await _get_client().get_controls(
-            model_id,
-            include_deleted=include_deleted,
-            include_orphaned=include_orphaned,
-            control_id=control_id or "",
-            status=status or "",
-            co_id=co_id or "",
-            component_id=component_id or "",
-            offset=offset,
-            limit=limit,
-            summary_only=summary_only,
-        )
-        result = _dump(data)
-        if not result.get("total"):
-            result["total"] = len(result.get("controls", []))
-        if not result.get("returned"):
-            result["returned"] = len(result.get("controls", []))
-        return result
-    except Exception as exc:
-        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -2365,96 +1533,6 @@ async def apply_control_changeset(
 
 
 @mcp.tool()
-async def assign_control_to_components(
-    server_version: str,
-    model_id: str,
-    control_id: str,
-    component_ids: str,
-    change_reason: str,
-) -> dict:
-    """Replace a control's component scope.
-
-    Components are the canonical code-binding for controls. A control
-    scoped to one or more components is visible to coding agents working
-    in those repos (matched via Component.repo_url + Component.path);
-    an unscoped control is visible everywhere.
-
-    Use this tool when:
-    - Wiring a previously unscoped control to the component(s) that
-      implement it (so coding agents see the control on their repo).
-    - Adding a second component to a cross-cutting control (e.g.,
-      "all microservices enforce JWT validation").
-    - Correcting a wrong component assignment.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control to scope (e.g., "CTRL-03").
-        component_ids: Comma-separated component IDs (e.g., "CMP1,CMP2").
-            Empty string = unscoped (visible to every coding agent).
-            Validated against the model: every supplied ID must exist.
-        change_reason: Why this scope is appropriate (min 10 chars).
-            Captured in the control's version history.
-    """
-    parsed = [c.strip() for c in component_ids.split(",") if c.strip()] if component_ids else []
-    if len(change_reason.strip()) < 10:
-        raise ToolError("change_reason must be at least 10 characters.")
-    try:
-        return _dump(await _get_client().assign_control_to_components(
-            model_id, control_id, parsed, change_reason.strip(),
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def assign_asset_to_components(
-    server_version: str,
-    model_id: str,
-    asset_id: str,
-    component_ids: str,
-    change_reason: str,
-) -> dict:
-    """Replace an asset's component scope.
-
-    Mirror of ``assign_control_to_components`` for assets. Components
-    are the canonical bridge between security architecture (trust
-    boundaries) and code organization (repos). Linking assets to
-    components flows boundary context into reachability derivation
-    without giving Asset its own ``trust_boundary_ids``.
-
-    An asset's component scope can be:
-    - Unscoped (empty string): no explicit code-ownership binding.
-      Reach decisions fall back to LLM judgment of the asset's
-      description / security properties.
-    - Single-component: standard case for assets handled by one
-      deployable unit.
-    - Multi-component: a multi-instance asset that flows through
-      several components (e.g., a session token on client + cache
-      + DB — each component handles a distinct instance).
-
-    Mechanical, non-AI-gated. Validates only that every referenced
-    component exists on the model.
-
-    Args:
-        model_id: ID of the threat model.
-        asset_id: ID of the asset to scope (e.g., "A1").
-        component_ids: Comma-separated component IDs (e.g., "CMP1,CMP2").
-            Empty string = unscoped.
-        change_reason: Why this scope is appropriate (min 10 chars).
-            Captured in the model's version history.
-    """
-    parsed = [c.strip() for c in component_ids.split(",") if c.strip()] if component_ids else []
-    if len(change_reason.strip()) < 10:
-        raise ToolError("change_reason must be at least 10 characters.")
-    try:
-        return _dump(await _get_client().assign_asset_to_components(
-            model_id, asset_id, parsed, change_reason.strip(),
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def model_coherence_report(
     server_version: str,
     model_id: str,
@@ -2478,7 +1556,7 @@ async def model_coherence_report(
 
     Component / assertion bindings:
     - ``control_component_unknown`` — control references a component
-      ID that no longer exists. Resolve: ``assign_control_to_components``.
+      ID that no longer exists. Resolve: ``assign_to_components (target_type="control")``.
     - ``asset_component_unknown`` — asset references a missing
       component. Resolve: ``edit_asset`` (with corrected
       ``component_ids``).
@@ -2486,11 +1564,11 @@ async def model_coherence_report(
       match the ``repo_url`` of any component scoping its control.
       Resolve: rebind the assertion or rescope the control.
     - ``assertion_repo_orphan`` — an assertion has a ``repo`` but its
-      control is unscoped. Resolve: ``assign_control_to_components``
+      control is unscoped. Resolve: ``assign_to_components (target_type="control")``
       to scope the control, or correct the assertion's repo.
     - ``control_unscoped_with_scoped_assertions`` — control is
       unscoped, but its assertions all carry a single component's
-      ``repo``. Resolve: ``assign_control_to_components`` to that
+      ``repo``. Resolve: ``assign_to_components (target_type="control")`` to that
       component.
     - ``component_unbound`` — a component has no ``repo_url``. Two
       cases, told apart by the component's trust boundary. An
@@ -2512,17 +1590,17 @@ async def model_coherence_report(
       ``trust_boundary_ids``), or ``add_assumption`` with a
       structured exclusion predicate.
     - ``co_asset_unbounded`` — the CO's asset has no component-derived
-      trust boundaries. Resolve: ``assign_asset_to_components``,
+      trust boundaries. Resolve: ``assign_to_components (target_type="asset")``,
       ``edit_asset`` (with ``component_ids``), or ``add_assumption``
       with a structured exclusion.
     - ``co_no_shared_boundary`` — attacker and asset boundaries do
       not intersect. Resolve: re-position the attacker via
       ``edit_attacker``, scope the asset to a shared component via
-      ``assign_asset_to_components``, or ``add_assumption`` with a
+      ``assign_to_components (target_type="asset")``, or ``add_assumption`` with a
       structured exclusion.
     - ``co_missing_entity`` — the CO references a missing
       asset/attacker; model state inconsistent. Resolve: restore
-      the entity (``restore_asset`` / ``restore_attacker``) or
+      the entity (``restore_entity (entity_type="asset")`` / ``restore_entity (entity_type="attacker")``) or
       remove the orphaned CO via ``refine_threat_model``.
 
     Use this before relying on component-scoped control discovery,
@@ -2539,64 +1617,6 @@ async def model_coherence_report(
     try:
         return _dump(
             await _get_client().model_coherence_report(model_id, co_id=co_id),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_reachability_verdicts(
-    server_version: str,
-    model_id: str,
-    co_id: str = "",
-) -> dict:
-    """Composer verdicts for every live CO on the model. Pass ``co_id``
-    to retrieve a single verdict (skips the cross-CO loop).
-
-    Pure derivation over the model's structural primitives —
-    components, asset.component_ids, trust_boundary.passes,
-    attacker.trust_boundary_ids + attack_vector, and
-    Assumption.exclusion predicates. NOT persisted on the CO. Re-
-    running this call against the model JSON produces the same
-    result every time — that's the verification an auditor performs.
-
-    Each verdict carries:
-      - ``co_id``
-      - ``kind``: "reachable" | "unreachable" | "indeterminate"
-      - ``reason``: structural label
-        (``boundary_blocks_vector`` / ``assumption_excludes`` /
-        ``attacker_unpositioned`` / ``asset_unbounded`` /
-        ``no_shared_boundary`` / ``missing_entity``)
-      - ``narration``: auditor-readable explanation
-      - ``boundary_id``: which boundary blocked, if applicable
-      - ``assumption_id``: which assumption excluded, if applicable
-
-    When the verdict is indeterminate, address the gap via the
-    standard model-edit affordances:
-      - ``attacker_unpositioned`` → ``edit_attacker`` setting
-        ``trust_boundary_ids``
-      - ``asset_unbounded`` → ``assign_asset_to_components`` or
-        ``edit_asset`` with ``component_ids``
-      - ``no_shared_boundary`` → re-position attacker, re-scope
-        asset, OR ``add_assumption`` with structured exclusion
-      - ``missing_entity`` → restore the missing asset/attacker,
-        or remove the orphaned CO
-
-    Use this before relying on per-CO reach state for triage,
-    auto-remediation, or audit responses. The
-    ``model_coherence_report`` tool surfaces the same gaps as
-    actionable findings; this tool exposes the raw verdicts when
-    you need the structured data (boundary_id citations, narration
-    strings) that the findings summarize.
-
-    Args:
-        model_id: ID of the threat model.
-        co_id: Optional CO id. When set, returns a single verdict;
-            404 if the CO doesn't exist or is tombstoned.
-    """
-    try:
-        return _dump(
-            await _get_client().model_reachability_verdicts(model_id, co_id=co_id),
         )
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -2814,67 +1834,6 @@ async def get_effective_coverage(
 
 
 @mcp.tool()
-async def get_reach_verdicts(
-    server_version: str,
-    model_id: str,
-    page: int = 1,
-    page_size: int = 100,
-    kind_filter: str | None = None,
-) -> dict:
-    """Per-CO reachability verdicts over the *composed* effective topology.
-
-    Same shape as ``get_reachability_verdicts``, but evaluated against
-    the merged tree: own components and trust boundaries combined with
-    everything inherited, and qualified ids used for cross-model
-    references. Use this when the model is a child on the composition
-    tree and you need reach state that reflects the ancestor topology,
-    not just the local model document.
-
-    Return shape::
-
-        {
-          model_id, flag_enabled,
-          verdicts: [
-            {co_qid, asset_qid, attacker_qid,
-             kind: "reachable"|"unreachable"|"indeterminate",
-             reason: <structural label>},
-            ...
-          ],
-          total, page, page_size,
-        }
-
-    When composition is disabled on the backend, ``verdicts`` is empty
-    and ``flag_enabled: false`` — fall back to ``get_reachability_verdicts``
-    for the per-model derivation.
-
-    Omitting ``page`` / ``page_size`` defaults to ``page=1,
-    page_size=100`` — the response is paginated and no longer returns
-    every verdict in a single call.
-
-    Args:
-        model_id: ID of the threat model.
-        page: 1-indexed page number (default ``1``).
-        page_size: verdicts per page (default ``100``).
-        kind_filter: restrict verdicts to one kind — one of
-            ``"reachable" | "unreachable" | "indeterminate"``. Named
-            ``kind_filter`` (not ``kind``) to disambiguate from the
-            verdict object's own ``kind`` field. When omitted, all
-            verdict kinds are returned.
-    """
-    try:
-        return _dump(
-            await _get_client().composition_reachability(
-                model_id,
-                page=page,
-                page_size=page_size,
-                kind_filter=kind_filter,
-            ),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def list_effective_attack_paths(
     server_version: str,
     model_id: str,
@@ -2907,62 +1866,6 @@ async def list_effective_attack_paths(
     """
     try:
         return _dump(await _get_client().composition_attack_paths(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def list_reconciliation_candidates(
-    server_version: str,
-    model_id: str,
-    page: int = 1,
-    page_size: int = 50,
-) -> dict:
-    """Reconciliation candidates between this model and its ancestors.
-
-    When a model inherits entities (assets, attackers, components, trust
-    boundaries) from an ancestor *and* the operator has authored a
-    locally-named entity that looks like the same real-world thing, the
-    reconciliation engine surfaces the pair as a candidate so the operator
-    can decide whether to alias it onto the inherited qualified id. Tier
-    ``certain`` is a deterministic match (same qid or structurally
-    identical) and is safe to auto-apply; tier ``heuristic`` is a fuzzy
-    name/description match that needs review.
-
-    Paginated. Use this on child models in a recursive tree to find
-    duplicates that should be collapsed before they distort coverage.
-
-    Return shape::
-
-        {
-          model_id, flag_enabled, total,
-          tiers: {certain: int, heuristic: int},
-          page, page_size,
-          candidates: [
-            {kind, own_qid, inherited_qid,
-             tier: "certain"|"heuristic", reasons: [str, ...]},
-            ...
-          ],
-        }
-
-    When composition is disabled on the backend, ``total`` is 0,
-    ``candidates`` is empty, and ``flag_enabled: false``.
-
-    Args:
-        model_id: ID of the threat model.
-        page: 1-indexed page number. Default 1.
-        page_size: Items per page. Default 50.
-    """
-    if page < 1:
-        raise ToolError("page must be >= 1")
-    if page_size < 1:
-        raise ToolError("page_size must be >= 1")
-    try:
-        return _dump(
-            await _get_client().composition_reconciliation(
-                model_id, page=page, page_size=page_size,
-            ),
-        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3128,7 +2031,7 @@ async def unreject_reconciliation_candidate(
     again on the next read of ``list_reconciliation_candidates``. Use when
     the operator changes their mind about a prior rejection — the surrogate
     ``rejection_id`` comes from ``rejections[*].id`` on
-    ``list_reconciliation_rejections`` (or the return value of
+    ``list_reconciliation_candidates (disposition="rejected")`` (or the return value of
     ``reject_reconciliation_candidate``).
 
     Does NOT bump model version (rejection is org state, not model state).
@@ -3152,51 +2055,6 @@ async def unreject_reconciliation_candidate(
             await _get_client().unreject_reconciliation_candidate(
                 model_id, rejection_id,
             ),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def list_reconciliation_rejections(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """List persisted reconciliation rejections for a model.
-
-    Read-only. Returns the operator's "these are NOT duplicates" decisions
-    on this model in ``rejected_at`` ascending order — the same set the
-    candidate detector consults to filter the active queue. Use this to
-    render the rejected section of a triage view, or to find the surrogate
-    id needed by ``unreject_reconciliation_candidate``.
-
-    When composition is not available on the backend, returns
-    ``{model_id, flag_enabled: false, rejections: []}`` so the caller can
-    render the disabled state without a separate code path. The same empty
-    shape is returned with ``flag_enabled: true`` when the rejection store
-    is not configured on the instance.
-
-    Args:
-        model_id: ID of the threat model.
-
-    Returns::
-
-        {"model_id": str,
-         "flag_enabled": bool,
-         "rejections": [
-             {"id": str, "model_id": str, "kind": str,
-              "own_qid": str, "inherited_qid": str,
-              "rejected_by": str, "rejected_at": <ISO-8601>},
-             ...
-         ]}
-
-    Errors: 404 if the model isn't found.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    try:
-        return _dump(
-            await _get_client().list_reconciliation_rejections(model_id),
         )
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -3248,8 +2106,8 @@ async def lift_composition_entity(
     ``model_refined`` activity event; a structured ``lift_applied`` event
     with the full ``lift_event`` payload lands on the LCA. The audit pack
     surfaces this under ``lift_history``. Reverse it with
-    ``undo_lift_composition_event`` (preview first via
-    ``preview_undo_lift_composition``); the inverse operation is
+    ``undo_composition_event (event_type="lift")`` (preview first via
+    ``preview_undo_composition (event_type="lift")``); the inverse operation is
     ``split_composition_entity``.
 
     Args:
@@ -3395,394 +2253,6 @@ async def split_composition_entity(
 
 
 @mcp.tool()
-async def preview_undo_lift_composition(
-    server_version: str,
-    model_id: str,
-    lift_id: str,
-) -> dict:
-    """Preview the inverse plan (or divergence refusal) for a prior
-    ``lift_applied`` event WITHOUT mutating any state.
-
-    Read-only counterpart to ``undo_lift_composition_event``. Used by the
-    confirmation flow so the operator sees what an undo would do before
-    committing — either the inverse state operations the apply step will
-    commit (tombstone the lifted LCA entity, restore the source
-    descendants' copies, rewrite CO references), or the enumerated reasons
-    the divergence detector refuses the undo.
-
-    Args:
-        model_id: The model whose composition view originated the lift.
-            Must match the ``threat_model_id`` carried by the cited
-            activity event; the server rejects with 404 when a caller
-            tries to undo a sibling model's lift through a different
-            model's URL.
-        lift_id: Either the surrogate id of the ``lift_applied`` activity
-            event, or the structured ``lift_id`` carried in the event's
-            payload — both lookups are supported.
-
-    Returns::
-
-        {"plan": <UndoPlan> | null,
-         "refusal": <UndoRefusal> | null}
-
-    Exactly one of ``plan`` / ``refusal`` is non-null. The plan block
-    carries the inverse state operations; the refusal block carries the
-    enumerated divergence reasons when state has materially evolved since
-    the forward lift.
-
-    Errors: 404 if the cited event doesn't exist or belongs to a different
-    model; 503 if composition is not available on the backend.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    if not lift_id or not lift_id.strip():
-        raise ToolError("lift_id is required and must be non-empty.")
-    try:
-        return _dump(
-            await _get_client().preview_lift_undo(model_id, lift_id),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def undo_lift_composition_event(
-    server_version: str,
-    model_id: str,
-    lift_id: str,
-) -> dict:
-    """Apply the inverse of a previous ``lift_applied`` composition event. Mutating — persists inverse state across multiple models.
-
-    Re-runs the divergence detector immediately before applying and
-    refuses with 409 + the structured refusal block when state has
-    materially evolved since the forward lift (assertions submitted on
-    the lifted entity, downstream COs added that reference it, the
-    entity edited, etc.). On success, persists the inverse state
-    operations across the LCA + every affected source descendant and
-    emits a structured ``lift_undone`` activity event citing
-    ``original_event_id`` so the audit pack can chain undo to its
-    forward.
-
-    Args:
-        model_id: The model whose composition view originated the
-            lift. Must match the cited event's ``threat_model_id`` —
-            the server rejects cross-model citations with 404.
-        lift_id: Either the surrogate id of the ``lift_applied``
-            activity event, or the structured ``lift_id`` carried in
-            the event payload.
-
-    Returns::
-
-        {"undone_event_id": str,
-         "original_event_id": str,
-         "applied_state_ops": [...],
-         "models": {"lca_model": <ThreatModel>,
-                    "source_descendant_models": [<ThreatModel>, ...]}}
-
-    Errors: 409 with ``detail = {message, refusal: {reasons: [...]}}``
-    when the divergence detector refuses; 404 if the cited event
-    doesn't exist or belongs to a different model; 400 on payload /
-    event-type mismatch; 503 if composition is not available for this
-    deployment.
-
-    Operator pattern: call ``preview_undo_lift_composition`` first,
-    surface the plan or refusal to the operator, and only call this
-    tool after explicit confirmation.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    if not lift_id or not lift_id.strip():
-        raise ToolError("lift_id is required and must be non-empty.")
-    try:
-        return _dump(
-            await _get_client().undo_lift(model_id, lift_id),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def preview_undo_split_composition(
-    server_version: str,
-    model_id: str,
-    split_id: str,
-) -> dict:
-    """Preview the inverse plan (or divergence refusal) for a prior
-    ``split_applied`` event WITHOUT mutating any state. Read-only.
-
-    Counterpart to ``preview_undo_lift_composition`` for splits. Same
-    ``{plan, refusal}`` shape; the plan block carries the
-    split-specific inverse operations (restore at the ancestor,
-    tombstone the duplicated copies on every target descendant)
-    instead of the lift mirrors.
-
-    Args:
-        model_id: The ancestor model whose split is being previewed.
-            Must match the cited event's ``threat_model_id``.
-        split_id: Either the surrogate id of the ``split_applied``
-            activity event, or the structured ``split_id`` carried in
-            the event payload.
-
-    Returns::
-
-        {"plan": <UndoPlan> | null,
-         "refusal": <UndoRefusal> | null}
-
-    Errors: 404 if the cited event doesn't exist or belongs to a
-    different model; 503 if composition is not available for this
-    deployment.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    if not split_id or not split_id.strip():
-        raise ToolError("split_id is required and must be non-empty.")
-    try:
-        return _dump(
-            await _get_client().preview_split_undo(model_id, split_id),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def undo_split_composition_event(
-    server_version: str,
-    model_id: str,
-    split_id: str,
-) -> dict:
-    """Apply the inverse of a previous ``split_applied`` composition event. Mutating — persists inverse state across multiple models.
-
-    Mirror of ``undo_lift_composition_event`` for splits. Re-runs the
-    divergence detector before applying and refuses with 409 + a
-    structured refusal block when state has materially evolved since
-    the forward split. On success, restores the ancestor's entity,
-    tombstones the duplicated copies on every target descendant,
-    persists across all affected models, and emits a structured
-    ``split_undone`` activity event citing ``original_event_id``.
-
-    Args:
-        model_id: The ancestor model whose split is being undone.
-            Must match the cited event's ``threat_model_id``.
-        split_id: Either the surrogate id of the ``split_applied``
-            activity event, or the structured ``split_id`` carried in
-            the event payload.
-
-    Returns::
-
-        {"undone_event_id": str,
-         "original_event_id": str,
-         "applied_state_ops": [...],
-         "models": {"ancestor_model": <ThreatModel>,
-                    "descendant_models": [<ThreatModel>, ...]}}
-
-    Errors: same shape as ``undo_lift_composition_event`` — 409 on
-    divergence refusal, 404 on missing event, 400 on type mismatch,
-    503 when composition is not available for this deployment.
-
-    Operator pattern: call ``preview_undo_split_composition`` first,
-    surface the plan or refusal to the operator, and only call this
-    tool after explicit confirmation.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    if not split_id or not split_id.strip():
-        raise ToolError("split_id is required and must be non-empty.")
-    try:
-        return _dump(
-            await _get_client().undo_split(model_id, split_id),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_control_objective(
-    server_version: str,
-    model_id: str,
-    co_id: str,
-) -> dict:
-    """Get a single control objective with its composer verdict. Read-only.
-
-    Returns the CO's typed fields, the IDs of any controls that map to
-    it, and the deterministic reachability verdict — the structural
-    derivation that backs any reach claim on the CO. For the full CO
-    matrix use ``get_control_objectives``; for pass/fail assurance
-    scoring use ``assess_model``.
-
-    Tombstoned COs (``removed: true``) are returned with the flag set;
-    the verdict is omitted because reach state is frozen at the
-    removal version.
-
-    Args:
-        model_id: ID of the threat model.
-        co_id: Control-objective ID (e.g. ``CO3``).
-    """
-    try:
-        return _dump(await _get_client().get_control_objective(model_id, co_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def set_co_cal(
-    server_version: str,
-    model_id: str,
-    co_id: str,
-    cal: Optional[int] = None,
-) -> dict:
-    """Set the per-CO ISO/SAE 21434 Cybersecurity Assurance Level (CAL).
-
-    CAL is a 1-4 grade on each individual control objective that
-    expresses how much assurance the control program owes for that
-    specific objective. It lives on the ``control_objectives`` identity
-    side-table — writes do NOT create a new threat-model version, and
-    the value survives soft-delete + revival of the CO.
-
-    Pass ``cal=None`` (or omit it) to clear the value.
-
-    Args:
-        model_id: ID of the threat model.
-        co_id: Control-objective ID (e.g. ``CO3``).
-        cal: ISO/SAE 21434 CAL grade (1-4), or ``None`` to clear.
-
-    Returns:
-        ``{"model_id": ..., "co_id": ..., "cal": ...}``
-    """
-    if cal is not None and (cal < 1 or cal > 4):
-        raise ToolError("cal must be between 1 and 4 (inclusive), or None to clear")
-    try:
-        return _dump(await _get_client().set_co_cal(model_id, co_id, cal))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_asset(
-    server_version: str,
-    model_id: str,
-    asset_id: str,
-) -> dict:
-    """Get a single asset. Soft-deleted assets carry ``deleted: true``;
-    the caller decides whether to surface them.
-
-    Args:
-        model_id: ID of the threat model.
-        asset_id: Asset ID (e.g. ``A-01``).
-    """
-    try:
-        return _dump(await _get_client().get_asset(model_id, asset_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_attacker(
-    server_version: str,
-    model_id: str,
-    attacker_id: str,
-) -> dict:
-    """Get a single attacker. Soft-deleted attackers carry ``deleted: true``.
-
-    Args:
-        model_id: ID of the threat model.
-        attacker_id: Attacker ID (e.g. ``T-03``).
-    """
-    try:
-        return _dump(await _get_client().get_attacker(model_id, attacker_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_component(
-    server_version: str,
-    model_id: str,
-    component_id: str,
-) -> dict:
-    """Get a single component. Speculative components (``repo_url=""``)
-    are returned as-is — the empty repo IS the lifecycle state, not an
-    error.
-
-    Args:
-        model_id: ID of the threat model.
-        component_id: Component ID (e.g. ``CMP-01``).
-    """
-    try:
-        return _dump(await _get_client().get_component(model_id, component_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_trust_boundary(
-    server_version: str,
-    model_id: str,
-    tb_id: str,
-) -> dict:
-    """Get a single trust boundary, including its ``passes`` set
-    (closed-vocabulary subset of ``{Network, Adjacent, Local, Physical}``).
-
-    Args:
-        model_id: ID of the threat model.
-        tb_id: Trust-boundary ID (e.g. ``TB-Net``).
-    """
-    try:
-        return _dump(await _get_client().get_trust_boundary(model_id, tb_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_assumption(
-    server_version: str,
-    model_id: str,
-    assumption_id: str,
-) -> dict:
-    """Get a single assumption with its override applied.
-
-    Mirrors ``list_assumptions``' merge logic for one entity. Returns
-    the assumption's typed fields, structured ``exclusion`` predicate
-    (when present), and the override layer (status / justification /
-    linked CO IDs / target model). Soft-deleted assumptions carry
-    ``deleted: true``.
-
-    Args:
-        model_id: ID of the threat model.
-        assumption_id: Assumption ID (e.g. ``AS-01``).
-    """
-    try:
-        return _dump(await _get_client().get_assumption(model_id, assumption_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_control(
-    server_version: str,
-    model_id: str,
-    control_id: str,
-    version: int = 0,
-) -> dict:
-    """Get a single control with verified-status enrichment and an
-    ``orphaned`` flag derived from the live CO set.
-
-    Returns the control directly (not wrapped in an array). 404 if the
-    control doesn't exist on the requested version.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: Control ID (e.g. ``CTL-12``).
-        version: Optional model version. 0 (default) uses the latest.
-    """
-    try:
-        return _dump(
-            await _get_client().get_control(model_id, control_id, version=version),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def get_mitigation_groups(
     server_version: str,
     model_id: str,
@@ -3909,7 +2379,7 @@ async def remove_evidence(
 
     Evidence is auxiliary metadata (see ``add_evidence``); removing it
     does not affect the control's implementation status or any
-    assertions. To find the index, read the control via ``get_control``
+    assertions. To find the index, read the control via ``get_controls (control_id=...)``
     and count its ``evidence`` array from 0.
 
     Args:
@@ -4043,32 +2513,6 @@ async def check_control_gaps(
 
 
 # === Control Objectives & Assurance ===
-
-
-@mcp.tool()
-async def get_control_objectives(
-    server_version: str,
-    model_id: str,
-    offset: int = 0,
-    limit: int = 0,
-) -> dict:
-    """Get the control objective matrix for a threat model. Read-only.
-
-    Returns COs, each with references to the controls that cover it. By
-    default returns a compact summary (total count only); pass
-    offset/limit to page through full CO records. For a single CO with
-    its reachability verdict use ``get_control_objective``; for
-    pass/fail assurance scoring use ``assess_model``.
-
-    Args:
-        model_id: ID of the threat model.
-        offset: Skip the first N control objectives.
-        limit: Max to return (0 = summary only, no per-CO records).
-    """
-    try:
-        return _dump(await _get_client().get_control_objectives(model_id, offset, limit))
-    except Exception as exc:
-        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -4247,7 +2691,7 @@ async def edit_asset(
       ``ambiguous``) — ``{"accepted": False, ...}``; nothing saved.
       Soft-delete + add-new instead.
 
-    Editing a soft-deleted asset is rejected — ``restore_asset``
+    Editing a soft-deleted asset is rejected — ``restore_entity (entity_type="asset")``
     first. 503 on evaluator outage, 502 on malformed response, 400
     when factor fields are sent without ``change_reason``.
 
@@ -4308,40 +2752,6 @@ async def edit_asset(
         client = _get_client()
         started = await client.start_edit_asset(model_id, asset_id, **body)
         return await _await_backend_job(client, started["job_id"], ctx)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def remove_asset(server_version: str, model_id: str, asset_id: str) -> dict:
-    """Soft-delete an asset. Creates a new version.
-
-    The asset's ID is preserved forever — never reused. Its linked
-    (asset × attacker) CO pairs are tombstoned, which orphans any
-    controls mapped to them. Use `restore_asset` to un-delete and
-    revive the tombstones (orphaned controls become active again).
-
-    Args:
-        model_id: ID of the threat model.
-        asset_id: ID of the asset to soft-delete.
-    """
-    try:
-        return _dump(await _get_client().remove_asset(model_id, asset_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def restore_asset(server_version: str, model_id: str, asset_id: str) -> dict:
-    """Un-soft-delete an asset. Revives its tombstoned COs with
-    their original IDs, un-orphaning any linked controls.
-
-    Args:
-        model_id: ID of the threat model.
-        asset_id: ID of the asset to restore.
-    """
-    try:
-        return _dump(await _get_client().restore_asset(model_id, asset_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4484,40 +2894,6 @@ async def edit_attacker(
         client = _get_client()
         started = await client.start_edit_attacker(model_id, attacker_id, **body)
         return await _await_backend_job(client, started["job_id"], ctx)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def remove_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
-    """Soft-delete an attacker from a threat model. Mutating: creates a new model version.
-
-    The attacker's ID is preserved (so a later restore reinstates the same ID and all its links). Control objectives anchored to this attacker are tombstoned, and any controls left with no live anchor become orphaned (derived at read time, never hard-deleted). Nothing is permanently destroyed, so removal is reversible.
-
-    Use to drop an attacker that no longer applies. To change an attacker's fields instead, use edit_attacker; to bring a removed one back, use restore_attacker.
-
-    Args:
-        model_id: ID of the threat model.
-        attacker_id: ID of the attacker to soft-delete (e.g. "T1").
-    """
-    try:
-        return _dump(await _get_client().remove_attacker(model_id, attacker_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def restore_attacker(server_version: str, model_id: str, attacker_id: str) -> dict:
-    """Un-soft-delete an attacker previously removed with remove_attacker. Mutating.
-
-    Reinstates the attacker under its original ID, revives the control objectives that were tombstoned when it was removed, and un-orphans any controls that were anchored to it. Only affects an attacker that is currently soft-deleted. Returns the updated threat model.
-
-    Args:
-        model_id: ID of the threat model.
-        attacker_id: ID of the attacker to restore.
-    """
-    try:
-        return _dump(await _get_client().restore_attacker(model_id, attacker_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4729,47 +3105,6 @@ async def dismiss_verdict_divergences(
 
 
 @mcp.tool()
-async def recompute_verdicts(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Re-run coverage and group-sufficiency verdict evaluation for a model.
-
-    Enqueues a fresh evaluation of every control's coverage verdict and
-    every live control objective's group-sufficiency verdict, bypassing
-    the normal quiet-period batching. Evaluation runs in the background;
-    re-read the model's divergence report (or coverage surfaces) shortly
-    after to see updated verdicts.
-
-    Cost visibility: the response carries ``estimated_credits`` — an
-    informational estimate of the evaluation cost (see also
-    ``get_recompute_quote`` for the pre-flight version). Nothing is
-    charged from the estimate; actual usage is metered as the evaluation
-    runs, per the account's plan.
-
-    Returns a 503-mapped error when verdict observability is unavailable
-    on the deployment.
-
-    Args:
-        model_id: ID of the threat model to re-evaluate.
-
-    Returns:
-        Dict with:
-        - model_id, model_version
-        - enqueued_coverage / enqueued_group_sufficiency / total_enqueued
-        - estimated_credits: informational cost estimate
-        - quote: the full estimate envelope (computed_at, rate_version)
-        - governor: spend status — when ``governor.exhausted`` is true the
-          work is queued and resumes automatically at
-          ``governor.resets_at``; it is never dropped.
-    """
-    try:
-        return _dump(await _get_client().recompute_verdicts(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def retry_verdicts(
     server_version: str,
     model_id: str,
@@ -4804,73 +3139,6 @@ async def retry_verdicts(
     """
     try:
         return _dump(await _get_client().retry_verdicts(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_recompute_quote(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Get the informational pre-flight cost estimate for
-    ``recompute_verdicts`` on a model.
-
-    Nothing is charged from the estimate — actual usage is metered as the
-    evaluation runs. The estimate carries ``computed_at`` and the pricing
-    ``rate_version`` in force so a stale quote is detectable.
-
-    Returns a 503-mapped error when verdict observability is unavailable
-    on the deployment.
-
-    Args:
-        model_id: ID of the threat model to estimate for.
-
-    Returns:
-        Dict with:
-        - estimated_credits: informational cost estimate
-        - computed_at / rate_version / informational
-        - total_enqueueable: jobs a recompute would enqueue
-        - already_evaluated: subjects that already carry a verdict (a
-          portion short-circuit without cost, so the estimate is an
-          upper bound)
-        - governor: spend status — ``governor.exhausted`` true means new
-          evaluation is queued until ``governor.resets_at``.
-    """
-    try:
-        return _dump(await _get_client().get_recompute_quote(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def revalidate_threat_model_entities(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Re-run quality validation on a threat model's existing assets and
-    attackers, as if they were freshly generated. A fast first-pass check
-    judges every entity; only the ones it flags get a deeper review that
-    confirms them, sharpens their wording, or flags them for you.
-
-    Use this to apply validation improvements to an already-generated model, or
-    to clear stale quality warnings — without regenerating the whole model
-    (which would destroy controls, assertions, and components). It is
-    non-destructive: an entity that should be removed is left in place with a
-    quality warning rather than deleted, so no control objective loses its asset
-    or attacker anchor. The result is saved as a new model version; controls and
-    control objectives carry forward.
-
-    May consume credits for the entities that need the deeper review; a model
-    already in good shape costs nothing. Returns the updated model envelope:
-    ``{"accepted": true, "model": {...}}``.
-
-    Args:
-        model_id: ID of the threat model whose assets and attackers to
-            re-validate.
-    """
-    try:
-        return _dump(await _get_client().revalidate_entities(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4984,59 +3252,6 @@ async def import_compliance_framework(
 
 
 @mcp.tool()
-async def select_compliance_frameworks(
-    server_version: str,
-    model_id: str,
-    framework_ids: str,
-) -> dict:
-    """Select (activate) compliance frameworks on a threat model. Requires PRO tier. Mutating.
-
-    Activating a framework automatically kicks off auto-remediation in the background: it auto-maps existing controls to requirements, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for the remaining gaps. The response includes auto_remediate_jobs, which run and complete on their own; re-trigger later with auto_remediate if the model changes.
-
-    Discover framework IDs with list_compliance_frameworks (or add a custom one via import_compliance_framework); view the resulting gap analysis with get_compliance_report. For the system-level equivalent, use select_system_compliance_frameworks.
-
-    Args:
-        model_id: ID of the threat model.
-        framework_ids: Comma-separated framework IDs (e.g. "asvs-4.0,nist-csf").
-    """
-    parsed_ids = [f.strip() for f in framework_ids.split(",") if f.strip()]
-    try:
-        return _dump(await _get_client().select_compliance_frameworks(model_id, parsed_ids))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_compliance_report(
-    server_version: str,
-    model_id: str,
-    framework_id: str,
-    level: Optional[int] = None,
-    status: Optional[str] = None,
-    offset: int = 0,
-    limit: int = 0,
-) -> dict:
-    """Get the compliance gap-analysis report for a framework on a threat model. Read-only; no side effects.
-
-    Evaluates every framework requirement against the model's mapped controls and classifies each as covered, partial, uncovered, unmapped, or excluded. With no filters it returns a summary; pass status and/or offset/limit to page through per-requirement detail. The framework must first be activated on the model via select_compliance_frameworks.
-
-    Args:
-        model_id: ID of the threat model.
-        framework_id: ID of the compliance framework (as listed by list_compliance_frameworks).
-        level: Optional level filter for level-aware frameworks — returns only requirements at or below this level (e.g. 1 for L1 only). Omit for all levels.
-        status: Optional status filter: "covered", "partial", "uncovered", "unmapped", or "excluded". Empty = all statuses.
-        offset: Number of requirement rows to skip, for pagination. Default 0.
-        limit: Maximum requirement rows to return. Default 0 = no explicit limit.
-    """
-    try:
-        return _dump(await _get_client().get_compliance_report(
-            model_id, framework_id, level, status or "", offset, limit,
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def map_control_to_requirement(
     server_version: str,
     model_id: str,
@@ -5048,7 +3263,7 @@ async def map_control_to_requirement(
 ) -> dict:
     """Manually map one security control to one compliance-framework requirement. Mutating: records a control-to-requirement mapping, which re-derives that requirement's coverage in the compliance report.
 
-    Use for a single, deliberate mapping you are asserting by hand. To let the LLM propose mappings across many requirements at once, use auto_map_controls; to close gaps end-to-end (map + exclude + fill), use auto_remediate.
+    Use for a single, deliberate mapping you are asserting by hand. To let the LLM propose mappings across many requirements at once, use auto_map_controls; to close gaps end-to-end (map + exclude + fill), use auto_remediate_compliance.
 
     Args:
         model_id: ID of the threat model.
@@ -5076,7 +3291,7 @@ async def auto_map_controls(
 ) -> dict:
     """LLM-map a model's existing controls to a framework's requirements. Requires PRO tier. Mutating: writes control-to-requirement mappings. Runs as a background job (typically 20-45s); this tool waits for completion and returns the result.
 
-    Sits between the manual map_control_to_requirement (one mapping at a time) and the full auto_remediate loop (which also excludes non-applicable requirements and proposes new entities for remaining gaps). auto_map_controls only creates mappings from controls that already exist — it never adds or excludes entities.
+    Sits between the manual map_control_to_requirement (one mapping at a time) and the full auto_remediate_compliance loop (which also excludes non-applicable requirements and proposes new entities for remaining gaps). auto_map_controls only creates mappings from controls that already exist — it never adds or excludes entities.
 
     Args:
         model_id: ID of the threat model.
@@ -5088,52 +3303,6 @@ async def auto_map_controls(
         result = await client.auto_map_controls(
             model_id, framework_id, control_id or "",
         )
-        if isinstance(result, dict) and "job_id" in result:
-            return await _await_backend_job(client, result["job_id"], ctx)
-        return _dump(result)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def auto_remediate(
-    server_version: str,
-    model_id: str,
-    framework_id: str,
-    ctx: Context,
-) -> dict:
-    """Automatically close compliance gaps for a framework. Requires PRO tier.
-
-    Three-phase loop: (1) auto-map existing controls to unmapped requirements,
-    (2) exclude requirements for non-applicable taxonomy primitives,
-    (3) suggest and apply new assets/attackers for remaining gaps.
-
-    Phase (3) routes every proposal whose name matches a soft-deleted
-    asset/attacker through the same restore-candidate LLM gate
-    ``add_asset`` uses, so reanimating a previously removed entity
-    reinstates its stable ID and every CO tombstone + control tied to
-    it (rather than spawning a duplicate fresh ID). The response
-    distinguishes ``assets_added`` / ``attackers_added`` (genuinely new)
-    from ``assets_restored`` / ``attackers_restored`` (revived soft-
-    deletes) and lists ``restored_asset_ids`` / ``restored_attacker_ids``.
-    Proposals the gate classified as ``similar`` (or that fail-closed
-    on an unavailable / malformed gate response) appear under
-    ``skipped`` with a per-entry reason — the operator decides whether
-    to restore manually or rephrase.
-
-    Converges automatically: stops when fully covered or when no further
-    progress can be made.
-
-    This runs automatically when a framework is selected, but can be
-    re-triggered manually if the model changes.
-
-    Args:
-        model_id: ID of the threat model.
-        framework_id: ID of the compliance framework.
-    """
-    try:
-        client = _get_client()
-        result = await client.auto_remediate(model_id, framework_id)
         if isinstance(result, dict) and "job_id" in result:
             return await _await_backend_job(client, result["job_id"], ctx)
         return _dump(result)
@@ -5208,73 +3377,6 @@ async def update_organization(
             clear_target_ml=clear_target_ml,
             clear_csf_tier=clear_csf_tier,
         ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def list_systems(server_version: str) -> dict:
-    """List all saved systems in the current workspace.
-
-    Read-only; no side effects. A system is a named grouping of threat models
-    for portfolio-level risk and compliance reporting. Use this to discover
-    system ids (e.g. before ``get_system`` or ``get_system_risk_view``); to
-    create one use ``create_system``. Takes no arguments beyond the version
-    guard.
-    """
-    try:
-        return _dump(await _get_client().list_systems())
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_system(server_version: str, system_id: str) -> dict:
-    """Get a system container by ID, including summaries of its member threat models. Read-only; no side effects.
-
-    A system is a named grouping of threat models for portfolio-level risk and compliance reporting. Discover system IDs with list_systems; add members with add_model_to_system.
-
-    Args:
-        system_id: ID of the system to retrieve.
-    """
-    try:
-        return _dump(await _get_client().get_system(system_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def create_system(
-    server_version: str,
-    name: str,
-    description: str = "",
-) -> dict:
-    """Create a new system container in the current workspace. Mutating: returns the created system with its new ID.
-
-    A system is a named grouping of threat models for portfolio-level risk and compliance reporting. After creating one, add threat models with add_model_to_system.
-
-    Args:
-        name: System name (e.g. "Mobile Banking Platform").
-        description: Optional description.
-    """
-    try:
-        return _dump(await _get_client().create_system(name, description))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def add_model_to_system(server_version: str, system_id: str, model_id: str) -> dict:
-    """Add a threat model to a system container as a member. Mutating: links the model into the system — it does not move or copy the model, and the model stays independently editable.
-
-    Use to include a model in a system's portfolio-level risk and compliance reporting. Both the system and the model must already exist (see create_system and list_threat_models).
-
-    Args:
-        system_id: ID of the system.
-        model_id: ID of the threat model to add.
-    """
-    try:
-        return _dump(await _get_client().add_model_to_system(system_id, model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5386,26 +3488,6 @@ async def edit_component(
         raise _api_error(exc) from exc
 
 
-@mcp.tool()
-async def remove_component(
-    server_version: str,
-    model_id: str,
-    component_id: str,
-) -> dict:
-    """Remove a component from a threat model. Mutating and irreversible — unlike asset/attacker removal there is no restore counterpart.
-
-    Any controls scoped to this component have their component_id cleared (the controls themselves are kept), and the component's trust-boundary contribution to asset reachability is withdrawn. To change a component instead of removing it, use edit_component.
-
-    Args:
-        model_id: ID of the threat model.
-        component_id: ID of the component to remove (e.g. "CMP1").
-    """
-    try:
-        return _dump(await _get_client().remove_component(model_id, component_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
 # === Cross-Model Dependencies ===
 
 
@@ -5418,7 +3500,7 @@ async def get_system_dependencies(
 
     Returns every assumption in the system's member models that is linked to another member model (a cross-model dependency), with its satisfaction status. A dependency is satisfied when either the target model's mapped controls are implemented or a valid manual attestation exists.
 
-    Use to see which assumptions are met by other models' controls, find unsatisfied dependencies, or check system-level completeness. Create these links with link_dependency.
+    Use to see which assumptions are met by other models' controls, find unsatisfied dependencies, or check system-level completeness. Create these links with link_system_dependency.
 
     Args:
         system_id: ID of the system.
@@ -5429,91 +3511,7 @@ async def get_system_dependencies(
         raise _api_error(exc) from exc
 
 
-@mcp.tool()
-async def link_dependency(
-    server_version: str,
-    model_id: str,
-    assumption_id: str,
-    target_model_id: str = "",
-) -> dict:
-    """Link an external assumption to a target model in the same system.
-
-    Makes the assumption a cross-model dependency: it becomes a compliance
-    requirement on the target model. Two independent satisfaction paths:
-    auto-attestation when the target model's controls satisfy the
-    requirement (no manual action needed), or manual attestation via
-    submit_attestation. Either path alone suffices.
-
-    The assumption must already be linked to control objectives (via
-    add_assumption or edit_assumption with linked_co_ids). Pass empty
-    target_model_id to unlink.
-
-    Args:
-        model_id: ID of the threat model containing the assumption.
-        assumption_id: ID of the assumption (e.g., "AS1").
-        target_model_id: ID of the target model in the same system.
-            Pass "" to unlink.
-    """
-    try:
-        return _dump(await _get_client().link_assumption(
-            model_id, assumption_id, target_model_id,
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
 # === System Compliance ===
-
-
-@mcp.tool()
-async def select_system_compliance_frameworks(
-    server_version: str,
-    system_id: str,
-    framework_ids: str,
-) -> dict:
-    """Select (activate) compliance frameworks for a system, for portfolio-level compliance reporting. Requires PRO tier. Mutating: sets the system's active frameworks.
-
-    The system-level counterpart to select_compliance_frameworks (which operates on a single threat model). Discover framework IDs with list_compliance_frameworks; view results with get_system_compliance_report.
-
-    Args:
-        system_id: ID of the system.
-        framework_ids: Comma-separated framework IDs (e.g. "asvs-4.0,nist-csf").
-    """
-    parsed_ids = [f.strip() for f in framework_ids.split(",") if f.strip()]
-    try:
-        return _dump(await _get_client().select_system_compliance_frameworks(system_id, parsed_ids))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_system_compliance_report(
-    server_version: str,
-    system_id: str,
-    framework_id: str,
-    level: Optional[int] = None,
-    status: Optional[str] = None,
-    offset: int = 0,
-    limit: int = 0,
-) -> dict:
-    """Aggregated compliance report for a whole System (a group of related threat models) against one framework. Read-only. Requires PRO tier.
-
-    Rolls every mapped control across all models in the System up to per-requirement coverage against the selected framework, then returns coverage counts plus per-requirement rows. Sibling tools cover narrower/other scopes: ``get_compliance_report`` for a single model, ``get_tag_compliance_report`` for a tag cohort. The framework must first be selected for the system via ``select_system_compliance_frameworks``, otherwise there is nothing to report on.
-
-    Args:
-        system_id: ID of the system to report on.
-        framework_id: ID of a framework already selected for this system.
-        level: Optional framework level/tier filter (e.g., baseline level number). Omit for all levels.
-        status: Optional per-requirement filter, one of "covered", "partial", "uncovered", "unmapped", "excluded". Empty (default) returns all.
-        offset: Skip the first N requirement rows (pagination). Default 0.
-        limit: Max requirement rows to return; 0 (default) returns all.
-    """
-    try:
-        return _dump(await _get_client().get_system_compliance_report(
-            system_id, framework_id, level, status or "", offset, limit,
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
 
 
 # === Assertions & Verification ===
@@ -5911,27 +3909,6 @@ async def get_findings_risks(server_version: str) -> dict:
 
 
 @mcp.tool()
-async def get_model_risk_view(server_version: str, model_id: str) -> dict:
-    """Per-model Prioritized Risk View: one row per live Control
-    Objective with derived risk tier, asset impact, attacker
-    likelihood, control coverage counts, and open-finding count.
-
-    Use to triage which COs need attention on a specific model. The
-    rows already carry coverage_ratio and open_findings, so a single
-    call is sufficient to rank work — no per-CO fan-out needed.
-    Tombstoned COs are excluded; pair with ``get_threat_model`` if
-    historical context is needed.
-
-    Args:
-        model_id: ID of the threat model.
-    """
-    try:
-        return _dump(await _get_client().get_model_risk_view(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def get_remediation_leverage(server_version: str, model_id: str) -> dict:
     """Remediation-leverage plan for a model: which controls to implement
     first to close the most control objectives with the least work.
@@ -5960,27 +3937,6 @@ async def get_remediation_leverage(server_version: str, model_id: str) -> dict:
     """
     try:
         return await _get_client().get_remediation_leverage(model_id)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_system_risk_view(server_version: str, system_id: str) -> dict:
-    """System-level cross-model Prioritized Risk View: one row per
-    live Control Objective across every model in a System (a System
-    is a group of related threat models), with model context attached
-    to each row.
-
-    Use for posture queries spanning multiple models in the same
-    product or service. Same row shape as ``get_model_risk_view``
-    with ``model_id`` and ``model_title`` added per row so the agent
-    can group / filter by source model without an extra lookup.
-
-    Args:
-        system_id: ID of the system.
-    """
-    try:
-        return _dump(await _get_client().get_system_risk_view(system_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -6045,28 +4001,6 @@ async def create_risk_acceptance(
 
 
 # === Scan Prompt ===
-
-
-@mcp.tool()
-async def get_scan_prompt(
-    server_version: str,
-    model_id: str,
-    control_id: str = "",
-) -> dict:
-    """Get guidance prompts for scanning a codebase to discover control gaps. Read-only.
-
-    Returns prompts telling the agent what evidence to look for per control; only NOT_IMPLEMENTED controls are included (implemented ones need no scan). Use this to drive a gap-discovery pass, then record what is missing with ``submit_findings`` and what is present with ``submit_assertions``.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: Optional single control to scope the prompt to. Empty (default) returns prompts for all not-yet-implemented controls.
-    """
-    try:
-        return _dump(await _get_client().get_scan_prompt(model_id, control_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
 
 
 # === Project Setup ===
@@ -6198,22 +4132,6 @@ async def edit_trust_boundary(
         kwargs["change_reason"] = change_reason
     try:
         return await _get_client().edit_trust_boundary(model_id, tb_id, **kwargs)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def remove_trust_boundary(server_version: str, model_id: str, tb_id: str) -> dict:
-    """Remove a trust boundary from a model. Mutating and destructive: deletes the boundary and creates a new model version.
-
-    Removing a boundary widens reachability — any attacker vectors the boundary was filtering now pass freely, and its ``sealed``/isolation claim is dropped, so CO reachability verdicts past it can flip toward reachable/indeterminate. To change a boundary's filter or seal without deleting it, use ``edit_trust_boundary`` instead.
-
-    Args:
-        model_id: ID of the threat model.
-        tb_id: ID of the trust boundary to remove (e.g., "TB1").
-    """
-    try:
-        return await _get_client().remove_trust_boundary(model_id, tb_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -6382,25 +4300,6 @@ async def edit_assumption(
         raise _api_error(exc) from exc
 
 
-@mcp.tool()
-async def remove_assumption(server_version: str, model_id: str, assumption_id: str) -> dict:
-    """Soft-delete an assumption. Creates a new model version.
-
-    The assumption is marked as deleted (preserved for audit trail). Linked
-    COs are no longer mitigated by it. Controls with assumed_by pointing to
-    it are preserved as inert pointers — they reconnect automatically if the
-    assumption is restored via restore_assumption.
-
-    Args:
-        model_id: ID of the threat model.
-        assumption_id: ID of the assumption to soft-delete.
-    """
-    try:
-        return await _get_client().remove_assumption(model_id, assumption_id)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
 # === Attestation ===
 
 
@@ -6444,7 +4343,7 @@ async def list_attestations(server_version: str, model_id: str, assumption_id: s
 
     Returns the chronological record of attestation events recorded against the assumption (each with its actor, timestamp, and status/expiry as recorded), so you can trace why the assumption is currently attested, expired, or never attested. An assumption only mitigates its control objectives while it is active AND currently attested, so use this to diagnose coverage that depends on an attestation.
 
-    To record a new attestation use submit_attestation; for the assumption's current fields (status, description) use get_assumption.
+    To record a new attestation use submit_attestation; for the assumption's current fields (status, description) use get_entity (entity_type="assumption").
 
     Args:
         model_id: ID of the threat model.
@@ -6457,58 +4356,6 @@ async def list_attestations(server_version: str, model_id: str, assumption_id: s
 
 
 # === Control Assumption ===
-
-
-@mcp.tool()
-async def assume_control(
-    server_version: str, model_id: str, control_id: str, assumption_id: str,
-) -> dict:
-    """Mark a control as externally handled by an assumption.
-
-    Writes the assumption to group 1 as the sole member. The control counts
-    as active for mitigation group completeness when the referenced
-    assumption is active and attested.
-
-    AI relevance gate: the platform evaluates whether the assumption
-    plausibly covers the control before saving. If the evaluator rejects,
-    this tool raises with the rejection reasoning — there is NO override.
-    Resolve by either picking an assumption whose description covers the
-    control's responsibility, or by refining the chosen assumption's
-    description to make coverage explicit. For compound (AND) or
-    multi-path (OR) cases, use set_control_assumption_groups instead.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control (e.g., "CTRL-03").
-        assumption_id: ID of the assumption that covers this control.
-    """
-    try:
-        client = _get_client()
-        return await client._post(
-            f"/api/models/{model_id}/controls/{control_id}/assume",
-            {"assumption_id": assumption_id},
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def unassume_control(server_version: str, model_id: str, control_id: str) -> dict:
-    """Clear a control's externally-handled status. Mutating.
-
-    Shorthand inverse of assume_control: it removes the single-assumption external-handling linkage (group 1 in the common case) so the control is no longer counted as externally handled. The control reverts to not_implemented and must be implemented by the system owner. The referenced assumption itself is NOT deleted — only this control's linkage to it is removed.
-
-    For controls with multiple groups or AND/OR structure, prefer set_control_assumption_groups (pass {} to clear everything, or resubmit the groups you want to keep). Inspect the current structure first with get_control_assumption_groups.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control (e.g., "CTRL-03").
-    """
-    try:
-        client = _get_client()
-        return await client._delete(f"/api/models/{model_id}/controls/{control_id}/assume")
-    except Exception as exc:
-        raise _api_error(exc) from exc
 
 
 @mcp.tool()
@@ -6535,7 +4382,7 @@ async def get_control_assumption_groups(
     - When reviewing why a control is / isn't externally handled
     - When an assumption's attestation expires and you need to trace impact
 
-    The legacy assume_control / unassume_control tools remain as shorthand
+    The legacy set_control_assumption_groups / set_control_assumption_groups tools remain as shorthand
     for the common single-assumption, single-group case. They operate on
     group 1.
 
@@ -6629,29 +4476,6 @@ async def set_control_assumption_groups(
 
 
 # === Assumption Restore ===
-
-
-@mcp.tool()
-async def restore_assumption(server_version: str, model_id: str, assumption_id: str) -> dict:
-    """Restore a soft-deleted assumption. Creates a new model version.
-
-    The assumption returns to active status. Controls whose assumption_groups
-    referenced this assumption keep their existing group structure intact
-    (members were never removed by soft-delete — only the assumption's own
-    status changed). Re-attestation is required before the assumption
-    mitigates COs.
-
-    Args:
-        model_id: ID of the threat model.
-        assumption_id: ID of the assumption to restore.
-    """
-    try:
-        client = _get_client()
-        return await client._post(
-            f"/api/models/{model_id}/assumptions/{assumption_id}/restore", {},
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
 
 
 # === Assumption Violation Workflow ===
@@ -6764,51 +4588,6 @@ async def get_capability(server_version: str, model_id: str, capability_id: str)
 
 
 @mcp.tool()
-async def list_functional_objectives(server_version: str, model_id: str) -> dict:
-    """List every functional objective for a model.
-
-    Each functional objective is a Capability × Condition test plan expressed
-    as a Given-When-Then statement. Read-only; no side effects. Use this to
-    enumerate the functional test plan; for one objective's detail use
-    ``get_functional_objective``, and for pass/fail coverage state use
-    ``get_functional_coverage``.
-
-    Args:
-        model_id: ID of the threat model whose functional objectives to list.
-
-    Returns the list of functional objectives.
-    """
-    try:
-        return _dump(await _get_client().list_functional_objectives(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_functional_objective(
-    server_version: str, model_id: str, functional_objective_id: str,
-) -> dict:
-    """Get one functional objective, including its Given-When-Then statement.
-
-    Read-only; no side effects. Reports the objective's capability and
-    condition and its current test state. Use with a ``functional_objective_id``
-    from ``list_functional_objectives``; to enumerate all, use that tool.
-
-    Args:
-        model_id: ID of the threat model the objective belongs to.
-        functional_objective_id: ID of the functional objective to fetch.
-
-    Returns the functional objective.
-    """
-    try:
-        return _dump(
-            await _get_client().get_functional_objective(model_id, functional_objective_id)
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def get_functional_coverage(server_version: str, model_id: str) -> dict:
     """Get the full functional coverage report for a model.
 
@@ -6851,34 +4630,6 @@ async def check_functional_gaps(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
-async def get_functional_scan_prompt(server_version: str, model_id: str) -> dict:
-    """Get the agent brief for implementing functional-conformance tests.
-
-    Read-only; no side effects (it only returns instructions — it does not
-    write tests or assertions). Generation specifies the functional tests, so
-    for each test not yet verified this returns its implementation brief and
-    the objectives it proves. Also reports ``objectives_without_tests``
-    (regenerate or add a test) and ``missing_objectives`` (applicable
-    conditions with no objective yet).
-
-    Use this to drive test implementation, then complete each instruction by
-    writing the described test and calling ``submit_functional_tests`` with
-    TEST_EXISTS + TEST_PASSES assertions so CI verifies it. For the resulting
-    pass/fail state afterwards, read ``get_functional_coverage``.
-
-    Args:
-        model_id: ID of the threat model to build the functional brief for.
-
-    Returns the per-test implementation briefs plus objectives_without_tests
-    and missing_objectives.
-    """
-    try:
-        return _dump(await _get_client().get_functional_scan_prompt(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
 async def add_functional_test(
     server_version: str, model_id: str, description: str,
     functional_objective_ids: str, status: str = "not_implemented",
@@ -6886,12 +4637,12 @@ async def add_functional_test(
 ) -> dict:
     """Hand-author a single functional test and map it to one or more objectives. Mutating.
 
-    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_PASSES evidence via submit_functional_tests.
+    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_PASSES evidence via submit_functional_test_assertions.
 
     Args:
         model_id: ID of the threat model.
         description: What the test proves.
-        functional_objective_ids: Comma-separated objective ids the test satisfies (at least one required; get them from list_functional_objectives).
+        functional_objective_ids: Comma-separated objective ids the test satisfies (at least one required; get them from get_functional_objectives).
         status: not_implemented | implemented | verified — an operator claim only; an independent CI run is what actually verifies the test. Defaults to not_implemented.
         component_ids: Comma-separated component ids the test exercises (optional).
     """
@@ -6913,7 +4664,7 @@ async def import_functional_tests(
 ) -> dict:
     """Register tests that already exist in your codebase against a model's functional objectives, so tests you already have count toward functional conformance — not only Mipiti-specified tests. Mutating (bulk).
 
-    Scan the repo's test suite and pass the tests here. Optionally associate each with the objective ids it covers (from list_functional_objectives); the platform verifies each association is applicable before accepting it and returns any it rejected under ``rejected_mappings``. A test with no (or a rejected) association is still imported, unmapped, so it can be associated later (see suggest_functional_test_mappings / associate_functional_test). For a single hand-authored test, use add_functional_test instead.
+    Scan the repo's test suite and pass the tests here. Optionally associate each with the objective ids it covers (from get_functional_objectives); the platform verifies each association is applicable before accepting it and returns any it rejected under ``rejected_mappings``. A test with no (or a rejected) association is still imported, unmapped, so it can be associated later (see suggest_functional_test_mappings / associate_functional_test). For a single hand-authored test, use add_functional_test instead.
 
     Args:
         model_id: ID of the threat model.
@@ -6927,34 +4678,6 @@ async def import_functional_tests(
         raise ToolError("tests_json must be a non-empty JSON array of test objects.")
     try:
         return _dump(await _get_client().import_functional_tests(model_id, tests))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def submit_functional_tests(
-    server_version: str, model_id: str, functional_test_id: str,
-    assertions_json: str,
-) -> dict:
-    """Attach machine-verifiable evidence assertions to a functional test so CI can verify it. Mutating.
-
-    This is the functional-conformance analog of submit_assertions (which covers security controls): it binds assertions such as "the test exists" and "the test passes" to a functional test, and an independent CI run against the named repo is what turns an operator's "verified" claim into verified state. Call it after the test is implemented (e.g. following get_functional_scan_prompt), then read the resulting state via get_functional_coverage or get_functional_test_sufficiency.
-
-    Args:
-        model_id: ID of the threat model.
-        functional_test_id: The functional test the assertions prove.
-        assertions_json: JSON array of assertion objects, each {"type": "test_passes" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
-    """
-    try:
-        assertions = json.loads(assertions_json)
-    except json.JSONDecodeError:
-        raise ToolError("assertions_json must be a valid JSON array.")
-    if not isinstance(assertions, list):
-        raise ToolError("assertions_json must be a JSON array.")
-    try:
-        return _dump(await _get_client().submit_functional_tests(
-            model_id, functional_test_id, assertions,
-        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7139,6 +4862,1404 @@ async def classify_model_cwe(
     """
     try:
         return await _get_client().classify_model_cwe(model_id, force=force)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_entity(
+    server_version: str,
+    model_id: str,
+    entity_type: str,
+    entity_id: str,
+) -> dict:
+    """Get a single entity of any core type by ID. Read-only.
+
+    Dispatches on ``entity_type`` to the per-type read and returns that
+    type's native record as-is (not wrapped in an array):
+
+    - ``asset`` — the asset's typed fields. Soft-deleted assets carry
+      ``deleted: true``; the caller decides whether to surface them.
+      ``entity_id`` e.g. ``A-01``.
+    - ``attacker`` — the attacker with its factor decomposition.
+      Soft-deleted attackers carry ``deleted: true``. ``entity_id`` e.g.
+      ``T-03``.
+    - ``component`` — the component. Speculative components
+      (``repo_url=""``) are returned as-is: the empty repo IS the
+      lifecycle state, not an error. ``entity_id`` e.g. ``CMP-01``.
+    - ``trust_boundary`` — the boundary incl. its ``passes`` set
+      (closed-vocabulary subset of
+      ``{Network, Adjacent, Local, Physical}``). ``entity_id`` e.g.
+      ``TB-Net``.
+    - ``assumption`` — the assumption with its override applied (mirrors
+      ``list_assumptions``' merge for one entity: typed fields, the
+      structured ``exclusion`` predicate when present, and the override
+      layer — status / justification / linked CO IDs / target model).
+      Soft-deleted assumptions carry ``deleted: true``. ``entity_id``
+      e.g. ``AS-01``.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_type: Which entity to read — one of ``asset``,
+            ``attacker``, ``component``, ``trust_boundary``,
+            ``assumption``.
+        entity_id: ID of the entity to fetch.
+    """
+    if entity_type not in {"asset", "attacker", "component", "trust_boundary", "assumption"}:
+        raise ToolError(
+            f"Unsupported entity_type {entity_type!r}; expected one of: "
+            "asset, attacker, component, trust_boundary, assumption."
+        )
+    try:
+        client = _get_client()
+        getter = {
+            "asset": client.get_asset,
+            "attacker": client.get_attacker,
+            "component": client.get_component,
+            "trust_boundary": client.get_trust_boundary,
+            "assumption": client.get_assumption,
+        }[entity_type]
+        return _dump(await getter(model_id, entity_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def remove_entity(
+    server_version: str,
+    model_id: str,
+    entity_type: str,
+    entity_id: str,
+) -> dict:
+    """Soft-delete a single entity of any core type. Mutating: creates a
+    new model version. Reversible with ``restore_entity`` using the same
+    ``entity_type`` — the entity's ID is preserved (never reused) so a
+    restore reinstates the same ID and all its links. To change an
+    entity's fields instead of removing it, use the typed ``edit_*`` tool.
+
+    Dispatches on ``entity_type``. Per-type consequence (all derived at
+    read time; nothing is hard-destroyed):
+
+    - ``asset`` — the asset's (asset × attacker) CO pairs are tombstoned,
+      orphaning any controls mapped to them.
+    - ``attacker`` — control objectives anchored to this attacker are
+      tombstoned; controls left with no live anchor become orphaned.
+    - ``component`` — controls scoped to this component have their
+      ``component_id`` cleared (the controls themselves are kept) and the
+      component's trust-boundary contribution to asset reachability is
+      withdrawn.
+    - ``trust_boundary`` — reachability widens: attacker vectors the
+      boundary was filtering now pass freely and its ``sealed``/isolation
+      claim is dropped, so CO reachability verdicts past it can flip
+      toward reachable/indeterminate.
+    - ``assumption`` — marked deleted (kept for the audit trail); linked
+      COs are no longer mitigated by it; controls with ``assumed_by``
+      pointing to it are preserved as inert pointers that reconnect on
+      restore.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_type: Which entity to soft-delete — one of ``asset``,
+            ``attacker``, ``component``, ``trust_boundary``,
+            ``assumption``.
+        entity_id: ID of the entity to soft-delete.
+    """
+    if entity_type not in {"asset", "attacker", "component", "trust_boundary", "assumption"}:
+        raise ToolError(
+            f"Unsupported entity_type {entity_type!r}; expected one of: "
+            "asset, attacker, component, trust_boundary, assumption."
+        )
+    try:
+        client = _get_client()
+        remover = {
+            "asset": client.remove_asset,
+            "attacker": client.remove_attacker,
+            "component": client.remove_component,
+            "trust_boundary": client.remove_trust_boundary,
+            "assumption": client.remove_assumption,
+        }[entity_type]
+        return _dump(await remover(model_id, entity_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def restore_entity(
+    server_version: str,
+    model_id: str,
+    entity_type: str,
+    entity_id: str,
+) -> dict:
+    """Un-soft-delete a single entity of any core type, reversing a prior
+    ``remove_entity``. Mutating: creates a new model version. Only affects
+    an entity that is currently soft-deleted.
+
+    Dispatches on ``entity_type``. Per-type effect:
+
+    - ``asset`` — revives the asset's tombstoned (asset × attacker) COs
+      with their original IDs, un-orphaning any linked controls.
+    - ``attacker`` — reinstates the attacker under its original ID,
+      revives the COs tombstoned when it was removed, and un-orphans any
+      controls that were anchored to it.
+    - ``component`` — reinstates the component under its original ID,
+      restoring its trust-boundary contribution to asset reachability.
+    - ``trust_boundary`` — reinstates the boundary: the reachability it
+      filtered re-narrows and its ``sealed``/isolation claim is restored,
+      so CO reachability verdicts past it can flip back toward
+      unreachable.
+    - ``assumption`` — returns the assumption to active status; controls
+      whose ``assumption_groups`` referenced it keep their group
+      structure intact. Re-attestation is required before it mitigates
+      COs again.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_type: Which entity to restore — one of ``asset``,
+            ``attacker``, ``component``, ``trust_boundary``,
+            ``assumption``.
+        entity_id: ID of the entity to restore.
+    """
+    if entity_type not in {"asset", "attacker", "component", "trust_boundary", "assumption"}:
+        raise ToolError(
+            f"Unsupported entity_type {entity_type!r}; expected one of: "
+            "asset, attacker, component, trust_boundary, assumption."
+        )
+    try:
+        client = _get_client()
+        restorer = {
+            "asset": client.restore_asset,
+            "attacker": client.restore_attacker,
+            "component": client.restore_component,
+            "trust_boundary": client.restore_trust_boundary,
+            "assumption": client.restore_assumption,
+        }[entity_type]
+        return _dump(await restorer(model_id, entity_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_risk_view(
+    server_version: str,
+    scope: Literal["model", "system", "tag"],
+    scope_id: str,
+) -> dict:
+    """Prioritized Risk View — one row per live Control Objective — at a chosen scope. Read-only; no side effects.
+
+    ``scope`` selects the aggregation boundary and how ``scope_id`` is interpreted:
+
+    - ``"model"`` — a single threat model (``scope_id`` = model id). One row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage counts (``coverage_ratio``), and open-finding count (``open_findings``). Tombstoned COs are excluded; pair with ``get_threat_model`` if historical context is needed. Use to triage which COs need attention on one model — a single call ranks the work, no per-CO fan-out.
+    - ``"system"`` — every model in a System, a group of related threat models (``scope_id`` = system id). Same row shape as ``model`` with ``model_id`` and ``model_title`` added per row, so rows can be grouped/filtered by source model without an extra lookup. Use for posture queries spanning multiple models in the same product or service.
+    - ``"tag"`` — every member model of a tag, a freely-composed cohort (``scope_id`` = tag id). One delegation-aware row per CO across members (``delegation_mitigated`` / ``delegating_controls``): a CO mitigated via a verified cross-model delegation reads as covered, consistent with each model's own assessment. Use for a portfolio/audit-scope posture rollup.
+
+    Args:
+        scope: aggregation boundary — "model", "system", or "tag".
+        scope_id: id of the model, system, or tag selected by ``scope``.
+    """
+    if scope not in ("model", "system", "tag"):
+        raise ToolError("scope must be 'model', 'system', or 'tag'.")
+    try:
+        client = _get_client()
+        if scope == "model":
+            return _dump(await client.get_model_risk_view(scope_id))
+        if scope == "system":
+            return _dump(await client.get_system_risk_view(scope_id))
+        return _dump(await client.get_tag_risk_view(scope_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_compliance_report(
+    server_version: str,
+    scope: Literal["model", "system", "tag"],
+    scope_id: str,
+    framework_id: str,
+    level: Optional[int] = None,
+    status: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 0,
+) -> dict:
+    """Compliance gap-analysis report for one framework at a chosen scope. Read-only; no side effects. System/tag scopes require PRO tier.
+
+    Evaluates every framework requirement against the mapped controls in scope and classifies each as covered, partial, uncovered, unmapped, or excluded, then returns coverage counts plus per-requirement rows. The framework must first be activated at the same scope via ``select_compliance_frameworks`` (with the matching ``scope``), otherwise there is nothing to report on.
+
+    ``scope`` selects the boundary and how ``scope_id`` is read:
+
+    - ``"model"`` — a single threat model (``scope_id`` = model id).
+    - ``"system"`` — rolled up across every model in a System, a group of related threat models (``scope_id`` = system id).
+    - ``"tag"`` — rolled up across every member model of a tag cohort, a freely-composed set of models (``scope_id`` = tag id).
+
+    Filtering / pagination:
+
+    - ``level`` — level filter for level-aware frameworks; returns only requirements at or below this level (e.g. 1 for L1 only). Omit (or 0) for all levels. Honored for all scopes.
+    - ``status`` — one of "covered", "partial", "uncovered", "unmapped", "excluded"; empty = all statuses. **Model and system scopes only.**
+    - ``offset`` / ``limit`` — per-requirement row pagination; offset skips the first N rows, limit caps rows returned (0 = no explicit limit). **Model and system scopes only.**
+
+    A tag report is neither paginated nor status-filtered; passing ``status``, ``offset``, or ``limit`` with ``scope="tag"`` raises an error rather than silently returning unfiltered rows.
+
+    Args:
+        scope: report boundary — "model", "system", or "tag".
+        scope_id: id of the model, system, or tag selected by ``scope``.
+        framework_id: framework to report on (already selected at this scope; see ``list_compliance_frameworks``).
+        level: optional level filter; omit for all levels.
+        status: optional per-requirement status filter (model/system scopes only).
+        offset: skip the first N requirement rows, pagination (model/system scopes only). Default 0.
+        limit: max requirement rows to return, 0 = no explicit limit (model/system scopes only).
+    """
+    if scope not in ("model", "system", "tag"):
+        raise ToolError("scope must be 'model', 'system', or 'tag'.")
+    if scope == "tag" and (status or offset or limit):
+        raise ToolError(
+            "status/offset/limit are supported only for scope='model' or 'system'; "
+            "tag compliance reports are not paginated or status-filtered."
+        )
+    try:
+        client = _get_client()
+        if scope == "model":
+            return _dump(await client.get_compliance_report(
+                scope_id, framework_id, level, status or "", offset, limit,
+            ))
+        if scope == "system":
+            return _dump(await client.get_system_compliance_report(
+                scope_id, framework_id, level, status or "", offset, limit,
+            ))
+        return _dump(await client.get_tag_compliance_report(
+            scope_id, framework_id, level if level is not None else 0,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def select_compliance_frameworks(
+    server_version: str,
+    scope: Literal["model", "system", "tag"],
+    scope_id: str,
+    framework_ids: str,
+) -> dict:
+    """Select (activate) compliance frameworks at a chosen scope. Requires PRO tier. Mutating.
+
+    Discover valid ids with ``list_compliance_frameworks`` (or add a custom one via ``import_compliance_framework``); view the resulting gap analysis with ``get_compliance_report`` at the same ``scope``. Re-calling replaces the scope's framework selection.
+
+    ``scope`` selects the target and how ``scope_id`` is read:
+
+    - ``"model"`` — a single threat model (``scope_id`` = model id). Activating a framework also kicks off background auto-remediation: it auto-maps existing controls to requirements, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for the remaining gaps. The response includes ``auto_remediate_jobs``, which run and complete on their own; re-trigger later with ``auto_remediate_compliance`` if the model changes.
+    - ``"system"`` — a System, i.e. a group of related threat models (``scope_id`` = system id). Sets the system's active frameworks for portfolio-level compliance reporting.
+    - ``"tag"`` — a tag cohort (``scope_id`` = tag id). Records the frameworks against the tag AND propagates them to every member model, making the tag a compliance scope (e.g. an audit boundary) spanning several models.
+
+    Args:
+        scope: target boundary — "model", "system", or "tag".
+        scope_id: id of the model, system, or tag selected by ``scope``.
+        framework_ids: comma-separated framework ids (e.g. "asvs-4.0,nist-csf").
+    """
+    if scope not in ("model", "system", "tag"):
+        raise ToolError("scope must be 'model', 'system', or 'tag'.")
+    parsed_ids = [f.strip() for f in framework_ids.split(",") if f.strip()]
+    try:
+        client = _get_client()
+        if scope == "model":
+            return _dump(await client.select_compliance_frameworks(scope_id, parsed_ids))
+        if scope == "system":
+            return _dump(await client.select_system_compliance_frameworks(scope_id, parsed_ids))
+        return _dump(await client.select_tag_compliance_frameworks(scope_id, parsed_ids))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def export_report(
+    server_version: str,
+    scope: Literal["model", "tag"],
+    scope_id: str,
+    ctx: Context,
+    format: Literal["csv", "pdf", "html", "archive"] = "csv",
+) -> dict:
+    """Export a threat model or a tag cohort as a downloadable document. Read-only; no side effects on the source.
+
+    ``scope`` selects what is exported and how ``scope_id`` is read; ``format`` selects the representation:
+
+    - ``scope="model"`` (``scope_id`` = model id) supports ``format`` ∈ {``csv``, ``pdf``, ``html``, ``archive``}:
+        - ``csv`` — the model's current state rendered as CSV; returned inline as UTF-8 text in ``content``.
+        - ``pdf`` / ``html`` — rendered document returned base64-encoded in ``content_b64`` (with ``content_type``). Runs as a server-side job; progress is reported automatically while it completes, which may take time for large models.
+        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle: every version, controls, assertions (with Tier 1 / Tier 2 verdicts and attested flags), findings, risk acceptances, assumption overrides, attestations, and instance sufficiency signatures. Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
+    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, aggregating every member model's report plus the cross-model dependency graph and attestation status into one HTML document, returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
+
+    Args:
+        scope: export boundary — "model" or "tag".
+        scope_id: id of the model or tag selected by ``scope``.
+        format: "csv" (default), "pdf", "html", or "archive". Tag scope requires "html"; "archive" is model-only.
+
+    Returns:
+        model csv → ``{scope, scope_id, format, filename, content}`` (inline UTF-8 text).
+        model pdf/html → ``{scope, scope_id, format, filename, content_type, content_b64}`` (base64-encoded bytes).
+        model archive → ``{scope, scope_id, format, envelope}``.
+        tag html → ``{scope, scope_id, format, content}`` (inline HTML).
+    """
+    if scope not in ("model", "tag"):
+        raise ToolError("scope must be 'model' or 'tag'.")
+    if format not in ("csv", "pdf", "html", "archive"):
+        raise ToolError("format must be 'csv', 'pdf', 'html', or 'archive'.")
+    if scope == "tag":
+        if format == "archive":
+            raise ToolError("format='archive' is model-only; tag scope supports only 'html'.")
+        if format != "html":
+            raise ToolError("tag scope supports only format='html' (the signed auditor report).")
+    try:
+        client = _get_client()
+        if scope == "tag":
+            content = await client.export_tag(scope_id, "html")
+            return {"scope": "tag", "scope_id": scope_id, "format": "html", "content": content}
+        # scope == "model"
+        if format == "archive":
+            job_id = await client.start_export_model_full(scope_id)
+            await _await_backend_job(client, job_id, ctx)
+            content_bytes = await client.fetch_operation_result(job_id)
+            envelope = json.loads(content_bytes.decode("utf-8"))
+            return {"scope": "model", "scope_id": scope_id, "format": "archive", "envelope": envelope}
+        job_id = await client.start_export_model(scope_id, format)
+        result = await _await_backend_job(client, job_id, ctx)
+        # The backend job result is the file envelope.
+        filename = (result or {}).get("filename") or f"threat_model.{format}"
+        content_type = (result or {}).get("content_type") or ""
+        content_bytes = await client.fetch_operation_result(job_id)
+        if format == "csv":
+            return {
+                "scope": "model",
+                "scope_id": scope_id,
+                "format": "csv",
+                "filename": filename,
+                "content": content_bytes.decode("utf-8"),
+            }
+        import base64 as _b64
+        return {
+            "scope": "model",
+            "scope_id": scope_id,
+            "format": format,
+            "filename": filename,
+            "content_type": content_type or (
+                "application/pdf" if format == "pdf" else "text/html"
+            ),
+            "content_b64": _b64.b64encode(content_bytes).decode("ascii"),
+        }
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def list_groups(server_version: str, kind: str) -> dict:
+    """List the workspace's groups of a given kind. Read-only; no side effects.
+
+    A \"group\" is a named collection of threat models. Two kinds, with distinct
+    semantics and DIFFERENT response shapes:
+
+    ``kind`` values:
+      - ``\"tag\"``: overlapping, semantics-free groupings — for audit scopes,
+        ad-hoc selections, or portfolios. A model may carry many tags, and a
+        tag never affects posture or credit. Returns ``{\"tags\": [...]}``.
+      - ``\"system\"``: named groupings of threat models for portfolio-level
+        risk and compliance reporting; unlike tags these drive system-scoped
+        risk/compliance rollups. Returns ``{\"items\": [<system>, ...]}`` where
+        each system carries ``id``, ``name``, ``description``, ``model_count``.
+
+    Discover group IDs here before the group risk/compliance/export tools or
+    before adding/removing members. For a single model's tag memberships use
+    ``list_model_groups``.
+
+    Args:
+        kind: ``\"tag\"`` or ``\"system\"``.
+    """
+    if kind not in ("tag", "system"):
+        raise ToolError("kind must be 'tag' or 'system'.")
+    try:
+        client = _get_client()
+        if kind == "tag":
+            return await client.list_tags()
+        return _dump(await client.list_systems())
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def create_group(
+    server_version: str,
+    kind: str,
+    name: str,
+    description: str = "",
+    model_ids: list[str] | None = None,
+) -> dict:
+    """Create a group (tag or system), optionally seeding tag members. Mutating.
+
+    A \"group\" is a named collection of threat models. Group names are unique
+    per workspace within their kind.
+
+    ``kind`` values:
+      - ``\"tag\"``: an overlapping, semantics-free grouping — for viewing/
+        reporting without asserting any relationship between members and
+        without moving credit. Honors ``model_ids`` as an initial member seed.
+        Returns the created tag.
+      - ``\"system\"``: a named grouping for portfolio-level risk and compliance
+        reporting. Systems are NOT seeded at creation — ``model_ids`` must be
+        omitted/empty for ``kind=\"system\"`` (passing members raises); add them
+        afterward with ``add_model_to_group(kind=\"system\", ...)``. Returns the
+        created system with its new ID.
+
+    Args:
+        kind: ``\"tag\"`` or ``\"system\"``.
+        name: the group name (unique within the workspace for its kind).
+        description: optional description.
+        model_ids: optional initial member model ids — ``\"tag\"`` only.
+    """
+    if kind not in ("tag", "system"):
+        raise ToolError("kind must be 'tag' or 'system'.")
+    if kind == "system" and model_ids:
+        raise ToolError(
+            "model_ids seeding is only supported for kind='tag'. Create the "
+            "system first, then add members with "
+            "add_model_to_group(kind='system', ...).",
+        )
+    try:
+        client = _get_client()
+        if kind == "tag":
+            return await client.create_tag(name, description, model_ids or [])
+        return _dump(await client.create_system(name, description))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def add_model_to_group(
+    server_version: str, kind: str, group_id: str, model_id: str,
+) -> dict:
+    """Add a threat model to a group as a member. Mutating.
+
+    Links the model into the group without moving or copying it — the model
+    stays independently editable. Both the group and the model must already
+    exist.
+
+    ``kind`` values:
+      - ``\"tag\"``: add the model to a tag. Membership is overlapping — a model
+        may belong to many tags. Returns the updated tag payload.
+      - ``\"system\"``: add the model to a system container for portfolio-level
+        risk and compliance reporting. Returns an ok result.
+
+    Note: member REMOVAL is tag-only (see ``remove_model_from_group``); the
+    API has no remove-member endpoint for systems.
+
+    Args:
+        kind: ``\"tag\"`` or ``\"system\"``.
+        group_id: ID of the tag or system.
+        model_id: ID of the threat model to add.
+    """
+    if kind not in ("tag", "system"):
+        raise ToolError("kind must be 'tag' or 'system'.")
+    try:
+        client = _get_client()
+        if kind == "tag":
+            return await client.add_model_to_tag(group_id, model_id)
+        return _dump(await client.add_model_to_system(group_id, model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_group(server_version: str, system_id: str) -> dict:
+    """Get a system group by ID, including summaries of its member threat models. Read-only; no side effects.
+
+    Single-group fetch is supported for SYSTEMS ONLY — tags have no
+    fetch-by-id endpoint; enumerate tags with ``list_groups(kind=\"tag\")`` and
+    a single model's tag memberships with ``list_model_groups``. A system is a
+    named grouping of threat models for portfolio-level risk and compliance
+    reporting. Discover system IDs with ``list_groups(kind=\"system\")``; add
+    members with ``add_model_to_group(kind=\"system\", ...)``.
+
+    Args:
+        system_id: ID of the system to retrieve.
+    """
+    try:
+        return _dump(await _get_client().get_system(system_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def delete_group(server_version: str, tag_id: str) -> dict:
+    """Delete a tag group (the grouping only; member models are not affected).
+
+    Deletion is supported for TAGS ONLY — systems have no delete endpoint on
+    this API. A tag is an overlapping, semantics-free grouping; removing it
+    leaves its member models untouched.
+
+    Args:
+        tag_id: ID of the tag to delete.
+    """
+    try:
+        await _get_client().delete_tag(tag_id)
+        return {"deleted": True, "tag_id": tag_id}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def remove_model_from_group(
+    server_version: str, tag_id: str, model_id: str,
+) -> dict:
+    """Remove a model from a tag group (the model itself is not deleted).
+
+    Member removal is supported for TAGS ONLY — systems have no remove-member
+    endpoint on this API (a model added to a system via
+    ``add_model_to_group(kind=\"system\", ...)`` cannot be detached through
+    this client). Removing a model from a tag leaves the model untouched.
+
+    Args:
+        tag_id: the tag.
+        model_id: the model to remove.
+    """
+    try:
+        await _get_client().remove_model_from_tag(tag_id, model_id)
+        return {"removed": True, "tag_id": tag_id, "model_id": model_id}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def list_model_groups(server_version: str, model_id: str) -> dict:
+    """List the groups a given model belongs to. Read-only; no side effects.
+
+    Returns the model's TAG memberships (``/api/models/{id}/tags``) — tags are
+    the overlapping grouping kind, so a model may appear under many. There is
+    no per-model listing for systems; enumerate systems with
+    ``list_groups(kind=\"system\")`` and inspect membership via each system's
+    ``get_group``. Use ``list_groups(kind=\"tag\")`` for all tags in the
+    workspace.
+
+    Args:
+        model_id: the model whose groups (tags) to list.
+    """
+    try:
+        return await _get_client().list_model_tags(model_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def link_system_dependency(
+    server_version: str,
+    model_id: str,
+    assumption_id: str,
+    target_model_id: str = "",
+) -> dict:
+    """Link an external assumption to a target model in the same system.
+
+    Makes the assumption a cross-model (system-scoped) dependency: it becomes a
+    compliance requirement on the target model. Two independent satisfaction
+    paths: auto-attestation when the target model's controls satisfy the
+    requirement (no manual action needed), or manual attestation via
+    submit_attestation. Either path alone suffices.
+
+    The assumption must already be linked to control objectives (via
+    add_assumption or edit_assumption with linked_co_ids). Pass empty
+    target_model_id to unlink. Inspect the resulting dependency graph with
+    get_system_dependencies.
+
+    Args:
+        model_id: ID of the threat model containing the assumption.
+        assumption_id: ID of the assumption (e.g., \"AS1\").
+        target_model_id: ID of the target model in the same system.
+            Pass \"\" to unlink.
+    """
+    try:
+        return _dump(await _get_client().link_assumption(
+            model_id, assumption_id, target_model_id,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_reachability_verdicts(
+    server_version: str,
+    model_id: str,
+    composed: bool = False,
+    co_id: str = "",
+    page: int = 1,
+    page_size: int = 100,
+    kind_filter: str | None = None,
+) -> dict:
+    """Per-CO reachability verdicts for a model — flat or composed topology.
+
+    ``composed`` selects which topology the verdicts are derived over:
+
+      - ``composed=False`` (default) — FLAT: verdicts over THIS model's own
+        structural primitives only (components, asset.component_ids,
+        trust_boundary.passes, attacker.trust_boundary_ids + attack_vector,
+        Assumption.exclusion predicates). Pure derivation, NOT persisted on
+        the CO — re-running against the model JSON is deterministic, the
+        verification an auditor performs. Pass ``co_id`` to retrieve a
+        single verdict (skips the cross-CO loop); ``page`` / ``page_size`` /
+        ``kind_filter`` are ignored in this mode. Returns ``{model_id,
+        model_version, verdicts: [...]}`` where each verdict carries
+        ``co_id``, ``kind`` ("reachable" | "unreachable" |
+        "indeterminate"), ``reason`` (structural label:
+        ``boundary_blocks_vector`` / ``assumption_excludes`` /
+        ``attacker_unpositioned`` / ``asset_unbounded`` /
+        ``no_shared_boundary`` / ``missing_entity``), ``narration``, and
+        (when applicable) ``boundary_id`` / ``assumption_id``.
+
+      - ``composed=True`` — COMPOSED: the same verdict semantics evaluated
+        over the merged effective tree (own components and trust boundaries
+        combined with everything inherited from ancestors, qualified ids for
+        cross-model references). Use this when the model is a child on the
+        composition tree and you need reach state that reflects the ancestor
+        topology, not just the local model document. Paginated via ``page``
+        / ``page_size`` and filterable via ``kind_filter``; ``co_id`` is
+        ignored (the composed surface has no single-CO lookup). Returns
+        ``{model_id, flag_enabled, verdicts: [{co_qid, asset_qid,
+        attacker_qid, kind, reason}, ...], total, page, page_size}``. When
+        composition is disabled on the backend, ``verdicts`` is empty and
+        ``flag_enabled: false`` — fall back to ``composed=False`` for the
+        per-model derivation.
+
+    When a flat verdict is indeterminate, address the gap via the standard
+    model-edit affordances:
+      - ``attacker_unpositioned`` → ``edit_attacker`` setting
+        ``trust_boundary_ids``
+      - ``asset_unbounded`` → ``assign_to_components (target_type="asset")`` or
+        ``edit_asset`` with ``component_ids``
+      - ``no_shared_boundary`` → re-position attacker, re-scope asset, OR
+        ``add_assumption`` with structured exclusion
+      - ``missing_entity`` → restore the missing asset/attacker, or remove
+        the orphaned CO
+
+    Use this before relying on per-CO reach state for triage,
+    auto-remediation, or audit responses. The ``model_coherence_report``
+    tool surfaces the same gaps as actionable findings; this tool exposes
+    the raw verdicts when you need the structured data (boundary_id
+    citations, narration strings) that the findings summarize.
+
+    Args:
+        model_id: ID of the threat model.
+        composed: When False (default), derive over this model's own
+            topology (flat). When True, derive over the composed effective
+            tree (own ⊕ inherited).
+        co_id: FLAT mode only. Optional CO id — when set, returns a single
+            verdict; 404 if the CO doesn't exist or is tombstoned. Ignored
+            when ``composed=True``.
+        page: COMPOSED mode only. 1-indexed page number (default ``1``).
+            Ignored when ``composed=False``.
+        page_size: COMPOSED mode only. Verdicts per page (default ``100``).
+            Ignored when ``composed=False``.
+        kind_filter: COMPOSED mode only. Restrict verdicts to one kind —
+            one of ``"reachable" | "unreachable" | "indeterminate"``. Named
+            ``kind_filter`` (not ``kind``) to disambiguate from the verdict
+            object's own ``kind`` field. When omitted, all verdict kinds are
+            returned. Ignored when ``composed=False``.
+    """
+    try:
+        if composed:
+            return _dump(
+                await _get_client().composition_reachability(
+                    model_id,
+                    page=page,
+                    page_size=page_size,
+                    kind_filter=kind_filter,
+                ),
+            )
+        return _dump(
+            await _get_client().model_reachability_verdicts(model_id, co_id=co_id),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def recompute_verdicts(
+    server_version: str,
+    model_id: str,
+    dry_run: bool = False,
+) -> dict:
+    """Re-run coverage and group-sufficiency verdict evaluation for a model,
+    or return the pre-flight cost estimate without enqueueing anything.
+
+    ``dry_run`` selects between enqueueing the recompute and a cost-only
+    quote:
+
+      - ``dry_run=False`` (default) — ENQUEUE: force a fresh evaluation of
+        every control's coverage verdict and every live control objective's
+        group-sufficiency verdict, bypassing the normal quiet-period
+        batching. Evaluation runs in the background; re-read the model's
+        divergence report (or coverage surfaces) shortly after to see
+        updated verdicts. The response carries ``estimated_credits`` — an
+        informational estimate; nothing is charged from it, actual usage is
+        metered as the evaluation runs, per the account's plan. Returns
+        ``{model_id, model_version, enqueued_coverage,
+        enqueued_group_sufficiency, total_enqueued, estimated_credits,
+        quote, governor}``. When ``governor.exhausted`` is true the work is
+        queued and resumes automatically at ``governor.resets_at`` — it is
+        never dropped.
+
+      - ``dry_run=True`` — QUOTE ONLY: return the informational pre-flight
+        cost estimate and enqueue NOTHING. Nothing is charged from the
+        estimate. It carries ``computed_at`` and the pricing ``rate_version``
+        in force so a stale quote is detectable. Returns
+        ``{estimated_credits, computed_at, rate_version, informational,
+        total_enqueueable, already_evaluated, governor}``, where
+        ``total_enqueueable`` is the number of jobs a recompute would enqueue
+        and ``already_evaluated`` counts subjects that already carry a
+        verdict (a portion short-circuit without cost, so the estimate is an
+        upper bound). When ``governor.exhausted`` is true, new evaluation
+        would be queued until ``governor.resets_at``.
+
+    Both modes return a 503-mapped error when verdict observability is
+    unavailable on the deployment. To un-park verdicts stuck by a transient
+    outage instead of force-enqueueing the whole model, use
+    ``retry_verdicts``.
+
+    Args:
+        model_id: ID of the threat model to re-evaluate (or estimate for).
+        dry_run: When True, return only the pre-flight estimate and enqueue
+            nothing. When False (default), enqueue the recompute.
+    """
+    try:
+        if dry_run:
+            return _dump(await _get_client().get_recompute_quote(model_id))
+        return _dump(await _get_client().recompute_verdicts(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def list_reconciliation_candidates(
+    server_version: str,
+    model_id: str,
+    disposition: str = "active",
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    """Reconciliation triage surface between this model and its ancestors.
+
+    When a model inherits entities (assets, attackers, components, trust
+    boundaries) from an ancestor *and* the operator has authored a
+    locally-named entity that looks like the same real-world thing, the
+    reconciliation engine pairs them so the operator can decide whether to
+    alias the local entity onto the inherited qualified id. ``disposition``
+    selects which side of the triage queue to read:
+
+      - ``disposition="active"`` (default) — the OPEN candidate queue:
+        detected pairs the operator has not yet acted on. Tier ``certain``
+        is a deterministic match (same qid or structurally identical) and is
+        safe to auto-apply via ``apply_certain_reconciliation_match``; tier
+        ``heuristic`` is a fuzzy name/description match that needs review.
+        Previously-rejected pairs are filtered out of this queue. Paginated
+        via ``page`` / ``page_size``. Returns ``{model_id, flag_enabled,
+        total, tiers: {certain: int, heuristic: int}, page, page_size,
+        candidates: [{kind, own_qid, inherited_qid, tier:
+        "certain"|"heuristic", reasons: [str, ...]}, ...]}``. When
+        composition is disabled on the backend, ``total`` is 0,
+        ``candidates`` is empty, and ``flag_enabled: false``.
+
+      - ``disposition="rejected"`` — the operator's persisted "these are NOT
+        duplicates" decisions, in ``rejected_at`` ascending order (the same
+        set the candidate detector consults to filter the active queue). Use
+        this to render the rejected section of a triage view, or to find the
+        surrogate ``id`` needed by ``unreject_reconciliation_candidate``.
+        NOT paginated — ``page`` / ``page_size`` are ignored. Returns
+        ``{model_id, flag_enabled, rejections: [{id, model_id, kind,
+        own_qid, inherited_qid, rejected_by, rejected_at}, ...]}``. When
+        composition is disabled on the backend, ``rejections`` is empty and
+        ``flag_enabled: false``; the same empty list is returned with
+        ``flag_enabled: true`` when the rejection store is not configured on
+        the instance.
+
+    Use on child models in a recursive tree to find duplicates that should
+    be collapsed before they distort coverage.
+
+    Args:
+        model_id: ID of the descendant threat model.
+        disposition: Which side of the queue to read — ``"active"``
+            (default, open candidates) or ``"rejected"`` (persisted
+            not-a-duplicate decisions).
+        page: ACTIVE disposition only. 1-indexed page number. Default 1.
+            Ignored when ``disposition="rejected"``.
+        page_size: ACTIVE disposition only. Items per page. Default 50.
+            Ignored when ``disposition="rejected"``.
+    """
+    if disposition not in ("active", "rejected"):
+        raise ToolError("disposition must be one of 'active', 'rejected'.")
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if disposition == "active":
+        if page < 1:
+            raise ToolError("page must be >= 1")
+        if page_size < 1:
+            raise ToolError("page_size must be >= 1")
+    try:
+        if disposition == "rejected":
+            return _dump(
+                await _get_client().list_reconciliation_rejections(model_id),
+            )
+        return _dump(
+            await _get_client().composition_reconciliation(
+                model_id, page=page, page_size=page_size,
+            ),
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def preview_undo_composition(
+    server_version: str,
+    model_id: str,
+    event_type: str,
+    event_id: str,
+) -> dict:
+    """Preview the inverse plan (or divergence refusal) for a prior
+    composition event WITHOUT mutating any state. Read-only.
+
+    Read-only counterpart to ``undo_composition_event``. Used by the
+    confirmation flow so the operator sees what an undo would do before
+    committing — either the inverse state operations the apply step will
+    commit, or the enumerated reasons the divergence detector refuses the
+    undo. Same ``{plan, refusal}`` return shape for both event types.
+
+    Args:
+        model_id: The model whose composition view originated the event.
+            Must match the ``threat_model_id`` carried by the cited
+            activity event; the server rejects with 404 when a caller
+            tries to undo a sibling model's event through a different
+            model's URL.
+        event_type: Which forward composition event to preview undoing.
+            One of:
+              - ``"lift"``: preview undo of a ``lift_applied`` event. The
+                plan block carries the lift inverse operations — tombstone
+                the lifted LCA entity, restore the source descendants'
+                copies, rewrite CO references.
+              - ``"split"``: preview undo of a ``split_applied`` event.
+                The plan block carries the split inverse operations —
+                restore at the ancestor, tombstone the duplicated copies
+                on every target descendant.
+        event_id: Either the surrogate id of the forward
+            ``lift_applied`` / ``split_applied`` activity event, or the
+            structured ``lift_id`` / ``split_id`` carried in the event's
+            payload — both lookups are supported.
+
+    Returns::
+
+        {"plan": <UndoPlan> | null,
+         "refusal": <UndoRefusal> | null}
+
+    Exactly one of ``plan`` / ``refusal`` is non-null. The plan block
+    carries the inverse state operations; the refusal block carries the
+    enumerated divergence reasons when state has materially evolved since
+    the forward event.
+
+    Errors: 404 if the cited event doesn't exist or belongs to a different
+    model; 503 if composition is not available on the backend.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not event_id or not event_id.strip():
+        raise ToolError("event_id is required and must be non-empty.")
+    kind = (event_type or "").strip().lower()
+    if kind not in ("lift", "split"):
+        raise ToolError("event_type must be one of: 'lift', 'split'.")
+    try:
+        client = _get_client()
+        if kind == "lift":
+            result = await client.preview_lift_undo(model_id, event_id)
+        else:
+            result = await client.preview_split_undo(model_id, event_id)
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def undo_composition_event(
+    server_version: str,
+    model_id: str,
+    event_type: str,
+    event_id: str,
+) -> dict:
+    """Apply the inverse of a previous composition event. Mutating —
+    persists inverse state across multiple models.
+
+    Re-runs the divergence detector immediately before applying and
+    refuses with 409 + the structured refusal block when state has
+    materially evolved since the forward event (assertions submitted on
+    the affected entity, downstream COs added that reference it, the
+    entity edited, etc.). On success, persists the inverse state
+    operations across every affected model and emits a structured
+    ``lift_undone`` / ``split_undone`` activity event citing
+    ``original_event_id`` so the audit pack can chain undo to its forward.
+
+    Args:
+        model_id: The model whose composition view originated the event.
+            Must match the cited event's ``threat_model_id`` — the server
+            rejects cross-model citations with 404.
+        event_type: Which forward composition event to undo. One of:
+              - ``"lift"``: undo a ``lift_applied`` event. On success,
+                persists the inverse across the LCA + every affected
+                source descendant and emits a ``lift_undone`` event. The
+                returned ``models`` block carries ``lca_model`` and
+                ``source_descendant_models``.
+              - ``"split"``: undo a ``split_applied`` event. On success,
+                restores the ancestor's entity, tombstones the duplicated
+                copies on every target descendant, persists across all
+                affected models, and emits a ``split_undone`` event. The
+                returned ``models`` block carries ``ancestor_model`` and
+                ``descendant_models``.
+        event_id: Either the surrogate id of the forward
+            ``lift_applied`` / ``split_applied`` activity event, or the
+            structured ``lift_id`` / ``split_id`` carried in the event
+            payload.
+
+    Returns::
+
+        {"undone_event_id": str,
+         "original_event_id": str,
+         "applied_state_ops": [...],
+         "models": {...}}
+
+    The ``models`` block keys depend on ``event_type`` (see above):
+    ``{lca_model, source_descendant_models}`` for ``"lift"``,
+    ``{ancestor_model, descendant_models}`` for ``"split"``.
+
+    Errors: 409 with ``detail = {message, refusal: {reasons: [...]}}``
+    when the divergence detector refuses; 404 if the cited event doesn't
+    exist or belongs to a different model; 400 on payload / event-type
+    mismatch; 503 if composition is not available for this deployment.
+
+    Operator pattern: call ``preview_undo_composition`` first with the
+    same ``event_type`` / ``event_id``, surface the plan or refusal to the
+    operator, and only call this tool after explicit confirmation.
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not event_id or not event_id.strip():
+        raise ToolError("event_id is required and must be non-empty.")
+    kind = (event_type or "").strip().lower()
+    if kind not in ("lift", "split"):
+        raise ToolError("event_type must be one of: 'lift', 'split'.")
+    try:
+        client = _get_client()
+        if kind == "lift":
+            result = await client.undo_lift(model_id, event_id)
+        else:
+            result = await client.undo_split(model_id, event_id)
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_functional_objectives(
+    server_version: str, model_id: str, functional_objective_id: str = "",
+) -> dict:
+    """List a model's functional objectives, or fetch one by id. Read-only; no side effects.
+
+    A functional objective is a Capability × Condition test plan expressed as a
+    Given-When-Then statement. ``functional_objective_id`` selects the behaviour:
+
+    - omitted / empty string -> list every functional objective for the model
+      (the full functional test plan).
+    - a functional-objective id -> return just that one objective's detail,
+      including its capability, condition, Given-When-Then statement, and
+      current test state.
+
+    For pass/fail coverage state across all objectives use
+    ``get_functional_coverage``; for the actionable gaps use
+    ``check_functional_gaps``.
+
+    Args:
+        model_id: ID of the threat model whose functional objective(s) to read.
+        functional_objective_id: Optional. Omit (or pass "") to list every
+            objective; pass an id (from a prior list call) to fetch that one.
+
+    Returns the list of functional objectives, or the single objective when an
+    id is given.
+    """
+    try:
+        client = _get_client()
+        fo_id = functional_objective_id.strip()
+        if fo_id:
+            return _dump(await client.get_functional_objective(model_id, fo_id))
+        return _dump(await client.list_functional_objectives(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def submit_functional_test_assertions(
+    server_version: str, model_id: str, functional_test_id: str,
+    assertions_json: str,
+) -> dict:
+    """Attach machine-verifiable evidence assertions to one already-existing functional test so CI can verify it. Mutating.
+
+    This submits EVIDENCE for a test that already exists (identified by
+    functional_test_id) — it does not create or register the test. It is the
+    functional-conformance analog of submit_assertions (which covers security
+    controls): it binds assertions such as "the test exists" and "the test
+    passes" to the functional test, and an independent CI run against the named
+    repo is what turns an operator's "verified" claim into verified state.
+
+    To bulk-register test DEFINITIONS from your codebase instead, use
+    import_functional_tests; to hand-author a single test use
+    add_functional_test. Call this after the test is implemented (e.g. following
+    get_scan_prompt (kind="functional")), then read the resulting state via
+    get_functional_coverage or get_functional_test_sufficiency.
+
+    Args:
+        model_id: ID of the threat model.
+        functional_test_id: The already-existing functional test the assertions prove.
+        assertions_json: JSON array of assertion objects, each {"type": "test_passes" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
+    """
+    try:
+        assertions = json.loads(assertions_json)
+    except json.JSONDecodeError:
+        raise ToolError("assertions_json must be a valid JSON array.")
+    if not isinstance(assertions, list):
+        raise ToolError("assertions_json must be a JSON array.")
+    try:
+        return _dump(await _get_client().submit_functional_tests(
+            model_id, functional_test_id, assertions,
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_controls(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    control_id: Optional[str] = None,
+    version: int = 0,
+    status: Optional[str] = None,
+    co_id: Optional[str] = None,
+    component_id: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 0,
+    include_deleted: bool = False,
+    include_orphaned: bool = False,
+    summary_only: bool = False,
+) -> dict:
+    """Get implementation controls for a threat model — list or single-control detail. Read-only (with one list-mode side effect, below).
+
+    Two modes, selected by whether ``control_id`` is set:
+
+    - **List mode** (``control_id`` omitted) — returns the controls that
+      should be implemented to satisfy the model's control objectives, as
+      ``{"controls": [...], "total": N, "returned": M}``. One side effect:
+      if controls have never been generated for this model, the first
+      call triggers generation. Generation may finish inline or continue
+      in the background — if results look incomplete, poll
+      ``get_control_generation_status`` and re-read once it reports
+      ``complete``. The filters (``status``, ``co_id``, ``component_id``),
+      pagination (``offset``/``limit``), and the ``include_deleted`` /
+      ``include_orphaned`` / ``summary_only`` toggles apply only in this
+      mode. By default list mode excludes ORPHANED controls (controls
+      whose every mapped CO is tombstoned because its asset/attacker pair
+      was removed in a later version); pass ``include_orphaned=True`` to
+      include them — each returned control carries a boolean ``orphaned``
+      field so callers can render the distinction.
+
+    - **Detail mode** (``control_id`` set) — returns a single control
+      directly (NOT wrapped in an array) with verified-status enrichment
+      and an ``orphaned`` flag derived from the live CO set. 404 if the
+      control doesn't exist on the requested version. Pass ``version`` to
+      read the control as of a specific model version. The list-mode
+      filters, pagination, and toggles are ignored in this mode.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: If set, detail mode — return this one control's full
+            record directly (e.g. ``CTL-12``). If omitted, list mode.
+        version: Detail mode only — model version to read the control
+            from. 0 (default) uses the latest. Ignored in list mode.
+        status: List-mode filter — "implemented", "not_implemented", or
+            "verified".
+        co_id: List-mode filter — control objective ID.
+        component_id: List-mode filter — component ID (e.g., "CMP1").
+        offset: List mode — skip the first N controls (pagination).
+        limit: List mode — max controls to return (0 = all).
+        include_deleted: List mode — include soft-deleted controls
+            (default False).
+        include_orphaned: List mode — include controls mapped only to
+            tombstoned COs (default False).
+        summary_only: List mode — if True, returns only id, description,
+            status, assertion_count, and assumed_by per control (much
+            smaller response).
+
+    Returns a single control dict in detail mode, or a dict with
+    ``controls`` plus ``total`` and ``returned`` counts in list mode.
+    """
+    try:
+        if control_id:
+            return _dump(
+                await _get_client().get_control(
+                    model_id, control_id, version=version,
+                ),
+            )
+        data = await _get_client().get_controls(
+            model_id,
+            include_deleted=include_deleted,
+            include_orphaned=include_orphaned,
+            control_id="",
+            status=status or "",
+            co_id=co_id or "",
+            component_id=component_id or "",
+            offset=offset,
+            limit=limit,
+            summary_only=summary_only,
+        )
+        result = _dump(data)
+        if not result.get("total"):
+            result["total"] = len(result.get("controls", []))
+        if not result.get("returned"):
+            result["returned"] = len(result.get("controls", []))
+        return result
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_control_objectives(
+    server_version: str,
+    model_id: str,
+    co_id: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 0,
+) -> dict:
+    """Get the control objective matrix, or one control objective. Read-only.
+
+    Two modes, selected by whether ``co_id`` is set:
+
+    - **Matrix mode** (``co_id`` omitted) — returns the model's COs, each
+      with references to the controls that cover it. By default returns a
+      compact summary (total count only); pass ``offset``/``limit`` to
+      page through full CO records.
+
+    - **Single mode** (``co_id`` set) — returns that one CO's typed
+      fields, the IDs of any controls that map to it, and the
+      deterministic reachability verdict (the structural derivation that
+      backs any reach claim on the CO). Tombstoned COs (``removed:
+      true``) are returned with the flag set; the verdict is omitted
+      because reach state is frozen at the removal version.
+      ``offset``/``limit`` are ignored in this mode.
+
+    For pass/fail assurance scoring use ``assess_model``.
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: If set, single mode — return this one control objective
+            (e.g. ``CO3``) with its verdict. If omitted, matrix mode.
+        offset: Matrix mode — skip the first N control objectives.
+        limit: Matrix mode — max to return (0 = summary only, no per-CO
+            records).
+    """
+    try:
+        if co_id:
+            return _dump(await _get_client().get_control_objective(model_id, co_id))
+        return _dump(await _get_client().get_control_objectives(model_id, offset, limit))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def assign_to_components(
+    server_version: str,
+    model_id: str,
+    target_type: str,
+    target_id: str,
+    component_ids: str,
+    change_reason: str,
+) -> dict:
+    """Replace an asset's or a control's component scope. Mutating.
+
+    Components are the canonical bridge between security architecture
+    (trust boundaries) and code organization (repos). ``target_type``
+    selects what is being scoped:
+
+    - ``"control"`` — replace a control's component scope. A control
+      scoped to one or more components is visible to coding agents
+      working in those repos (matched via Component.repo_url +
+      Component.path); an unscoped control is visible everywhere. Use
+      when wiring a previously unscoped control to the component(s) that
+      implement it, adding a second component to a cross-cutting control
+      (e.g. "all microservices enforce JWT validation"), or correcting a
+      wrong assignment. ``target_id`` is the control ID (e.g. "CTRL-03").
+
+    - ``"asset"`` — replace an asset's component scope. Linking assets to
+      components flows boundary context into reachability derivation
+      without giving Asset its own ``trust_boundary_ids``. Multi-component
+      is the right shape for a multi-instance asset (e.g., a session
+      token on client + cache + DB — each component handles a distinct
+      instance). ``target_id`` is the asset ID (e.g. "A1").
+
+    Both variants are mechanical / non-AI-gated and validate only that
+    every referenced component exists on the model.
+
+    Args:
+        model_id: ID of the threat model.
+        target_type: Either "asset" or "control" — which entity to scope.
+        target_id: ID of the asset or control to scope (must match
+            ``target_type``).
+        component_ids: Comma-separated component IDs (e.g., "CMP1,CMP2").
+            Empty string = unscoped (a control becomes visible to every
+            coding agent; an asset loses its explicit code-ownership
+            binding). Every supplied ID must exist on the model.
+        change_reason: Why this scope is appropriate (min 10 chars).
+            Captured in the version history.
+    """
+    if target_type not in ("asset", "control"):
+        raise ToolError('target_type must be "asset" or "control".')
+    parsed = [c.strip() for c in component_ids.split(",") if c.strip()] if component_ids else []
+    if len(change_reason.strip()) < 10:
+        raise ToolError("change_reason must be at least 10 characters.")
+    try:
+        client = _get_client()
+        if target_type == "asset":
+            result = await client.assign_asset_to_components(
+                model_id, target_id, parsed, change_reason.strip(),
+            )
+        else:
+            result = await client.assign_control_to_components(
+                model_id, target_id, parsed, change_reason.strip(),
+            )
+        return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def get_scan_prompt(
+    server_version: str,
+    model_id: str,
+    kind: str = "security",
+    control_id: str = "",
+) -> dict:
+    """Get guidance prompts for scanning a codebase. Read-only; no side effects.
+
+    ``kind`` selects which scan brief to return:
+
+    - ``"security"`` (default) — prompts telling the agent what evidence
+      to look for per security control; only NOT_IMPLEMENTED controls are
+      included (implemented ones need no scan). Use this to drive a
+      gap-discovery pass, then record what is missing with
+      ``submit_findings`` and what is present with ``submit_assertions``.
+      Pass ``control_id`` to scope the prompt to one control; empty
+      (default) returns prompts for all not-yet-implemented controls.
+
+    - ``"functional"`` — the agent brief for implementing
+      functional-conformance tests. Generation specifies the functional
+      tests, so for each test not yet verified this returns its
+      implementation brief and the objectives it proves; it also reports
+      ``objectives_without_tests`` (regenerate or add a test) and
+      ``missing_objectives`` (applicable conditions with no objective
+      yet). Drive test implementation from it, then call
+      ``submit_functional_test_assertions`` with TEST_EXISTS + TEST_PASSES
+      assertions so CI verifies each test; read the resulting pass/fail
+      state via ``get_functional_coverage``. ``control_id`` does not
+      apply to this kind and is ignored.
+
+    Args:
+        model_id: ID of the threat model.
+        kind: "security" (default) or "functional" — which scan brief.
+        control_id: Security kind only — optional single control to scope
+            the prompt to. Empty (default) returns prompts for all
+            not-yet-implemented controls. Ignored when kind="functional".
+    """
+    if kind not in ("security", "functional"):
+        raise ToolError('kind must be "security" or "functional".')
+    try:
+        client = _get_client()
+        if kind == "functional":
+            return _dump(await client.get_functional_scan_prompt(model_id))
+        return _dump(await client.get_scan_prompt(model_id, control_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def set_control_objective_cal(
+    server_version: str,
+    model_id: str,
+    co_id: str,
+    cal: Optional[int] = None,
+) -> dict:
+    """Set the per-CO ISO/SAE 21434 Cybersecurity Assurance Level (CAL).
+
+    CAL is a 1-4 grade on each individual control objective that
+    expresses how much assurance the control program owes for that
+    specific objective. It lives on the ``control_objectives`` identity
+    side-table — writes do NOT create a new threat-model version, and
+    the value survives soft-delete + revival of the CO.
+
+    Pass ``cal=None`` (or omit it) to clear the value.
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: Control-objective ID (e.g. ``CO3``).
+        cal: ISO/SAE 21434 CAL grade (1-4), or ``None`` to clear.
+
+    Returns:
+        ``{"model_id": ..., "co_id": ..., "cal": ...}``
+    """
+    if cal is not None and (cal < 1 or cal > 4):
+        raise ToolError("cal must be between 1 and 4 (inclusive), or None to clear")
+    try:
+        return _dump(await _get_client().set_co_cal(model_id, co_id, cal))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def revalidate_entity_quality(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """Re-run quality validation on a threat model's existing assets and
+    attackers, as if they were freshly generated. A fast first-pass check
+    judges every entity; only the ones it flags get a deeper review that
+    confirms them, sharpens their wording, or flags them for you.
+
+    Use this to apply validation improvements to an already-generated model, or
+    to clear stale quality warnings — without regenerating the whole model
+    (which would destroy controls, assertions, and components). It is
+    non-destructive: an entity that should be removed is left in place with a
+    quality warning rather than deleted, so no control objective loses its asset
+    or attacker anchor. The result is saved as a new model version; controls and
+    control objectives carry forward.
+
+    May consume credits for the entities that need the deeper review; a model
+    already in good shape costs nothing. Returns the updated model envelope:
+    ``{"accepted": true, "model": {...}}``.
+
+    Args:
+        model_id: ID of the threat model whose assets and attackers to
+            re-validate.
+    """
+    try:
+        return _dump(await _get_client().revalidate_entities(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def auto_remediate_compliance(
+    server_version: str,
+    model_id: str,
+    framework_id: str,
+    ctx: Context,
+) -> dict:
+    """Automatically close compliance gaps for a framework. Requires PRO tier.
+
+    Three-phase loop: (1) auto-map existing controls to unmapped requirements,
+    (2) exclude requirements for non-applicable taxonomy primitives,
+    (3) suggest and apply new assets/attackers for remaining gaps.
+
+    Phase (3) routes every proposal whose name matches a soft-deleted
+    asset/attacker through the same restore-candidate LLM gate
+    ``add_asset`` uses, so reanimating a previously removed entity
+    reinstates its stable ID and every CO tombstone + control tied to
+    it (rather than spawning a duplicate fresh ID). The response
+    distinguishes ``assets_added`` / ``attackers_added`` (genuinely new)
+    from ``assets_restored`` / ``attackers_restored`` (revived soft-
+    deletes) and lists ``restored_asset_ids`` / ``restored_attacker_ids``.
+    Proposals the gate classified as ``similar`` (or that fail-closed
+    on an unavailable / malformed gate response) appear under
+    ``skipped`` with a per-entry reason — the operator decides whether
+    to restore manually or rephrase.
+
+    Converges automatically: stops when fully covered or when no further
+    progress can be made.
+
+    This runs automatically when a framework is selected, but can be
+    re-triggered manually if the model changes.
+
+    Args:
+        model_id: ID of the threat model.
+        framework_id: ID of the compliance framework.
+    """
+    try:
+        client = _get_client()
+        result = await client.auto_remediate(model_id, framework_id)
+        if isinstance(result, dict) and "job_id" in result:
+            return await _await_backend_job(client, result["job_id"], ctx)
+        return _dump(result)
     except Exception as exc:
         raise _api_error(exc) from exc
 
