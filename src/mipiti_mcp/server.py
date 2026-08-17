@@ -49,7 +49,7 @@ _INSTRUCTIONS_UPDATE_MESSAGE = (
 _INSTRUCTIONS_BASE = """\
 Mipiti generates threat models from feature descriptions and tracks security controls with machine-verifiable assertions.
 
-Every tool call must include `server_version` set to `{_SERVER_VERSION}`. If the server responds with an `instructions_updated` field, relay the message to the user, in a way appropriate to your environment, then continue with the current task.
+Every tool call must include `server_version` set to """ + f"`{_SERVER_VERSION}`" + """. If the server responds with an `instructions_updated` field, relay the message to the user, in a way appropriate to your environment, then continue with the current task.
 
 ## When to use
 
