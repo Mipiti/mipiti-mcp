@@ -78,6 +78,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `refine_threat_model` — updates an existing model when you already have a model ID and want to change it. Progress reported automatically.
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. Each asset has a `status` field: `unverified` (default), `confirmed` (assertions prove it exists), `absent` (agent confirmed it is not applicable). Use `edit_asset` to update status after verifying.
 - `add_attacker` / `edit_attacker` — same for attackers. Attacker `status` works the same way: `confirmed` means the attack surface exists, `absent` means it is not applicable.
+- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (removals are audit-preserving; restore applies to `asset`, `attacker`, and `assumption`).
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
@@ -2588,6 +2589,15 @@ async def add_asset(
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
+    **Authoring contract**: name the *data or resource being
+    protected* and the security property at stake (Confidentiality /
+    Integrity / Availability / Usage) — not a mechanism, control, or
+    capability. Name the thing whose exposure or corruption is the
+    harm (e.g. "per-organization key-wrapping material", not "KMS
+    encryption"). An asset phrased as a mechanism is flagged with a
+    ``quality_warning`` and the control objectives derived from it may
+    be under-specified.
+
     The caller supplies identity-bearing fields (name, description,
     security_properties, notes) plus optional component scoping; the
     backend LLM-reasons the factor decomposition (and composes the
@@ -2673,6 +2683,11 @@ async def edit_asset(
     change_reason: Optional[str] = None,
 ) -> dict:
     """Edit an existing asset. Only provided fields changed.
+
+    When changing identity fields, hold to the asset authoring
+    contract: name the *data/resource protected* and its security
+    property, not a mechanism — otherwise the result is flagged with a
+    ``quality_warning`` (see ``add_asset``).
 
     The composed ``impact`` is server-derived from the factor fields;
     there is no way to set it directly. To change the rating, set
@@ -2774,6 +2789,16 @@ async def add_attacker(
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
 
+    **Authoring contract**: ``capability`` names the *operations the
+    attacker can perform from its position* and what they achieve —
+    not just the access or vantage point. Phrase it as "From
+    [position], the attacker can [concrete operations] …" (e.g. "From
+    the network path between the API server and the database, the
+    attacker can read and alter requests and responses to exfiltrate
+    data in transit or inject forged responses"). A capability that
+    states only access is flagged with a ``quality_warning`` and the
+    control objectives derived from it may be under-specified.
+
     The caller supplies identity-bearing fields (capability, position,
     archetype, trust_boundary_ids); the backend LLM-reasons the factor
     decomposition. Override any factor post-create via ``edit_attacker``
@@ -2825,6 +2850,12 @@ async def edit_attacker(
     change_reason: Optional[str] = None,
 ) -> dict:
     """Edit an existing attacker. Only provided fields changed.
+
+    When changing identity fields, hold to the attacker authoring
+    contract: ``capability`` names the *operations performable from
+    the position* ("From [position], the attacker can [operations] …"),
+    not just access — otherwise the result is flagged with a
+    ``quality_warning`` (see ``add_attacker``).
 
     The composed ``likelihood`` is server-derived from the factor
     fields; to change the rating, set factor values and supply
