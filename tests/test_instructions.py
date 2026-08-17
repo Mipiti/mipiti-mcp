@@ -2,7 +2,24 @@
 
 import pytest
 
-from mipiti_mcp.server import build_instructions
+from mipiti_mcp.server import _SERVER_VERSION, build_instructions
+
+
+@pytest.mark.parametrize("tier,role", [("pro", "user"), ("developer", "user")])
+def test_server_version_is_interpolated(tier: str, role: str) -> None:
+    """The instructions must carry the real server_version, not the literal
+    ``{_SERVER_VERSION}`` placeholder.
+
+    _INSTRUCTIONS_BASE is a plain string, so the version has to be spliced in
+    explicitly. A prior refactor flattened the concatenation into a bare
+    ``{_SERVER_VERSION}`` token, which then reached clients verbatim; every
+    tool call echoed the placeholder and the version-check middleware rejected
+    all of them. Guard both directions: the real value present, the
+    placeholder absent.
+    """
+    text = build_instructions(tier=tier, role=role)
+    assert "{_SERVER_VERSION}" not in text
+    assert f"`{_SERVER_VERSION}`" in text
 
 
 @pytest.mark.parametrize(
