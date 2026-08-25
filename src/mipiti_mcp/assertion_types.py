@@ -44,6 +44,26 @@ class AssertionTypeSpec:
 
 # -- File path param (reused across many types) --
 _FILE = ParamSpec("file", "File path relative to project root", example="backend/app/auth.py")
+# Platform-content targets. An assertion may name platform-held content
+# instead of a repository file; ``feature_description`` is the model's
+# feature description. Both the platform (at submission) and the CI runner
+# (at verification) accept exactly these values.
+ASSERTION_TARGETS: tuple[str, ...] = ("feature_description",)
+
+# ``target`` replaces ``file`` for an assertion whose content under
+# verification is platform-held. It is listed only on the types whose
+# verifier reads content through the shared file-or-target resolver; the
+# platform derives which types accept a target from this schema (see
+# ``TARGET_CAPABLE_TYPES``), so the ``file`` requirement in the schema is
+# satisfied by ``target`` on exactly those types.
+_TARGET = ParamSpec(
+    "target",
+    "Platform content to verify instead of a repository file; the only value "
+    "is \"feature_description\" (the model's feature description). Mutually "
+    "exclusive with file, which it replaces",
+    required=False,
+    example="feature_description",
+)
 _RTL_FILE = ParamSpec("file", "File path relative to project root", example="rtl/aes_core.sv")
 
 
@@ -55,6 +75,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Function or method name", example="verify_token"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -63,6 +84,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Class, struct, or interface name", example="UserIdentity"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -72,6 +94,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             _FILE,
             ParamSpec("function", "Function name", example="protected_route"),
             ParamSpec("decorator", "Decorator name (without @)", example="require_auth"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -81,6 +104,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             _FILE,
             ParamSpec("caller", "Calling function name", example="login"),
             ParamSpec("callee", "Called function name", example="hash_password"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -89,6 +113,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("module", "Module or package name", example="hashlib"),
+            _TARGET,
         ),
     ),
 
@@ -120,6 +145,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
             ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries. Default: false.", required=False, example="true"),
             ParamSpec("dotall", "If true, . matches newlines, enabling patterns that span multiple lines. Default: false.", required=False, example="true"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -132,6 +158,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
             ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries. Default: false.", required=False, example="true"),
             ParamSpec("dotall", "If true, . matches newlines, enabling patterns that span multiple lines. Default: false.", required=False, example="true"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -140,6 +167,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("patterns", "JSON array of regex patterns to check for secrets", example='["password\\\\s*=\\\\s*[\'\\"].*[\'\\"]"]'),
+            _TARGET,
         ),
     ),
 
@@ -167,6 +195,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("variable", "Environment variable name", example="DATABASE_URL"),
+            _TARGET,
         ),
     ),
 
@@ -197,6 +226,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             _FILE,
             ParamSpec("function", "Function name", example="create_user"),
             ParamSpec("parameter", "Parameter name that should be validated", example="email"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -205,6 +235,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("function", "Function name", example="query_database"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -213,6 +244,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("middleware", "Middleware name or class", example="CORSMiddleware"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -221,6 +253,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("header", "HTTP header name", example="Strict-Transport-Security"),
+            _TARGET,
         ),
     ),
 
@@ -314,6 +347,12 @@ ASSERTION_TYPE_NAMES: frozenset[str] = frozenset(t.name for t in ASSERTION_TYPES
 ASSERTION_PARAM_SCHEMAS: dict[str, list[str]] = {
     t.name: t.required_params for t in ASSERTION_TYPES
 }
+
+# Types on which ``target`` may replace ``file``. Derived from the specs so
+# the documented shape and the enforced shape cannot diverge.
+TARGET_CAPABLE_TYPES: frozenset[str] = frozenset(
+    t.name for t in ASSERTION_TYPES if any(p.name == "target" for p in t.params)
+)
 
 
 def format_for_docstring() -> str:

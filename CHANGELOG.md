@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
 
+- `target` is now an optional param in the assertion schema on the
+  content-based types (`pattern_matches`, `pattern_absent`,
+  `function_exists`, `class_exists`, `decorator_present`, `function_calls`,
+  `import_present`, `no_plaintext_secret`, `env_var_referenced`,
+  `parameter_validated`, `error_handled`, `middleware_registered`,
+  `http_header_set`). Its only value is `"feature_description"`: the
+  assertion is verified against the model's feature description instead of
+  a repository file, and it replaces `file` (the two are mutually
+  exclusive). `assertion_types` exports `ASSERTION_TARGETS` (the valid
+  target values) and `TARGET_CAPABLE_TYPES` (the types that accept one,
+  derived from the specs) so the platform enforces the same shape the
+  schema documents. Required params are unchanged.
+
+### Changed
 - **BREAKING — consolidated the tool surface from 162 to 129 tools** so tool selection stays reliable across MCP clients (several hard-cap the tools per request, which the old surface exceeded). No capability was removed — the sprawl was structural, and folds behind discriminator params: symmetric per-entity-type reads/removes/restores become `get_entity` / `remove_entity` / `restore_entity` with an `entity_type` (`add`/`edit` stay typed per entity; `get_capability` stays standalone); the model/system/tag scope-families become `get_risk_view` / `get_compliance_report` / `select_compliance_frameworks` / `export_report` behind a `scope`; tags and systems unify as "groups" behind a `kind`; mode-pairs fold behind a flag (`get_reachability_verdicts(composed=…)`, `recompute_verdicts(dry_run=…)`, `undo_composition_event(event_type=…)`, `preview_undo_composition(event_type=…)`, `list_reconciliation_candidates(disposition=…)`); singular getters fold into their plural (`get_controls(control_id=…)`, `get_control_objectives(co_id=…)`, `get_functional_objectives(functional_objective_id=…)`); `assign_to_components(target_type=…)` and `get_scan_prompt(kind=…)` fold their pairs; `assume_control` / `unassume_control` are removed in favour of `set_control_assumption_groups`; and nine scope-ambiguous tools are renamed (`get_system`→`get_group`, `delete_tag`→`delete_group`, `remove_model_from_tag`→`remove_model_from_group`, `list_model_tags`→`list_model_groups`, `link_dependency`→`link_system_dependency`, `submit_functional_tests`→`submit_functional_test_assertions`, `set_co_cal`→`set_control_objective_cal`, `revalidate_threat_model_entities`→`revalidate_entity_quality`, `auto_remediate`→`auto_remediate_compliance`). `restore_entity` now covers all five entity types. Because tool schemas are pinned per session, upgrading requires a teardown and re-add under a new server name.
 - Corrected the server-version-changed recovery message. When the pinned tool schemas go stale mid-session, re-adding the MCP server under the **same** name reuses the pinned schemas, so the previous "remove, resume, exit again, re-add" dance did not reliably refresh them. The message now instructs a full teardown and re-add under a **new** server name (e.g. `Mipiti` → `Mipiti-1`), which forces the client to load the fresh schemas, and drops the unnecessary extra session start/exit.
 - Clarified component repo-binding guidance across the `add_component` docstring, the components-lifecycle instructions, and the `model_coherence_report` `component_unbound` note. An empty `repo_url` covers two distinct cases, told apart by the component's **trust boundary**: an internal-zone component (your own code) should be bound to its repo, while an external-zone component (e.g. a third-party service, the customer's IdP, or other external infrastructure) should stay unbound — its `component_unbound` finding is a permanent external-dependency marker, not a TODO. Previously the docs framed every unbound component as "not bound yet," which could lead an agent to wrongly bind an external component to the repo.
