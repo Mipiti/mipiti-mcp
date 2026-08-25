@@ -3565,10 +3565,19 @@ Provide exactly one of control_id or assumption_id:
 - assumption_id: proves a system property claim (e.g., "AS5" — asset \
 non-applicability, attacker non-applicability, scope decisions)
 
-For assumption assertions against the feature description (greenfield), \
-use target instead of file in params:
+The feature description is the design specification the model derives from, \
+so a claim about it is a claim about the specified design. To verify against \
+it instead of a repository file, use target in place of file. Valid on any \
+subject (a control, an assumption, a node, a functional test), and accepted \
+by the two types whose criterion is a regex over arbitrary text — \
+pattern_matches and pattern_absent. It is the natural shape for a \
+non-applicability claim, which has no file to point at:
 {{"type": "pattern_matches", "params": {{"target": "feature_description", \
 "pattern": "password.*TOTP"}}, "description": "..."}}
+A target assertion is still bound to a repository: it must carry an explicit \
+repo, the "<owner>/<repo>" slug of the CI repository whose verification run \
+should check it, or the "no_repo" sentinel, which opts the assertion out of \
+every run so no CI run will ever pull it.
 
 Args:
     model_id: ID of the threat model.
@@ -3578,7 +3587,7 @@ Args:
         - type (required): one of the assertion types below
         - params (required): type-specific parameters (file or target + pattern/name/etc.)
         - description (required): human-readable explanation of what this proves
-        - repo (optional): "org/repo-name" for multi-repo setups
+        - repo (required): the "<owner>/<repo>" slug of the CI repository whose verification run should check this assertion — for a file-based assertion, the codebase its file path is resolved against, and what keeps a run for one repo from picking up another repo's claims. An assertion with no repository scope must say so with the "no_repo" sentinel, which opts it out of every run; an empty or missing repo is rejected.
 
 Assertion types:
 {format_for_docstring()}

@@ -51,18 +51,26 @@ _FILE = ParamSpec("file", "File path relative to project root", example="backend
 ASSERTION_TARGETS: tuple[str, ...] = ("feature_description",)
 
 # ``target`` replaces ``file`` for an assertion whose content under
-# verification is platform-held. It is listed only on the types whose
-# verifier reads content through the shared file-or-target resolver; the
-# platform derives which types accept a target from this schema (see
-# ``TARGET_CAPABLE_TYPES``), so the ``file`` requirement in the schema is
-# satisfied by ``target`` on exactly those types.
+# verification is platform-held. A type carries ``target`` only when both
+# conjuncts hold: (1) its tier-1 predicate is a caller-supplied regex
+# evaluated over arbitrary text, with no source-language structure; and
+# (2) its tier-2 criterion and schema description are defined over the
+# matched text itself, not over the role the scanned artifact plays in the
+# running system. Code-syntax types fail (1): their criterion is stated
+# about code — a definition, a call, a decorator, an import — and their
+# tier-2 template asks an implementation question, so a design
+# specification is not a subject they are defined over. ``no_plaintext_secret``
+# fails (2), since its schema text and tier-2 criterion bind its subject to
+# a file. The platform derives which types accept a target from this schema
+# (see ``TARGET_CAPABLE_TYPES``), so the ``file`` requirement in the schema
+# is satisfied by ``target`` on exactly those types.
 _TARGET = ParamSpec(
     "target",
-    "Platform content to verify instead of a repository file; the only value "
-    "is \"feature_description\" (the model's feature description). Mutually "
-    "exclusive with file, which it replaces",
+    "Platform content to verify instead of a repository file. Valid values: "
+    + ", ".join(f'"{t}"' for t in ASSERTION_TARGETS)
+    + ". Mutually exclusive with file, which it replaces",
     required=False,
-    example="feature_description",
+    example=ASSERTION_TARGETS[0],
 )
 _RTL_FILE = ParamSpec("file", "File path relative to project root", example="rtl/aes_core.sv")
 
@@ -75,7 +83,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Function or method name", example="verify_token"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -84,7 +91,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Class, struct, or interface name", example="UserIdentity"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -94,7 +100,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             _FILE,
             ParamSpec("function", "Function name", example="protected_route"),
             ParamSpec("decorator", "Decorator name (without @)", example="require_auth"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -104,7 +109,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             _FILE,
             ParamSpec("caller", "Calling function name", example="login"),
             ParamSpec("callee", "Called function name", example="hash_password"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -113,7 +117,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("module", "Module or package name", example="hashlib"),
-            _TARGET,
         ),
     ),
 
@@ -167,7 +170,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("patterns", "JSON array of regex patterns to check for secrets", example='["password\\\\s*=\\\\s*[\'\\"].*[\'\\"]"]'),
-            _TARGET,
         ),
     ),
 
@@ -195,7 +197,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("variable", "Environment variable name", example="DATABASE_URL"),
-            _TARGET,
         ),
     ),
 
@@ -226,7 +227,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             _FILE,
             ParamSpec("function", "Function name", example="create_user"),
             ParamSpec("parameter", "Parameter name that should be validated", example="email"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -235,7 +235,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("function", "Function name", example="query_database"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -244,7 +243,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("middleware", "Middleware name or class", example="CORSMiddleware"),
-            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -253,7 +251,6 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("header", "HTTP header name", example="Strict-Transport-Security"),
-            _TARGET,
         ),
     ),
 
