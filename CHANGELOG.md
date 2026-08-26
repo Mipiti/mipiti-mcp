@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `create_co_disposition` and `list_co_dispositions`: record and read the
+  judgment that a control objective **does not apply to this system**. The
+  sibling of a risk acceptance, and the difference is the claim — an acceptance
+  says the exposure is real and is being carried; a disposition says the
+  objective does not apply here at all.
+
+  The objective is not removed. It stays in the control-objective matrix and in
+  every coverage count, reported in its own class carrying the owner and
+  justification, so a reviewer can see the judgment and challenge it. What a
+  disposition changes is work: no controls are generated for the objective and
+  no coverage gap is raised against it. Both kinds expire, and the objective
+  returns to its underlying posture when the claim lapses.
+
+  `list_co_dispositions` includes expired and revoked entries — a lapsed
+  decision is part of the audit trail. Its `kind` filter normalises case and
+  surrounding whitespace, and rejects a value that is a genuinely different
+  word rather than passing it through: an unmatched filter would return an
+  empty list, which reads as "nothing has been signed". `list_risk_acceptances`
+  is unchanged and still returns risk acceptances only.
+
 - `target` is now an optional param in the assertion schema on exactly two
   types: `pattern_matches` and `pattern_absent`. Its only value is
   `"feature_description"`: the assertion is verified against the model's

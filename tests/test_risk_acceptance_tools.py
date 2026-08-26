@@ -65,6 +65,9 @@ async def test_client_posts_with_body_and_idempotency(mock_env: None) -> None:
     assert json.loads(sent.content) == {
         "control_objective_id": "CO3", "owner": "o",
         "justification": "j", "review_by": "2027-02-06T00:00:00Z",
+        # The record is discriminated by kind; an acceptance says the exposure
+        # is real and is being carried.
+        "kind": "risk_accepted",
     }
     assert sent.headers.get("Idempotency-Key"), "mutating call must carry Idempotency-Key"
     assert data["id"] == "RA-1"
