@@ -44,6 +44,34 @@ class AssertionTypeSpec:
 
 # -- File path param (reused across many types) --
 _FILE = ParamSpec("file", "File path relative to project root", example="backend/app/auth.py")
+# Platform-content targets. An assertion may name platform-held content
+# instead of a repository file; ``feature_description`` is the model's
+# feature description. Both the platform (at submission) and the CI runner
+# (at verification) accept exactly these values.
+ASSERTION_TARGETS: tuple[str, ...] = ("feature_description",)
+
+# ``target`` replaces ``file`` for an assertion whose content under
+# verification is platform-held. A type carries ``target`` only when both
+# conjuncts hold: (1) its tier-1 predicate is a caller-supplied regex
+# evaluated over arbitrary text, with no source-language structure; and
+# (2) its tier-2 criterion and schema description are defined over the
+# matched text itself, not over the role the scanned artifact plays in the
+# running system. Code-syntax types fail (1): their criterion is stated
+# about code — a definition, a call, a decorator, an import — and their
+# tier-2 template asks an implementation question, so a design
+# specification is not a subject they are defined over. ``no_plaintext_secret``
+# fails (2), since its schema text and tier-2 criterion bind its subject to
+# a file. The platform derives which types accept a target from this schema
+# (see ``TARGET_CAPABLE_TYPES``), so the ``file`` requirement in the schema
+# is satisfied by ``target`` on exactly those types.
+_TARGET = ParamSpec(
+    "target",
+    "Platform content to verify instead of a repository file. Valid values: "
+    + ", ".join(f'"{t}"' for t in ASSERTION_TARGETS)
+    + ". Mutually exclusive with file, which it replaces",
+    required=False,
+    example=ASSERTION_TARGETS[0],
+)
 _RTL_FILE = ParamSpec("file", "File path relative to project root", example="rtl/aes_core.sv")
 
 
@@ -120,6 +148,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
             ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries. Default: false.", required=False, example="true"),
             ParamSpec("dotall", "If true, . matches newlines, enabling patterns that span multiple lines. Default: false.", required=False, example="true"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -132,6 +161,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             ParamSpec("scope_end", "Regex pattern marking the end of the search scope. Defaults to end of file if omitted.", required=False, example="^class |\\Z"),
             ParamSpec("multiline", "If true, ^ and $ match line boundaries instead of string boundaries. Default: false.", required=False, example="true"),
             ParamSpec("dotall", "If true, . matches newlines, enabling patterns that span multiple lines. Default: false.", required=False, example="true"),
+            _TARGET,
         ),
     ),
     AssertionTypeSpec(
@@ -314,6 +344,12 @@ ASSERTION_TYPE_NAMES: frozenset[str] = frozenset(t.name for t in ASSERTION_TYPES
 ASSERTION_PARAM_SCHEMAS: dict[str, list[str]] = {
     t.name: t.required_params for t in ASSERTION_TYPES
 }
+
+# Types on which ``target`` may replace ``file``. Derived from the specs so
+# the documented shape and the enforced shape cannot diverge.
+TARGET_CAPABLE_TYPES: frozenset[str] = frozenset(
+    t.name for t in ASSERTION_TYPES if any(p.name == "target" for p in t.params)
+)
 
 
 def format_for_docstring() -> str:
