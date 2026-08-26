@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->129<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->131<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -172,6 +172,8 @@ uvx mipiti-mcp
 | `get_risk_view (scope="system")` | Cross-model variant of `get_risk_view (scope="model")`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |
 | `get_remediation_leverage` | Per-model remediation plan: the not-yet-satisfied controls ranked by how many COs each one closes, plus a greedy minimal fix order (`summary` / `ranked` / `greedy_plan`). Use to prioritize which controls to implement first for the shortest path to coverage. |
 | `list_risk_acceptances` | All risk acceptances on a model — risks explicitly accepted instead of mitigated. Includes CO id, owner, justification, status, review deadline. |
+| `create_co_disposition` | Record that a control objective does not apply to this system (owner, justification, review deadline). The sibling of a risk acceptance: an acceptance says the exposure is real and is being carried, a disposition says the objective does not apply here at all. The objective stays in the matrix and in every coverage count, reported in its own class — what is suppressed is work (no controls generated, no coverage gap raised), never the accounting. |
+| `list_co_dispositions` | Every signed judgment on a model's objectives, both kinds. Expired and revoked entries are included: a lapsed decision is part of the audit trail. Optional `kind` filter. |
 | `recompute_verdicts` | Force-enqueue a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict, bypassing the quiet-period batching. Response carries an informational cost estimate and a spend status object — exhausted means the work is queued and resumes automatically, never dropped. |
 | `recompute_verdicts (dry_run=True)` | Pre-flight informational cost estimate for `recompute_verdicts` (carries `computed_at` + the pricing `rate_version`; nothing is charged from the estimate — actuals are metered as evaluation runs). |
 

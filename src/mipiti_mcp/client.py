@@ -2306,19 +2306,41 @@ class MipitiClient:
     async def create_risk_acceptance(
         self, model_id: str, *, control_objective_id: str,
         owner: str, justification: str, review_by: str,
+        kind: str = "risk_accepted",
     ) -> dict[str, Any]:
-        """Record an explicit risk acceptance for a control objective.
+        """Record an explicit disposition for a control objective.
 
-        Returns the created risk-acceptance dict (server-side shape,
-        passed through unchanged).
+        ``kind`` selects what is being claimed: ``risk_accepted`` (the
+        exposure is real and is being carried) or ``not_applicable`` (the
+        objective does not apply to this system). Both are signed, owned,
+        justified and expiring; they share one record and one lifecycle.
+
+        Returns the created dict (server-side shape, passed through
+        unchanged).
         """
         body = {
             "control_objective_id": control_objective_id,
             "owner": owner,
             "justification": justification,
             "review_by": review_by,
+            "kind": kind,
         }
         return await self._post(f"/api/models/{model_id}/risk-acceptances", body)
+
+    async def list_co_dispositions(
+        self, model_id: str, *, kind: str = "",
+    ) -> list[dict[str, Any]]:
+        """List the dispositions recorded on a threat model.
+
+        ``kind`` filters to one of ``risk_accepted`` / ``not_applicable``;
+        omitted returns both. Server-side shape; passed through unchanged so
+        newly added fields surface automatically.
+        """
+        path = f"/api/models/{model_id}/risk-acceptances"
+        if kind:
+            path = f"{path}?kind={kind}"
+        data = await self._get(path)
+        return list(data) if isinstance(data, list) else data
 
     # ------------------------------------------------------------------
     # Workspaces & Systems

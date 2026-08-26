@@ -146,7 +146,7 @@ If the alternative drops a framework binding the original carried, the platform 
 - `asset_status` / `attacker_status` — verification status of the asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs that need attestation action.
 
-**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is unreachable or indeterminate (per `get_reachability_verdicts`), author a structured `Assumption.exclusion` predicate via `add_assumption` instead of generating controls. `asset_absent` → the asset is not applicable. No action needed — skip controls for this CO. `attacker_irrelevant` → the attack surface is not applicable. No action needed — skip controls for this CO. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
+**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `asset_absent` → the asset is not applicable. No action needed — skip controls for this CO. `attacker_irrelevant` → the attack surface is not applicable. No action needed — skip controls for this CO. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
 
 ## Gap discovery
 
@@ -161,6 +161,8 @@ For controls with status not_implemented, determine whether the code already imp
 - `get_remediation_leverage` — for one model, the not-yet-satisfied controls ranked by how many control objectives each closes, plus a greedy minimal fix order. Use to prioritize implementation: which controls to build first for the shortest path to coverage; each entry names its owning model, so a high-leverage control inherited from a parent model is clear.
 - `list_risk_acceptances` — see which risks have been explicitly accepted on a model (with owner, justification, review deadline) so you can separate intentional acceptances from genuinely unaddressed gaps.
 - `create_risk_acceptance` — record a deliberate acceptance of a control objective's residual risk (owner, justification, review deadline) so a known-and-accepted decision is explicit and auditable rather than an implicit gap.
+- `create_co_disposition` — record that a control objective DOES NOT APPLY to this system (owner, justification, review deadline). The sibling of a risk acceptance, and the difference is the claim: an acceptance says the exposure is real and is being carried; a disposition says the objective does not apply here at all. The objective is NOT removed — it stays in the matrix and in every coverage count, reported in its own class with the owner and justification attached, so a reviewer can challenge the judgment. What it does suppress is work: no controls are generated for it and no coverage gap is raised against it.
+- `list_co_dispositions` — see every signed judgment on a model's objectives (both kinds, including expired and revoked ones, which are part of the audit trail). Read this before authoring a new one: an existing judgment may already cover the objective, or may have expired and need re-signing rather than duplicating.
 - `recompute_verdicts` — force a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale. Runs in the background; the response includes an informational cost estimate and a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped). Pass its quote-only param to get the cost estimate alone, pre-flight, without enqueuing the recompute.
 
 ## Remediating findings (structural drift)
@@ -212,7 +214,7 @@ Trust boundaries and assumptions are versioned (CRUD creates new model versions 
 1. Re-attest — `submit_attestation` with new expiry (assumption still valid)
 2. Restore — `restore_entity(entity_type="assumption")` if assumption was soft-deleted and is still valid; re-attest after restoring
 3. Convert to controls — `convert_assumption_to_controls` generates controls for affected COs and retires the assumption linkage
-4. Accept risk — use the Mipiti web interface (no MCP tool available for risk acceptance)
+4. Accept risk — `create_risk_acceptance` (the exposure is real and is being carried), or `create_co_disposition` (the objective does not apply to this system at all). Both are signed, owned, justified and expiring; `list_co_dispositions` shows what is already recorded.
 
 ## Composition (recursive-tree multi-model)
 
@@ -1587,18 +1589,30 @@ async def model_coherence_report(
     Reachability findings (deterministic composer; indeterminate
     verdicts surface as findings, never auto-decided by an LLM):
     - ``co_attacker_unpositioned`` — the CO's attacker has no
-      positioned trust boundaries. Resolve: ``edit_attacker`` (set
-      ``trust_boundary_ids``), or ``add_assumption`` with a
-      structured exclusion predicate.
+      positioned trust boundaries. Resolve by REPAIRING THE MODEL:
+      ``edit_attacker`` (set ``trust_boundary_ids``).
     - ``co_asset_unbounded`` — the CO's asset has no component-derived
-      trust boundaries. Resolve: ``assign_to_components (target_type="asset")``,
-      ``edit_asset`` (with ``component_ids``), or ``add_assumption``
-      with a structured exclusion.
+      trust boundaries. Resolve by REPAIRING THE MODEL:
+      ``assign_to_components (target_type="asset")`` or ``edit_asset``
+      (with ``component_ids``).
     - ``co_no_shared_boundary`` — attacker and asset boundaries do
-      not intersect. Resolve: re-position the attacker via
-      ``edit_attacker``, scope the asset to a shared component via
-      ``assign_to_components (target_type="asset")``, or ``add_assumption`` with a
-      structured exclusion.
+      not intersect. Resolve by REPAIRING THE MODEL: re-position the
+      attacker via ``edit_attacker``, or scope the asset to a shared
+      component via ``assign_to_components (target_type="asset")``.
+
+      An indeterminate verdict means the derivation could not decide, so the
+      first move is to supply the structure it is missing. It does NOT mean
+      the objective is inapplicable, and asserting that it is would answer a
+      structural question with a judgment.
+
+      ``co_no_shared_boundary`` can also fire where the connecting structure
+      genuinely does not exist rather than merely going unstated, so supplying
+      it is the first thing to try, not a guaranteed resolution. If the
+      boundaries really do not meet, that is still a modelling answer.
+
+      If the objective genuinely does not apply to this system, that is a
+      separate claim: record it with ``create_co_disposition``, which keeps
+      the objective visible, owned and expiring rather than hiding it.
     - ``co_missing_entity`` — the CO references a missing
       asset/attacker; model state inconsistent. Resolve: restore
       the entity (``restore_entity (entity_type="asset")`` / ``restore_entity (entity_type="attacker")``) or
@@ -3991,6 +4005,11 @@ async def list_risk_acceptances(server_version: str, model_id: str) -> dict:
     deadline. Use to inspect which gaps were intentionally accepted
     versus genuinely unaddressed when triaging at-risk COs.
 
+    Returns risk acceptances ONLY. An objective declared not applicable is a
+    different claim — it is not an accepted risk, and counting it as one would
+    read a "does not apply here" as "we are carrying this exposure". Use
+    ``list_co_dispositions`` to see those, or both together.
+
     Args:
         model_id: ID of the threat model.
     """
@@ -4036,6 +4055,102 @@ async def create_risk_acceptance(
             justification=justification,
             review_by=review_by,
         ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def create_co_disposition(
+    server_version: str,
+    model_id: str,
+    control_objective_id: str,
+    owner: str,
+    justification: str,
+    review_by: str,
+) -> dict:
+    """Record that a control objective DOES NOT APPLY to this system — a signed,
+    expiring judgment, not a dismissal.
+
+    The sibling of ``create_risk_acceptance``, and the distinction between them
+    is the claim being made. A risk acceptance says *the exposure is real and we
+    are carrying it*. A disposition says *this objective does not apply here at
+    all* — the asset is not handled the way the objective assumes, the attacker
+    position does not exist in this deployment, the capability is not present.
+
+    **The objective is not removed.** It stays in the control-objective matrix,
+    stays in every coverage count, and is reported in its own class alongside
+    the owner and justification recorded here. That is the point: a reviewer can
+    see the judgment and challenge it. An objective that simply vanished would
+    be indistinguishable from one nobody modelled.
+
+    What it does change is work: no controls are generated for the objective and
+    no coverage gap is raised against it, because an objective that does not
+    apply is not a gap.
+
+    ``review_by`` is required and is not a formality — the claim stops applying
+    on that date, and the objective returns to whatever posture its controls
+    give it, gap included. Choose a date by which someone can realistically
+    re-check that the claim still holds.
+
+    Use ``create_risk_acceptance`` instead when the objective DOES apply and the
+    exposure is being carried deliberately. If an objective is only unaddressed
+    rather than inapplicable, neither tool is right — add controls.
+
+    Args:
+        model_id: ID of the threat model.
+        control_objective_id: The objective being declared not applicable.
+        owner: Who owns the judgment (name / role). They answer for it.
+        justification: Why the objective does not apply to this system.
+        review_by: ISO 8601 date the claim expires (e.g. "2027-02-06T00:00:00Z").
+    """
+    try:
+        return _dump(await _get_client().create_risk_acceptance(
+            model_id,
+            control_objective_id=control_objective_id,
+            owner=owner,
+            justification=justification,
+            review_by=review_by,
+            kind="not_applicable",
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_co_dispositions(
+    server_version: str,
+    model_id: str,
+    kind: str = "",
+) -> dict:
+    """List the signed judgments recorded against this model's control
+    objectives — risk acceptances, not-applicable dispositions, or both.
+
+    Read-only. Each entry carries the objective it names, the owner who signed
+    it, the justification, the dates, and its status. Expired and revoked
+    entries are included: a decision that lapsed is part of the audit trail, and
+    hiding it would leave a reader unable to tell a judgment that was reviewed
+    from one that was never made.
+
+    Read this before authoring a new judgment on an objective — an existing one
+    may already cover it, or may have expired and need re-signing rather than
+    duplicating.
+
+    Args:
+        model_id: ID of the threat model.
+        kind: Optional filter — "risk_accepted" or "not_applicable". Omit for
+            both. Case and surrounding whitespace do not matter. A value that
+            is neither is rejected by name rather than matched against
+            nothing, so a typo cannot come back as an empty list you would
+            read as "none recorded".
+    """
+    wanted = (kind or "").strip().lower() or "all"
+    if wanted not in ("risk_accepted", "not_applicable", "all"):
+        raise ToolError(
+            f'Unknown kind {kind!r}. Valid values: not_applicable, '
+            f'risk_accepted (or omit for both).'
+        )
+    try:
+        return _dump(await _get_client().list_co_dispositions(model_id, kind=wanted))
     except Exception as exc:
         raise _api_error(exc) from exc
 
