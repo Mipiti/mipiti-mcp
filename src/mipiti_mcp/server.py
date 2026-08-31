@@ -125,6 +125,15 @@ A threat model produces control objectives. Controls are derived from these and 
 
 Sufficiency is evaluated automatically server-side when assertions are submitted — no manual trigger needed.
 
+**Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
+
+1. `get_sufficiency` (or `get_verification_report` for the whole model) — **start here, it is free and it is usually the answer.** If `status` is `insufficient`, `details` names each uncovered clause and the evidence that would close it. That is the work list. Write those assertions.
+2. Check the clause against reality. If the control describes a mechanism the system deliberately does not use (it returns 404 where the control demands 403, say), the DESCRIPTION is what is wrong — `refine_control`, do not manufacture evidence to match prose no one intends to honour.
+3. `list_assertions` — only if sufficiency looks fine. A `fail` on `tier1_status`/`tier2_status` means the evidence itself is broken. `coherence_status: "pending"` is advisory: it is not a blocker and not a missing verdict.
+4. `recompute_verdicts` — **only** when control-to-CO MAPPINGS look wrong (`get_verdict_divergence` shows missing/spurious mappings). It does not compute per-control sufficiency or assertion coherence, it costs credits proportional to model size, and running it for a sufficiency gap changes nothing. Quote with `dry_run=True` and show the operator the number first.
+
+The general rule: exhaust the free read-only verdict surfaces before recommending any metered write.
+
 ## When you hit an implementation constraint mid-coding
 
 When a reviewer, hardware limit, library bound, or operator decision forces you off the prescribed mechanism (e.g., "this device only supports AES-128, not AES-256"), do NOT silently weaken the existing control or its assertions. Record the constraint structurally so the threat model reflects reality and the audit trail captures the reasoning. Use this 3-step pattern:
@@ -3651,6 +3660,24 @@ async def list_assertions(
     model composition (composed models whose assertions apply here).
     Inherited assertions are included in the listing.
 
+    Each assertion also carries three INDEPENDENT verdict fields. Read them
+    together — a passing tier check is not the same as sufficient evidence:
+
+    - ``tier1_status`` — mechanical check: the named file, symbol, or
+      pattern is actually there. ``"pass" | "fail" | "pending"``.
+    - ``tier2_status`` — semantic check: the cited code meaningfully
+      implements the claim. ``"pass" | "fail" | "pending"``.
+    - ``coherence_status`` — advisory consistency signal across the
+      control's evidence set. ``"pending"`` here does NOT block the control
+      from verifying, does NOT mean a verdict is missing, and is NOT a
+      reason to trigger a recompute.
+
+    An assertion can pass BOTH tiers while its control stays unverified,
+    because verification is decided per CONTROL, not per assertion: a
+    control verifies only when its assertions collectively cover every
+    clause of the control description. Read ``get_sufficiency`` for that
+    verdict; never infer it from the tier fields here.
+
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control (omit if using assumption_id).
@@ -3758,6 +3785,16 @@ async def get_sufficiency(
     """Sufficiency verdict for a single control: whether its submitted assertions collectively cover every aspect of the control. Read-only.
 
     Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict may be reported as stale when the control description or assertion set changed since it was last computed, in which case a fresh evaluation is triggered automatically — call again shortly for the updated result.
+
+    This is the surface that explains a control stuck at
+    ``verification_status: "partially_verified"``. Returns ``status``
+    (``"sufficient" | "insufficient" | "pending" | "stale"``) and, when
+    insufficient, a ``details`` breakdown naming EACH uncovered clause of
+    the control description and what evidence would close it — a concrete
+    work list, not a score. Act on it by submitting the named assertions
+    with ``submit_assertions``; if a clause is uncloseable because the
+    control describes a mechanism the system does not actually use, that
+    is a signal to ``refine_control`` instead of manufacturing evidence.
 
     Args:
         model_id: ID of the threat model.
@@ -5748,6 +5785,23 @@ async def recompute_verdicts(
         upper bound). When ``governor.exhausted`` is true, new evaluation
         would be queued until ``governor.resets_at``.
 
+    **Scope — what this does NOT do.** It evaluates control-objective
+    COVERAGE and GROUP SUFFICIENCY only. It does not evaluate per-control
+    sufficiency (whether a control's assertions cover its description) and
+    it does not evaluate assertion coherence — both of those are computed
+    on assertion write and read back with ``get_sufficiency`` /
+    ``get_verification_report``. So a control sitting at
+    ``partially_verified``, or an assertion showing
+    ``coherence_status: "pending"``, is NOT a reason to call this tool: the
+    verdict you want already exists, and recomputing spends credits without
+    changing it. Reach for this only when control-to-CO MAPPINGS look wrong
+    (see ``get_verdict_divergence``).
+
+    Cost: this fans out across every control and live control objective, so
+    on a large model the estimate can run to thousands of credits. Call it
+    with ``dry_run=True`` first and surface the number to the operator
+    before enqueueing.
+
     Both modes return a 503-mapped error when verdict observability is
     unavailable on the deployment. To un-park verdicts stuck by a transient
     outage instead of force-enqueueing the whole model, use
@@ -6103,6 +6157,33 @@ async def get_controls(
       control doesn't exist on the requested version. Pass ``version`` to
       read the control as of a specific model version. The list-mode
       filters, pagination, and toggles are ignored in this mode.
+
+    **Two different status fields — do not conflate them.** ``status`` is the
+    operator-set implementation state (``not_implemented`` / ``implemented``
+    / ``verified``). ``verification_status`` and ``is_verified`` are the
+    EVIDENCE state, derived from the control's assertions:
+
+    - ``"verified"`` — every assertion passes both tiers AND they
+      collectively cover the whole control description.
+    - ``"partially_verified"`` — deliberately covers three distinct
+      situations, so it does not by itself tell you what to fix: some
+      assertion FAILED a tier, or all passed but leave clauses of the
+      description UNPROVEN, or the control leaned on an operator
+      attestation that has since EXPIRED. Call ``get_sufficiency`` on the
+      control to find out which.
+    - ``"pending"`` — assertions exist, some still awaiting evaluation.
+    - ``"unverified"`` — no assertions submitted at all.
+
+    A control with ``assertion_count`` well above zero and every tier
+    passing can still read ``partially_verified``; that is the normal state
+    for evidence narrower than the description promises, and the fix is
+    more assertions (or a narrower description), never a verdict recompute.
+
+    Filtering ``status="implemented"`` returns controls the operator marked
+    implemented that have NOT been promoted to verified — the right filter
+    for "what still needs evidence work". It reads this model's OWN stored
+    controls; controls inherited through composition are counted by
+    ``assess_model`` but are managed on their source model.
 
     Args:
         model_id: ID of the threat model.
