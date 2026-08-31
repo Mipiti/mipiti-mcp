@@ -173,3 +173,31 @@ def test_verification_diagnostic_path_orders_free_reads_before_recompute() -> No
     # A clause that cannot be closed points at the description, not at
     # manufactured evidence.
     assert "refine_control" in section
+
+
+@pytest.mark.parametrize(
+    "tier,role",
+    [("pro", "user"), ("organization", "user"), ("developer", "user")],
+)
+def test_required_vs_defense_in_depth_guidance_present(tier: str, role: str) -> None:
+    """An objective whose controls are ALL defense-in-depth cannot leave
+    at-risk, and the risk_reason routing alone would send an agent to generate
+    or prove controls forever. The routing must say to check the group
+    structure first."""
+    text = build_instructions(tier=tier, role=role)
+    assert "actually REQUIRED for the objective" in text
+    section_start = text.index("actually REQUIRED for the objective")
+    section = text[section_start:section_start + 900]
+    assert "defense_in_depth" in section
+    assert "set_mitigation_groups" in section
+    # It must name this as a modelling gap, so the agent stops writing evidence.
+    assert "not an evidence gap" in section
+
+
+def test_group_guidance_precedes_the_risk_reason_routing() -> None:
+    """The check has to come BEFORE the per-reason actions, or an agent follows
+    the first instruction it reads and never reaches the caveat."""
+    text = build_instructions("pro", "user")
+    assert text.index("actually REQUIRED for the objective") < text.index(
+        "**Action routing by risk_reason**"
+    )

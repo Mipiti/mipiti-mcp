@@ -9,32 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Tool docs now state how a control actually reaches `verified`, so an agent
-  reading a stalled control is pointed at the surface that explains it rather
-  than at the one whose name sounds like the fix.
+- Tool docs state how mitigation credit is earned, so an agent can tell which
+  controls carry an objective before choosing where to spend effort.
 
-  `get_controls` separates the operator-set `status` from the evidence-derived
-  `verification_status`, and spells out that `partially_verified` covers three
-  different situations (a failed tier check, passing evidence that still leaves
-  clauses of the description unproven, or an expired attestation) — so the
-  field alone never says what to fix. `get_sufficiency` documents that it
-  returns the per-clause work list that answers exactly that question, and that
-  an uncloseable clause is a signal to refine the control rather than to
-  manufacture evidence for prose the system does not honour.
+  Within a control objective a control is either a member of a required
+  mitigation group or it is defense-in-depth. Groups are what mitigate: within
+  a group AND, across groups OR. Defense-in-depth is tracked and reported, and
+  does not contribute to mitigation. A control's control-objective ids
+  therefore express attachment, and the role is read with
+  `get_mitigation_groups`.
 
-  `list_assertions` documents its three independent verdict fields and records
-  that `coherence_status` is advisory: an assertion can pass both tiers while
-  its control stays unverified, because verification is decided per control
-  over the whole description, not per assertion.
+  `get_controls` states that contract and points at the group reader. The
+  risk-reason routing states the group check as its first step: where an
+  objective's required groups are empty, it is closed by establishing the
+  group structure with `set_mitigation_groups`.
 
-  `recompute_verdicts` states its scope negatively — it evaluates objective
-  coverage and group sufficiency, and does NOT compute per-control sufficiency
-  or assertion coherence — with a note that it fans out across the model and
-  should be quoted with `dry_run=True` before being enqueued.
-
-  The server instructions add a "Diagnosing implemented but not verified"
-  triage order that checks the free read-only verdict surfaces before any
-  metered write.
+  `refine_control` states its acceptance criterion — a refinement is accepted
+  when the control still states the protection each mapped objective relies
+  on, and a rejection is a decision rather than a transient error. A control is
+  a requirement that must be met to cover its objectives, so evidence that the
+  system does not currently meet it means the control is unmet, never that the
+  control should ask for less.
 
 ### Added
 

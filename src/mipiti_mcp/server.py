@@ -155,6 +155,8 @@ If the alternative drops a framework binding the original carried, the platform 
 - `asset_status` / `attacker_status` — verification status of the asset and attacker for this CO (`unverified`, `confirmed`, `absent`).
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs that need attestation action.
 
+**Before acting on any risk_reason, check whether a control is actually REQUIRED for the objective.** `get_mitigation_groups` splits a CO's controls into numbered groups (within=AND, across=OR) and `defense_in_depth`. Only the groups earn mitigation credit. If a CO has controls attached but ALL of them sit in `defense_in_depth`, or it has no groups at all, then nothing is required to mitigate it and the CO cannot leave at-risk no matter how many controls you generate or how much evidence you submit. That is a modelling gap, not an evidence gap: decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups` (AI-gated, so the structure has to actually satisfy the CO). Generating or proving controls in this state is wasted work.
+
 **Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `asset_absent` → the asset is not applicable. No action needed — skip controls for this CO. `attacker_irrelevant` → the attack surface is not applicable. No action needed — skip controls for this CO. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
 
 ## Gap discovery
@@ -1410,6 +1412,15 @@ async def refine_control(
     The AI evaluates whether the mitigation group still collectively
     satisfies all mapped control objectives. If rejected, returns
     {accepted: false, reason, per_co} with per-CO reasoning.
+
+    A refinement is rejected when the proposed description would reduce the
+    protection the control currently states for an objective it is mapped to;
+    ``per_co`` names each objective and explains why. This is a decision, not a
+    transient error — re-wording the same narrowing will not pass it, and it
+    applies however well-motivated the narrowing is. A control is a requirement
+    that must be met to cover its objectives, so evidence that the system does
+    not currently meet it means the control is UNMET, never that the control
+    should ask for less.
 
     **Side effect on accepted refinements**: every assertion attached
     to this control is superseded — their claims were authored against
@@ -6157,6 +6168,17 @@ async def get_controls(
       control doesn't exist on the requested version. Pass ``version`` to
       read the control as of a specific model version. The list-mode
       filters, pagination, and toggles are ignored in this mode.
+
+    **Objective mapping is not coverage credit.** The control-objective ids a
+    control carries record which objectives it is ATTACHED to, not which ones
+    it is required to satisfy. Within an objective, a control is either a
+    member of a required mitigation group or it is defense-in-depth, which is
+    tracked but earns no mitigation credit. A control that is defense-in-depth
+    on every objective it touches can be fully implemented and fully verified
+    without moving a single objective out of at-risk. Read
+    ``get_mitigation_groups`` for the per-objective role before deciding a
+    control is worth evidence work — the id list alone will not tell you
+    whether proving it changes anything.
 
     **Two different status fields — do not conflate them.** ``status`` is the
     operator-set implementation state (``not_implemented`` / ``implemented``
