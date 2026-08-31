@@ -130,3 +130,46 @@ def test_functional_conformance_section_present(tier: str, role: str) -> None:
         "get_functional_test_sufficiency",
     ):
         assert tool in text
+
+
+@pytest.mark.parametrize(
+    "tier,role",
+    [
+        ("pro", "user"),
+        ("organization", "user"),
+        ("enterprise", "user"),
+        ("developer", "admin"),
+        ("developer", "superadmin"),
+        ("developer", "user"),
+    ],
+)
+def test_verification_diagnostic_path_present(tier: str, role: str) -> None:
+    """The "implemented but not verified" triage order must reach every tier.
+
+    Without it an agent reading a control's ``partially_verified`` state has
+    no stated order to check in, and the tool whose name reads most like the
+    fix (``recompute_verdicts``) is both the wrong surface and the metered
+    one.
+    """
+    text = build_instructions(tier=tier, role=role)
+    assert 'Diagnosing "implemented but not verified"' in text
+
+
+def test_verification_diagnostic_path_orders_free_reads_before_recompute() -> None:
+    """Sufficiency must be offered before the metered recompute, and the
+    recompute must carry its own scope disclaimer."""
+    text = build_instructions("pro", "user")
+    section_start = text.index('Diagnosing "implemented but not verified"')
+    section_end = text.index("## When you hit an implementation constraint", section_start)
+    section = text[section_start:section_end]
+
+    # Free diagnostic reads come first; the metered write comes last.
+    assert section.index("get_sufficiency") < section.index("recompute_verdicts")
+    assert "dry_run=True" in section
+    # coherence_status must be labelled advisory so "pending" is not read as
+    # a missing verdict that needs recomputing.
+    assert "coherence_status" in section
+    assert "advisory" in section
+    # A clause that cannot be closed points at the description, not at
+    # manufactured evidence.
+    assert "refine_control" in section

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Tool docs now state how a control actually reaches `verified`, so an agent
+  reading a stalled control is pointed at the surface that explains it rather
+  than at the one whose name sounds like the fix.
+
+  `get_controls` separates the operator-set `status` from the evidence-derived
+  `verification_status`, and spells out that `partially_verified` covers three
+  different situations (a failed tier check, passing evidence that still leaves
+  clauses of the description unproven, or an expired attestation) — so the
+  field alone never says what to fix. `get_sufficiency` documents that it
+  returns the per-clause work list that answers exactly that question, and that
+  an uncloseable clause is a signal to refine the control rather than to
+  manufacture evidence for prose the system does not honour.
+
+  `list_assertions` documents its three independent verdict fields and records
+  that `coherence_status` is advisory: an assertion can pass both tiers while
+  its control stays unverified, because verification is decided per control
+  over the whole description, not per assertion.
+
+  `recompute_verdicts` states its scope negatively — it evaluates objective
+  coverage and group sufficiency, and does NOT compute per-control sufficiency
+  or assertion coherence — with a note that it fans out across the model and
+  should be quoted with `dry_run=True` before being enqueued.
+
+  The server instructions add a "Diagnosing implemented but not verified"
+  triage order that checks the free read-only verdict surfaces before any
+  metered write.
+
 ### Added
 
 - `create_co_disposition` and `list_co_dispositions`: record and read the
