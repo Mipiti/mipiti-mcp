@@ -3866,7 +3866,14 @@ async def list_findings(
     Args:
         model_id: ID of the threat model.
         control_id: Optional filter to findings on one control. Empty (default) returns findings for all controls.
-        status: Optional lifecycle filter, one of "discovered", "acknowledged", "remediated", "verified", "dismissed". Empty (default) returns all statuses.
+        status: Optional lifecycle filter, one of "discovered", "acknowledged", "remediated", "verified", "dismissed", "auto_resolved". Empty (default) returns all statuses.
+            ``auto_resolved`` is closed by the platform, not by a person: the
+            condition that produced the finding is no longer reproduced. It is
+            deliberately distinct from ``remediated``/``verified`` (a person
+            fixed and confirmed it) and from ``dismissed`` (a person judged it
+            not worth fixing) — "the gap is gone" and "the gap does not matter"
+            are opposite statements about residual risk, so they never share a
+            status.
     """
     try:
         return _dump(await _get_client().list_findings(model_id, control_id, status))
@@ -3886,12 +3893,12 @@ async def update_finding(
 ) -> dict:
     """Advance a finding through its lifecycle. Mutating: updates the finding's status and metadata.
 
-    Use to acknowledge, remediate, verify, or dismiss a finding previously recorded by ``submit_findings`` / ``list_findings``. This records a manual status transition; for gaps whose kind has an automatic fix, ``preview_finding_remediation`` + ``apply_finding_remediation`` perform the actual cleanup instead.
+    Use to acknowledge, remediate, verify, or dismiss a finding previously recorded by ``submit_findings`` / ``list_findings``. This records a MANUAL status transition — the machine-set ``auto_resolved`` state is not among the statuses it accepts; for gaps whose kind has an automatic fix, ``preview_finding_remediation`` + ``apply_finding_remediation`` perform the actual cleanup instead.
 
     Args:
         model_id: ID of the threat model.
         finding_id: ID of the finding to update.
-        status: New lifecycle status, one of "discovered", "acknowledged", "remediated", "verified", "dismissed".
+        status: New lifecycle status, one of "discovered", "acknowledged", "remediated", "verified", "dismissed". ``auto_resolved`` is NOT settable here: it asserts that a condition is no longer reproduced, which is a claim only the platform can make from its own re-evaluation. Setting it by hand would forge that claim, so this tool refuses it — use ``dismissed`` (with a reason) to record that a gap does not matter, which is the judgment a person is entitled to make.
         notes: Optional free-text notes recorded on the finding.
         reason: Optional rationale; required when dismissing (status="dismissed").
         remediation_assertion_ids: Optional comma-separated assertion IDs that evidence the fix, linking the remediation to the assertions that prove it. Empty by default.
