@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `auto_resolved` finding status: a finding the platform closed because the
+  condition that produced it is no longer reproduced.
+
+  It is deliberately distinct from the closures a person makes. "The gap is
+  gone" and "the gap does not matter" are opposite statements about residual
+  risk, so they never share a status — `remediated` / `verified` mean someone
+  fixed and confirmed it, `dismissed` means someone judged it not worth fixing,
+  and `auto_resolved` means nobody decided anything and the condition simply
+  stopped being found.
+
+  `list_findings` can filter on it. `update_finding` cannot set it: it asserts
+  a re-evaluation outcome that only the platform can observe, and offering it
+  as a manual transition would invite forging that claim. A person recording
+  that a gap does not matter uses `dismissed`, with a reason.
+
+
 ### Changed
 
 - Tool docs state how mitigation credit is earned, so an agent can tell which

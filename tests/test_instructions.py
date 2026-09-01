@@ -201,3 +201,38 @@ def test_group_guidance_precedes_the_risk_reason_routing() -> None:
     assert text.index("actually REQUIRED for the objective") < text.index(
         "**Action routing by risk_reason**"
     )
+
+
+def _tool_doc(name: str) -> str:
+    """The rendered description an agent actually reads for one tool."""
+    import mipiti_mcp.server as srv
+
+    fn = getattr(srv, name)
+    return (getattr(fn, "__doc__", "") or "") + (
+        getattr(getattr(fn, "fn", None), "__doc__", "") or "")
+
+
+def test_auto_resolved_is_filterable():
+    """An agent triaging findings has to be able to select the ones the
+    platform closed, or it cannot tell them from the ones still open."""
+    assert "auto_resolved" in _tool_doc("list_findings")
+
+
+def test_auto_resolved_is_documented_as_distinct_from_the_human_closures():
+    """'The gap is gone' and 'the gap does not matter' are opposite statements
+    about residual risk. A reader who conflates them misreads the posture."""
+    doc = _tool_doc("list_findings")
+    assert "dismissed" in doc and "auto_resolved" in doc
+    assert "not worth fixing" in doc or "does not matter" in doc
+
+
+def test_auto_resolved_is_not_offered_as_a_manual_transition():
+    """It asserts a condition is no longer reproduced — a claim only the
+    platform can make from its own re-evaluation. Offering it as a manual
+    status would invite an agent to forge that claim."""
+    doc = _tool_doc("update_finding")
+    settable = doc.split("New lifecycle status, one of", 1)[1].split(".", 1)[0]
+    assert "auto_resolved" not in settable, (
+        "auto_resolved is listed among the manually settable statuses"
+    )
+    assert "NOT settable" in doc or "not settable" in doc
