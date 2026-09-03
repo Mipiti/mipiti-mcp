@@ -6128,7 +6128,7 @@ async def submit_functional_test_assertions(
     Args:
         model_id: ID of the threat model.
         functional_test_id: The already-existing functional test the assertions prove.
-        assertions_json: JSON array of assertion objects, each {"type": "test_passes" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
+        assertions_json: JSON array of assertion objects, each {"type": "test_attested" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
     """
     try:
         assertions = json.loads(assertions_json)

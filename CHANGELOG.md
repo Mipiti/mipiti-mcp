@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`test_passes` is replaced by `test_attested`.** Verification is a read-only
+  operation over evidence your project already produced. `test_passes` was the
+  one assertion type that did not fit that rule, since proving a test passed
+  required verification to run it.
+
+  `test_attested` takes a `test` param naming the test the attestation must
+  contain, and reads a statement your CI signed about a run it performed
+  itself. Add one step after your tests: `mipiti-verify attest-tests --junit
+  <report>`.
+
+  Agents discover the new type through `get_assertion_types` as usual. The
+  assertion type count is unchanged at 28.
+
 ### Fixed
 
 - The list of assertion types `submit_assertions` accepts is now readable. It
