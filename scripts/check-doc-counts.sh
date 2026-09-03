@@ -17,6 +17,17 @@ cd "$REPO_ROOT"
 
 source scripts/canonical-counts.sh
 
+# In-place edit, portable across GNU sed (CI, Linux) and BSD sed (macOS dev
+# machines). BSD `sed -i` consumes the following argument as a backup suffix,
+# so `-i -E` there silently makes "-E" the suffix: the edit lands, and a
+# `<file>-E` copy of the original is left behind to be committed by accident.
+# Probe once and build the invocation.
+if sed --version >/dev/null 2>&1; then
+  SED_INPLACE=(sed -i -E)
+else
+  SED_INPLACE=(sed -i '' -E)
+fi
+
 MODE="check"
 if [ "${1:-}" = "--fix" ]; then
   MODE="fix"
@@ -50,7 +61,7 @@ for f in "${DOC_FILES[@]}"; do
       [ -z "$actual" ] && continue
       if [ "$actual" != "$expected" ]; then
         if [ "$MODE" = "fix" ]; then
-          sed -i -E \
+          "${SED_INPLACE[@]}" \
             "${lineno}s|<!--${key}-->[^<]*<!--/${key}-->|<!--${key}-->${expected}<!--/${key}-->|g" \
             "$f"
           fixed=$((fixed+1))

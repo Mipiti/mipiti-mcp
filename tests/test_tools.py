@@ -2614,7 +2614,7 @@ class TestSubmitAssertions:
         with _patch_client(mock):
             result = await submit_assertions(
                 server_version="0", model_id="tm-001", control_id="CTRL-01",
-                assertions_json=json.dumps([{"type": "file_exists", "params": {"path": "auth.py"}}]),
+                assertions_json=json.dumps([{"type": "file_exists", "params": {"file": "auth.py"}}]),
             )
         assert result["count"] == 2
 

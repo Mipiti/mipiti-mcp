@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The list of assertion types `submit_assertions` accepts is now readable. It
+  was carried entirely in that tool's description, which had grown past what
+  clients present in full, so callers saw the prose introducing the list and
+  none of the list itself.
+
+  The description now names every type with its required and optional params, in
+  a form that fits inside the limit, and is ordered so the type list comes before
+  elaborating prose: a stricter client loses the prose, not the contract.
+
+  A new `get_assertion_types` tool returns the full catalogue — descriptions,
+  param descriptions and a worked example per type — as structured data rather
+  than prose, optionally filtered to named types.
+
+
+
 ### Added
 
 - `auto_resolved` finding status: a finding the platform closed because the

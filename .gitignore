@@ -6,3 +6,6 @@ build/
 .venv/
 .env
 .claude/
+
+# sed backup files (BSD sed -i leaves these)
+*-E
