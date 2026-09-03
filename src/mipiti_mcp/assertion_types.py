@@ -341,6 +341,8 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
 
 ASSERTION_TYPE_NAMES: frozenset[str] = frozenset(t.name for t in ASSERTION_TYPES)
 
+
+
 ASSERTION_PARAM_SCHEMAS: dict[str, list[str]] = {
     t.name: t.required_params for t in ASSERTION_TYPES
 }
@@ -367,3 +369,47 @@ def format_for_docstring() -> str:
             )
         lines.append(f"  - {t.name}: {t.description} Params: {req}{opt}")
     return "\n".join(lines)
+
+
+def format_compact() -> str:
+    """One short line per type: the name and its required params.
+
+    A tool description is prose that a client may truncate, so the full
+    reference cannot be the only place the contract lives. This form is small
+    enough to survive intact and carries what a caller needs to construct a
+    valid assertion; ``describe_types`` supplies the rest on demand.
+    """
+    lines = []
+    for t in ASSERTION_TYPES:
+        line = f"  - {t.name}({', '.join(t.required_params)})"
+        if t.optional_params:
+            line += f" [opt: {', '.join(t.optional_params)}]"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def describe_types(names: "list[str] | None" = None) -> list:
+    """Structured catalogue, for callers that need descriptions and examples.
+
+    Returned as data rather than prose so it cannot be truncated into a
+    half-list that reads as complete.
+    """
+    wanted = {n.strip() for n in names if n and n.strip()} if names else None
+    out = []
+    for t in ASSERTION_TYPES:
+        if wanted is not None and t.name not in wanted:
+            continue
+        out.append({
+            "type": t.name,
+            "description": t.description,
+            "required_params": [
+                {"name": p.name, "description": p.description, "example": p.example}
+                for p in t.params if p.required
+            ],
+            "optional_params": [
+                {"name": p.name, "description": p.description, "example": p.example}
+                for p in t.params if not p.required
+            ],
+            "example": t.example,
+        })
+    return out

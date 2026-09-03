@@ -15,7 +15,10 @@ from anyio import BrokenResourceError, ClosedResourceError
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
-from .assertion_types import format_for_docstring
+from .assertion_types import (
+    describe_types,
+    format_compact,
+)
 from .client import MipitiClient
 
 # ------------------------------------------------------------------
@@ -99,7 +102,7 @@ A threat model produces control objectives. Controls are derived from these and 
 **Key tools:**
 - `get_controls` — lists controls with current status; pass a single control id to read just one. Use `summary_only=True` for a compact response (id, description, status, assertion_count, assumed_by).
 - `get_control_objectives` — lists COs with which controls cover each one; pass a single CO id to read just one. Pair with `get_reachability_verdicts` to surface composer reachability state per CO before linking assumptions or regenerating.
-- `submit_assertions` — provide proof for a control. See that tool's docstring for assertion types and required params. Always verify locally first: `mipiti-verify verify <type> -p key=value --project-root .` Read the target file and confirm a reviewer would agree with the claim.
+- `submit_assertions` — provide proof for a control. Call `get_assertion_types` for the types and their params; the tool description is prose your client may shorten. Always verify locally first: `mipiti-verify verify <type> -p key=value --project-root .` Read the target file and confirm a reviewer would agree with the claim.
 - **Assertion design: prefer decomposition over breadth.** Tier 2 (semantic LLM check) evaluates each assertion with only its own check-type evidence. A single broad claim like "X calls Y to do A and B using C" will pass Tier 1 but fail Tier 2 — the mechanical evidence (e.g., a function_calls result) doesn't surface facts A, B, C. Split into multiple atomic assertions — one for each narrow aspect — each with a check type that directly shows the relevant code (`pattern_matches` on the specific line, `function_exists` for the named function, etc.). Submit them as a group on the same control. Sufficiency combines them; individually each is trivially provable.
 - `list_assertions` / `delete_assertion` — list active assertions for a control; delete stale or incorrect ones before resubmitting.
 - `update_control_status` — mark implemented or not_implemented. Requires at least one assertion BEFORE marking implemented. Always submit assertions first, then update status.
@@ -3582,49 +3585,54 @@ async def get_system_dependencies(
 # === Assertions & Verification ===
 
 
+@mcp.tool()
+async def get_assertion_types(
+    server_version: str,
+    types: Optional[str] = None,
+) -> dict:
+    """List the assertion types submit_assertions accepts, with their params.
+
+    Read-only. Returns the catalogue as structured data: every type, what it
+    proves, which params it requires, which it accepts, and a worked example.
+
+    Call this before writing assertions. submit_assertions names the types and
+    their required params in its own description, but descriptions are prose a
+    client may present only in part, and a half-list reads exactly like a whole
+    one. This returns data, so what you get back is the complete contract.
+
+    Args:
+        types: Optional comma-separated type names to return (e.g.
+            "file_exists,pattern_absent"). Omit for all of them.
+    """
+    # server_version is enforced by VersionCheckMiddleware before the tool runs.
+    names = [t for t in (types or "").split(",") if t.strip()] or None
+    catalogue = describe_types(names)
+    if names and not catalogue:
+        raise ToolError(
+            f"No such assertion type(s): {types}. Call get_assertion_types with "
+            "no arguments to see every type."
+        )
+    return {"assertion_types": catalogue, "count": len(catalogue)}
+
+
 _SUBMIT_ASSERTIONS_DOC = f"""\
-Submit assertions for a security control or an assumption.
+Submit assertions for a control or an assumption. Records typed claims
+checked later in CI; verifies nothing now.
 
-Mutating: persists new assertion records against the target. It does NOT run \
-verification itself — assertions are checked later in CI (structurally, then \
-semantically) and cryptographically attested; submitting only records the \
-claims to be verified. To read existing assertions use list_assertions; to \
-remove one use delete_assertion.
+Call get_assertion_types for the full contract: every type's params, options and
+a worked example, as data. Your client may shorten this text; that tool cannot
+be shortened.
 
-Each assertion is a typed, machine-verifiable claim about a system property \
-(source code, configuration, infrastructure, or external service settings).
+Types, as name(required) [opt: optional]:
+{format_compact()}
 
-Provide exactly one of control_id or assumption_id:
-- control_id: proves a control is implemented (e.g., "CTRL-01")
-- assumption_id: proves a system property claim (e.g., "AS5" — asset \
-non-applicability, attacker non-applicability, scope decisions)
+Each object in assertions_json carries type, params, a plain-language
+description, and repo: the "<owner>/<repo>" whose CI run checks it, or "no_repo"
+to opt out of every run. repo is required; empty is rejected.
 
-The feature description is the design specification the model derives from, \
-so a claim about it is a claim about the specified design. To verify against \
-it instead of a repository file, use target in place of file. Valid on any \
-subject (a control, an assumption, a node, a functional test), and accepted \
-by the two types whose criterion is a regex over arbitrary text — \
-pattern_matches and pattern_absent. It is the natural shape for a \
-non-applicability claim, which has no file to point at:
-{{"type": "pattern_matches", "params": {{"target": "feature_description", \
-"pattern": "password.*TOTP"}}, "description": "..."}}
-A target assertion is still bound to a repository: it must carry an explicit \
-repo, the "<owner>/<repo>" slug of the CI repository whose verification run \
-should check it, or the "no_repo" sentinel, which opts the assertion out of \
-every run so no CI run will ever pull it.
-
-Args:
-    model_id: ID of the threat model.
-    control_id: ID of the control (omit if using assumption_id).
-    assumption_id: ID of the assumption (omit if using control_id).
-    assertions_json: JSON array of assertion objects. Each object has:
-        - type (required): one of the assertion types below
-        - params (required): type-specific parameters (file or target + pattern/name/etc.)
-        - description (required): human-readable explanation of what this proves
-        - repo (required): the "<owner>/<repo>" slug of the CI repository whose verification run should check this assertion — for a file-based assertion, the codebase its file path is resolved against, and what keeps a run for one repo from picking up another repo's claims. An assertion with no repository scope must say so with the "no_repo" sentinel, which opts it out of every run; an empty or missing repo is rejected.
-
-Assertion types:
-{format_for_docstring()}
+pattern_matches and pattern_absent accept params.target="feature_description"
+instead of params.file, asserting against the design specification. That is the
+shape for a non-applicability claim, which has no file to cite.
 """
 
 
@@ -3645,6 +3653,8 @@ async def submit_assertions(
         assertions = json.loads(assertions_json)
     except json.JSONDecodeError:
         raise ToolError("assertions_json must be valid JSON array.")
+    if not isinstance(assertions, list):
+        raise ToolError("assertions_json must be a JSON array.")
     try:
         return _dump(await _get_client().submit_assertions(
             model_id, assertions,
