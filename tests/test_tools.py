@@ -59,7 +59,6 @@ from mipiti_mcp.server import (
     list_model_groups,
     list_risk_acceptances,
     list_threat_models,
-    list_workspaces,
     map_control_to_requirement,
     query_threat_model,
     refine_threat_model,
@@ -335,7 +334,6 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                 "review_by": "2026-09-01T00:00:00Z",
             },
         ],
-        "list_workspaces": {"workspaces": []},
         "list_systems": {"systems": []},
         "get_system": {"id": "sys-1", "name": "Platform"},
         "create_system": {"id": "sys-2", "name": "New"},
@@ -2532,15 +2530,6 @@ class TestAwaitBackendJob:
 # ------------------------------------------------------------------
 # Workspaces & Systems
 # ------------------------------------------------------------------
-
-
-class TestListWorkspaces:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await list_workspaces(server_version="0")
-        assert "workspaces" in result
 
 
 class TestListSystems:

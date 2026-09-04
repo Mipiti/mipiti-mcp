@@ -367,18 +367,6 @@ async def test_start_reevaluate_factors_with_change_reason(mock_env: None) -> No
     await client.close()
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_list_workspaces(mock_env: None) -> None:
-    respx.get("https://test.api.mipiti.io/api/workspaces").mock(
-        return_value=httpx.Response(200, json={"workspaces": [{"id": "ws-1"}]})
-    )
-    client = MipitiClient()
-    result = await client.list_workspaces()
-    assert len(result) == 1
-    assert result[0].id == "ws-1"
-    await client.close()
-
 
 @pytest.mark.asyncio
 @respx.mock

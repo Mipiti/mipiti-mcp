@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->132<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->131<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -265,7 +265,6 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 
 | Tool | Description |
 |------|-------------|
-| `list_workspaces` | List available workspaces. |
 | `update_organization` | Set per-organization level grades: `target_ml` (IEC 62443-4-1 Maturity Level, 1-5), `csf_tier` (NIST CSF Tier, 1-4). Admin-only. Use `clear_target_ml` / `clear_csf_tier` to explicitly reset to NULL. |
 | `list_groups (kind="system")` / `get_group` / `create_group (kind="system")` | Manage systems (groups of related models). |
 | `add_model_to_group (kind="system")` | Add a model to a system. |

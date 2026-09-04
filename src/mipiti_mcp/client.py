@@ -52,7 +52,6 @@ from .types import (
     SystemSelectFrameworksResult,
     ThreatModel,
     VerificationReport,
-    Workspace,
     _Base,
 )
 
@@ -2343,14 +2342,8 @@ class MipitiClient:
         return list(data) if isinstance(data, list) else data
 
     # ------------------------------------------------------------------
-    # Workspaces & Systems
+    # Systems
     # ------------------------------------------------------------------
-
-    async def list_workspaces(self) -> list[Workspace]:
-        data = await self._get("/api/workspaces")
-        if isinstance(data, dict):
-            data = data.get("workspaces", [])
-        return [Workspace.model_validate(w) for w in data]
 
     async def list_systems(self) -> list[System]:
         data = await self._get("/api/systems")
