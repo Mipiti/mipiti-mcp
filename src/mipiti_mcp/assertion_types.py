@@ -266,11 +266,13 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         name="test_attested",
         description=(
             "Check a signed statement from your CI that a named test ran and "
-            "passed, against the commit under verification. Verification reads "
-            "this statement and runs nothing: add 'mipiti-verify attest-tests "
-            "--junit <report>' to the job that already runs your tests, after "
-            "them. A run that selected no tests, or in which nothing passed, "
-            "is refused."
+            "passed, against the commit under verification. Proves the test "
+            "passed in this repository's workflow at this commit; use it for "
+            "a behavioral clause, beside a structural assertion for the "
+            "mechanism. Verification reads the statement and runs nothing: "
+            "add 'mipiti-verify attest-tests --junit <report>' to the job that "
+            "already runs your tests, after them. A run that selected no "
+            "tests, or in which nothing passed, is refused."
         ),
         params=(
             ParamSpec(

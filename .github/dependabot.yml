@@ -13,3 +13,6 @@ updates:
           - "*"
     commit-message:
       prefix: "ci"
+    # An automatic rebase on every change to main restarts the PR's CI run;
+    # the grouped Dependabot PR is rebased by hand when it is time to merge.
+    rebase-strategy: "disabled"

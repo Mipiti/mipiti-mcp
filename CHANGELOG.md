@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The server instructions say when `test_attested` is the right evidence and
+  what it proves: a behavioral clause is shown to hold by a test that passed
+  in the repository's own CI workflow at the commit under verification, beside
+  a structural assertion for the mechanism, with `env` pinning a
+  configuration-gated control on. Sufficiency still decides whether the clause
+  is covered. The catalogue description carries the same one-line "proves".
+
+### Changed
+
 - **`test_passes` is replaced by `test_attested`.** Verification is a read-only
   operation over evidence your project already produced. `test_passes` was the
   one assertion type that did not fit that rule, since proving a test passed
