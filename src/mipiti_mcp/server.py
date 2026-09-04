@@ -332,7 +332,7 @@ Some frameworks (IEC 62443, ISO/SAE 21434, NIST CSF, FIPS 140-3, Common Criteria
 
 ## Systems and workspaces
 
-- `list_workspaces` — list workspaces the current user can access. Use to find the right workspace when working across team contexts.
+- Every MCP credential is bound to one workspace when it is issued (an API key by its scope, an OAuth token by the workspace chosen on the consent screen), and every tool operates in that workspace. To work in another workspace, connect with a credential issued for it; there is no tool that lists or switches workspaces.
 - `list_groups(kind="system")` / `get_group` — browse and retrieve system groups. Systems and tags are both *groups*; the `kind` param selects which kind.
 - `create_group(kind="system")` / `add_model_to_group(kind="system")` — group related models into a system.
 - `get_system_dependencies` — view cross-model dependency graph. Shows which assumptions are linked to other models and whether they are satisfied.
@@ -3381,20 +3381,6 @@ async def auto_map_controls(
 
 # === Workspaces & Systems ===
 
-
-@mcp.tool()
-async def list_workspaces(server_version: str) -> dict:
-    """List the workspaces the current user belongs to.
-
-    Read-only; no side effects. Returns each workspace's id and name. Models,
-    controls, and compliance are all scoped to a workspace, so use this to
-    discover the workspace context you're operating in. Takes no arguments
-    beyond the version guard.
-    """
-    try:
-        return _dump(await _get_client().list_workspaces())
-    except Exception as exc:
-        raise _api_error(exc) from exc
 
 
 @mcp.tool()

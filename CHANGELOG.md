@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`list_workspaces`.** Every MCP credential is bound to one workspace when
+  it is issued: an API key by its scope, an OAuth token by the workspace
+  chosen on the consent screen. The workspace list is a control-plane view
+  that only an interactive user session may read, so this tool could not
+  succeed with any credential the server holds. To work in another
+  workspace, connect with a credential issued for it.
+
 ### Changed
 
 - Every release now carries the published wheel and sdist as assets of its
