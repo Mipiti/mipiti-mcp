@@ -300,7 +300,7 @@ A tag can also be a **compliance / audit scope** spanning several models: `selec
 
 Functional conformance proves a feature does what it was *specified* to do — the parallel of security controls, verified by the same assertion + CI engine. Capabilities are the behaviours the feature must deliver; each is tested against a taxonomy of operating conditions (nominal, boundary, dependency-failure, …), and a Functional Objective is a Given-When-Then acceptance criterion. Two ways to establish coverage:
 
-**Generate (top-down).** `generate_functional_objectives` derives capabilities, objectives, and the concrete tests to write; `get_scan_prompt` (pass the functional kind) returns the per-test brief; implement each test, register it with `add_functional_test`, then submit `TEST_EXISTS` + `TEST_PASSES` evidence with `submit_functional_test_assertions` so CI verifies it.
+**Generate (top-down).** `generate_functional_objectives` derives capabilities, objectives, and the concrete tests to write; `get_scan_prompt` (pass the functional kind) returns the per-test brief; implement each test, register it with `add_functional_test`, then submit `TEST_EXISTS` + `TEST_ATTESTED` evidence with `submit_functional_test_assertions` so CI verifies it.
 
 **Import (bottom-up) — bring the tests you already have.** `import_functional_tests` registers your existing codebase tests (optionally with the objectives they cover; the platform verifies each association is applicable before accepting it). For tests you don't map yourself, `suggest_functional_test_mappings` proposes which objective each one actually proves (judged on behaviour, with a confidence) and `associate_functional_test` confirms a mapping — so an existing suite counts toward conformance, not only Mipiti-specified tests.
 
@@ -4857,7 +4857,7 @@ async def add_functional_test(
 ) -> dict:
     """Hand-author a single functional test and map it to one or more objectives. Mutating.
 
-    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_PASSES evidence via submit_functional_test_assertions.
+    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_ATTESTED evidence via submit_functional_test_assertions.
 
     Args:
         model_id: ID of the threat model.
@@ -6128,7 +6128,7 @@ async def submit_functional_test_assertions(
     Args:
         model_id: ID of the threat model.
         functional_test_id: The already-existing functional test the assertions prove.
-        assertions_json: JSON array of assertion objects, each {"type": "test_passes" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
+        assertions_json: JSON array of assertion objects, each {"type": "test_attested" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository.
     """
     try:
         assertions = json.loads(assertions_json)
@@ -6408,7 +6408,7 @@ async def get_scan_prompt(
       ``objectives_without_tests`` (regenerate or add a test) and
       ``missing_objectives`` (applicable conditions with no objective
       yet). Drive test implementation from it, then call
-      ``submit_functional_test_assertions`` with TEST_EXISTS + TEST_PASSES
+      ``submit_functional_test_assertions`` with TEST_EXISTS + TEST_ATTESTED
       assertions so CI verifies each test; read the resulting pass/fail
       state via ``get_functional_coverage``. ``control_id`` does not
       apply to this kind and is ignored.

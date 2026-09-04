@@ -263,10 +263,31 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         ),
     ),
     AssertionTypeSpec(
-        name="test_passes",
-        description="Run tests matching a pattern and verify they pass. Auto-detects pytest, npm test, cargo test.",
+        name="test_attested",
+        description=(
+            "Check a signed statement from your CI that a named test ran and "
+            "passed, against the commit under verification. Verification reads "
+            "this statement and runs nothing: add 'mipiti-verify attest-tests "
+            "--junit <report>' to the job that already runs your tests, after "
+            "them. A run that selected no tests, or in which nothing passed, "
+            "is refused."
+        ),
         params=(
-            ParamSpec("pattern", "Test name or pattern to match", example="test_auth"),
+            ParamSpec(
+                "test",
+                "Name of the test the attestation must contain",
+                example="test_rejects_expired_token",
+            ),
+            ParamSpec(
+                "env",
+                "Environment the attested run must have had: a mapping of "
+                "variable name to required value, null meaning the variable "
+                "must have been unset. The run records only the names your "
+                "CI nominates when attesting; a run that recorded none fails "
+                "this check.",
+                required=False,
+                example='{"FEATURE_AUTH": "on"}',
+            ),
         ),
     ),
 
