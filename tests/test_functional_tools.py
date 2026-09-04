@@ -102,7 +102,7 @@ async def test_add_functional_test_requires_objective():
 @pytest.mark.asyncio
 async def test_submit_functional_tests_parses_json():
     c = _client()
-    payload = [{"type": "test_passes", "params": {"pattern": "x"}, "description": "d", "repo": "o/r"}]
+    payload = [{"type": "test_attested", "params": {"test": "x"}, "description": "d", "repo": "o/r"}]
     with _patch(c):
         await submit_functional_test_assertions(
             server_version="0", model_id="tm-1", functional_test_id="FT-1",

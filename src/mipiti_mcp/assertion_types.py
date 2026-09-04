@@ -278,6 +278,16 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
                 "Name of the test the attestation must contain",
                 example="test_rejects_expired_token",
             ),
+            ParamSpec(
+                "env",
+                "Environment the attested run must have had: a mapping of "
+                "variable name to required value, null meaning the variable "
+                "must have been unset. The run records only the names your "
+                "CI nominates when attesting; a run that recorded none fails "
+                "this check.",
+                required=False,
+                example='{"FEATURE_AUTH": "on"}',
+            ),
         ),
     ),
 

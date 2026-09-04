@@ -17,7 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_attested` takes a `test` param naming the test the attestation must
   contain, and reads a statement your CI signed about a run it performed
   itself. Add one step after your tests: `mipiti-verify attest-tests --junit
-  <report>`.
+  <report>`. An optional `env` param pins the environment the run must have
+  had (variable name to required value; `null` means unset), checked against
+  the names your CI nominated when attesting.
+
+  The platform refuses a submission whose type is not in this catalogue, so
+  removing `test_passes` here retires it for new submissions; evidence of
+  that type already recorded stays readable.
 
   Agents discover the new type through `get_assertion_types` as usual. The
   assertion type count is unchanged at 28.

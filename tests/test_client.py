@@ -970,7 +970,7 @@ class TestSubmitAssertionsClient:
         client = MipitiClient()
         result = await client.submit_assertions(
             "tm-001",
-            [{"type": "test_passes", "params": {"command": "pytest"}}],
+            [{"type": "test_attested", "params": {"test": "test_login"}}],
             control_id="CTRL-01",
         )
         assert len(result.assertions) == 1
