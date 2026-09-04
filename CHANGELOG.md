@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every release now carries the published wheel and sdist as assets of its
+  (immutable) GitHub Release, with a provenance attestation over the same
+  files that went to PyPI. A file taken from the Release can be checked with
+  `gh attestation verify <file> --owner Mipiti` and its digest compared with
+  the PyPI copy.
+
+### Changed
+
 - The server instructions say when `test_attested` is the right evidence and
   what it proves: a behavioral clause is shown to hold by a test that passed
   in the repository's own CI workflow at the commit under verification, beside
