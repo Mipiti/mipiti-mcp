@@ -189,6 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Floored four transitively-pulled dependencies to their first fixed release via `[tool.uv] constraint-dependencies`, clearing the current `pip-audit` findings: `starlette>=1.3.1` (PYSEC-2026-248 / PYSEC-2026-249), `cryptography>=48.0.1` (GHSA-537c-gmf6-5ccf), `pydantic-settings>=2.14.2` (GHSA-4xgf-cpjx-pc3j), and `python-multipart>=0.0.31` (CVE-2026-53540). All four lockfiles recompiled; `pip-audit` now reports no known vulnerabilities.
 
+- The PyPI publish workflow now builds, publishes and creates the GitHub Release in three jobs with disjoint permissions (the build never holds a publishing credential, the publish step never runs project code), and verifies before building that the tag names a genuine release: the tag's version equals `pyproject.toml`'s, the tagged commit is on `main` and changes only that version line. A manual run must name the version it publishes and that version must already be tagged, so no run can publish an untagged tree. CI workflows run read-only with credentials dropped after checkout, action pins are Dependabot-managed.
+
 ## [0.41.0] - 2026-05-14
 
 ### Added

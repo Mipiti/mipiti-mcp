@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Python dependencies are locked by lock-deps.py (hash-pinned *.lock
+  # files) and refreshed on purpose; only the Actions pins are
+  # Dependabot-managed.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"

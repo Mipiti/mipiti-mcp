@@ -1,21 +1,70 @@
 name: Publish to PyPI
 
+# Three jobs with disjoint privileges, per the PyPA publishing guide:
+#
+#   build    — contents: read. Verifies the release shape, builds the
+#              distributions, and hands them on as an artifact. Nothing
+#              in this job can mint an OIDC token or write to the repo,
+#              so the build backend runs with no publishing authority.
+#   publish  — id-token: write ONLY, behind the `pypi` environment.
+#              Uploads the artifact built above; never runs project code.
+#   release  — contents: write. Creates the GitHub Release from
+#              CHANGELOG.md once the package is on PyPI.
+#
+# What gets published is asserted before anything is built: the tag must
+# be a genuine release commit as produced by the release pipeline (see
+# scripts/check-release-shape.sh). A manual run must name the version it
+# publishes and that version must already be tagged on main, so no run
+# can publish an untagged tree.
+
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to publish (X.Y.Z). Must equal pyproject.toml's version
+          and an existing vX.Y.Z tag on main. Run the workflow from that
+          tag.
+        required: true
+        type: string
+
+permissions: {}
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
-      contents: write   # create GitHub Release
-      id-token: write   # OIDC for PyPI trusted publishing
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0  # full history: tag, its parent, and main
+          persist-credentials: false
+
+      - name: Verify release shape
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if ! printf '%s' "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::version input '$INPUT_VERSION' is not of the form X.Y.Z"
+              exit 1
+            fi
+            TAG="v${INPUT_VERSION}"
+          else
+            TAG="$REF_NAME"
+          fi
+          bash scripts/check-release-shape.sh "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Setup Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -31,17 +80,49 @@ jobs:
       - name: Verify package
         run: twine check dist/*
 
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC for PyPI trusted publishing
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
       - name: Publish to PyPI
         # v1.14.2 bundles twine>=7, which accepts Metadata-Version 2.5 (v1.13.0
         # bundled twine 6.2.0, whose hardcoded valid-version list caps at 2.4 —
         # its internal verify-metadata + upload reject a 2.5 wheel).
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
+  release:
+    needs: [build, publish]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create GitHub Release
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Create GitHub Release from CHANGELOG
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
           VERSION="${TAG#v}"
           # Extract the section between "## [VERSION]" and the next "## [" header.
@@ -53,6 +134,10 @@ jobs:
           if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
             NOTES="See [CHANGELOG.md](CHANGELOG.md) for release notes."
           fi
-          gh release create "$TAG" --title "$TAG" --notes "$NOTES" || \
-            echo "Release already exists or could not be created; skipping."
-
+          # A release that already exists is the only tolerated outcome;
+          # any other failure fails the job.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping."
+          else
+            gh release create "$TAG" --title "$TAG" --notes "$NOTES"
+          fi
