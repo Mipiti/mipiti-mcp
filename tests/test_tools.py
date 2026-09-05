@@ -110,6 +110,13 @@ from mipiti_mcp.server import (
     get_cwe_catalog,
     get_model_cwe_tags,
     classify_model_cwe,
+    get_control_work_order,
+    reconcile_model,
+    create_proposal,
+    list_proposals,
+    decide_proposal,
+    get_design_leverage,
+    set_model_provenance,
 )
 
 from .conftest import SAMPLE_CONTROLS, SAMPLE_MODELS_LIST, SAMPLE_THREAT_MODEL
@@ -602,6 +609,46 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "status": "ok", "catalog_version": "4.20", "cos": 0,
             "classified": 0, "tags_written": 0, "skipped": 0,
         },
+        "get_control_work_order": {
+            "model_id": "tm-001", "model_version": 3,
+            "control": {"id": "CTRL-01", "description": "Rate-limit login", "status": "not_implemented",
+                        "verification_status": "unverified", "orphaned": False,
+                        "component_ids": ["C1"], "implementation_notes": "",
+                        "open_assumptions": [], "verification_oracle": "", "assertion_count": 0},
+            "objectives": [{"co_id": "CO1", "statement": "x", "risk_tier": "high",
+                            "asset_id": "A1", "attacker_id": "T1",
+                            "mitigation_group": 1, "defense_in_depth": False}],
+            "max_tier": "high", "scan_brief": "Look for a limiter on the login route.",
+            "assertion_contract": {"types": [{"name": "function_exists", "description": "d",
+                                              "required_params": ["file", "name"], "behavioral": False}],
+                                   "evidence_rule": "r", "submit_with": "submit_assertions",
+                                   "verified_when": "w"},
+            "acceptance_criteria": ["a"], "steps": ["s"], "reconcile_rules": {},
+            "delegation": {"agent": "ci-agent", "permitted_rules": [], "note": ""},
+            "open_proposals": [], "provenance": {"kind": "code"},
+        },
+        "reconcile_model": {
+            "model_id": "tm-001", "model_version": 3,
+            "provenance": {"kind": "code", "authoritative": "code", "code_derived": True},
+            "changed_paths": {"components_changed": [], "unmapped_paths": [],
+                              "unmapped_count": 0, "refresh_recommended": False},
+            "refine_suggested": [], "proposals": [], "findings": [], "ignored": [],
+        },
+        "create_proposal": {"proposal": {"id": "P-1", "kind": "add_component", "status": "proposed"},
+                            "created": True},
+        "list_proposals": {"model_id": "tm-001", "model_version": 3, "items": [], "count": 0},
+        "decide_proposal": {"proposal": {"id": "P-1", "status": "accepted"}, "effect": "applied"},
+        "get_design_leverage": {
+            "model_id": "tm-001", "model_version": 3, "at_risk_total": 4, "objectives_total": 10,
+            "ranked": [{"kind": "attacker", "id": "T1", "name": "Anonymous internet",
+                        "objectives_removed": 3,
+                        "removes": {"critical": 1, "high": 2, "medium": 0, "low": 0},
+                        "removes_at_risk": 2, "removes_at_risk_by_tier": {"critical": 1, "high": 1},
+                        "controls_retired": ["CTRL-01"], "design_move": None}],
+            "next": "",
+        },
+        "set_model_provenance": {"id": "tm-001", "version": 4,
+                                 "description_provenance": {"kind": "code", "commit_sha": "abc"}},
     }
 
     for name, default_val in defaults.items():
@@ -899,6 +946,7 @@ class TestProgressChannelClosed:
 
         async def _client_call(
             _desc, force_generate=False, parent_id=None, on_progress=None,
+            provenance=None,
         ):
             if on_progress is not None:
                 await on_progress(1.0, 5.0, "Working")
@@ -5304,3 +5352,234 @@ class TestVerdictDivergenceTools:
                 await dismiss_verdict_divergences(
                     server_version="0", model_id="tm-001", items=items, reason="  ",
                 )
+
+
+# ------------------------------------------------------------------
+# Agent work orders, reconcile, proposals, design leverage, provenance
+# ------------------------------------------------------------------
+
+
+class TestGetControlWorkOrder:
+    @pytest.mark.asyncio
+    async def test_returns_work_order_verbatim(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_control_work_order(
+                server_version="0", model_id="tm-001", control_id="CTRL-01")
+        assert result["control"]["id"] == "CTRL-01"
+        assert result["assertion_contract"]["submit_with"] == "submit_assertions"
+        assert result["delegation"]["agent"] == "ci-agent"
+        mock.get_control_work_order.assert_awaited_once_with("tm-001", "CTRL-01")
+
+
+class TestReconcileModel:
+    @pytest.mark.asyncio
+    async def test_success_parses_paths_and_observations(self) -> None:
+        mock = _mock_client()
+        obs = json.dumps([
+            {"kind": "mechanism_named", "subject_id": "CTRL-01",
+             "evidence": {"paths": ["auth/limiter.py"], "note": "token bucket"}},
+            {"kind": "component_present",
+             "proposal": {"name": "worker", "path": "worker/"}},
+        ])
+        with _patch_client(mock):
+            result = await reconcile_model(
+                server_version="0", model_id="tm-001",
+                changed_paths="auth/limiter.py, worker/main.py\nREADME.md",
+                repo_url="https://github.com/org/repo", observations=obs,
+            )
+        assert result["model_id"] == "tm-001"
+        mock.reconcile_model.assert_awaited_once()
+        args, kwargs = mock.reconcile_model.await_args
+        assert args[0] == "tm-001"
+        assert args[1] == ["auth/limiter.py", "worker/main.py", "README.md"]
+        assert kwargs["repo_url"] == "https://github.com/org/repo"
+        assert kwargs["observations"][0]["kind"] == "mechanism_named"
+        assert kwargs["observations"][1]["proposal"]["name"] == "worker"
+
+    @pytest.mark.asyncio
+    async def test_paths_only(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await reconcile_model(
+                server_version="0", model_id="tm-001", changed_paths="a.py")
+        args, kwargs = mock.reconcile_model.await_args
+        assert args[1] == ["a.py"]
+        assert kwargs["observations"] == []
+
+    @pytest.mark.asyncio
+    async def test_bad_json_raises_tool_error(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await reconcile_model(
+                    server_version="0", model_id="tm-001", observations="{bad")
+            with pytest.raises(ToolError):
+                await reconcile_model(
+                    server_version="0", model_id="tm-001",
+                    observations=json.dumps({"kind": "mechanism_named"}))
+            with pytest.raises(ToolError):
+                await reconcile_model(
+                    server_version="0", model_id="tm-001",
+                    observations=json.dumps([{"kind": "not_a_kind"}]))
+        mock.reconcile_model.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_reconcile_raises(self) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await reconcile_model(server_version="0", model_id="tm-001")
+
+
+class TestCreateProposal:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await create_proposal(
+                server_version="0", model_id="tm-001", kind="add_component",
+                payload=json.dumps({"name": "worker", "path": "worker/"}),
+                rationale="A worker process exists in the repo.",
+                evidence=json.dumps({"paths": ["worker/main.py"]}),
+            )
+        assert result["created"] is True
+        mock.create_proposal.assert_awaited_once_with(
+            "tm-001", "add_component", {"name": "worker", "path": "worker/"},
+            "A worker process exists in the repo.",
+            evidence={"paths": ["worker/main.py"]},
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_evidence_sends_empty_object(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await create_proposal(
+                server_version="0", model_id="tm-001", kind="remove_component",
+                payload=json.dumps({"component_id": "C1"}), rationale="No code.")
+        assert mock.create_proposal.await_args.kwargs["evidence"] == {}
+
+    @pytest.mark.asyncio
+    async def test_bad_json_raises_tool_error(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await create_proposal(
+                    server_version="0", model_id="tm-001", kind="add_component",
+                    payload="{bad", rationale="r")
+            with pytest.raises(ToolError):
+                await create_proposal(
+                    server_version="0", model_id="tm-001", kind="add_component",
+                    payload=json.dumps(["not", "an", "object"]), rationale="r")
+            with pytest.raises(ToolError):
+                await create_proposal(
+                    server_version="0", model_id="tm-001", kind="add_component",
+                    payload=json.dumps({"name": "x"}), rationale="r", evidence="{bad")
+            with pytest.raises(ToolError):
+                await create_proposal(
+                    server_version="0", model_id="tm-001", kind="bogus",
+                    payload=json.dumps({"name": "x"}), rationale="r")
+        mock.create_proposal.assert_not_awaited()
+
+
+class TestListProposals:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_proposals(
+                server_version="0", model_id="tm-001", status="proposed")
+        assert result["count"] == 0
+        mock.list_proposals.assert_awaited_once_with("tm-001", status="proposed")
+
+
+class TestDecideProposal:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await decide_proposal(
+                server_version="0", model_id="tm-001", proposal_id="P-1",
+                decision="accept", note="ok")
+        assert result["effect"] == "applied"
+        mock.decide_proposal.assert_awaited_once_with("tm-001", "P-1", "accept", note="ok")
+
+    @pytest.mark.asyncio
+    async def test_bad_decision_raises(self) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await decide_proposal(
+                    server_version="0", model_id="tm-001", proposal_id="P-1",
+                    decision="maybe")
+
+    @pytest.mark.asyncio
+    async def test_refusal_surfaces_escalation_id(self) -> None:
+        import httpx
+        resp = httpx.Response(
+            403, json={"detail": {"message": "not delegated", "escalation_id": "ESC-9"}},
+            request=httpx.Request("POST", "https://api.mipiti.io/x"))
+        err = httpx.HTTPStatusError("403", request=resp.request, response=resp)
+        mock = _mock_client(decide_proposal=AsyncMock(side_effect=err))
+        with _patch_client(mock):
+            with pytest.raises(ToolError) as ei:
+                await decide_proposal(
+                    server_version="0", model_id="tm-001", proposal_id="P-1",
+                    decision="accept")
+        assert "ESC-9" in str(ei.value)
+
+
+class TestGetDesignLeverage:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await get_design_leverage(
+                server_version="0", model_id="tm-001", include_design_moves=True, top=3)
+        assert result["ranked"][0]["kind"] == "attacker"
+        mock.get_design_leverage.assert_awaited_once_with(
+            "tm-001", include_design_moves=True, top=3)
+
+
+class TestSetModelProvenance:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await set_model_provenance(
+                server_version="0", model_id="tm-001", kind="code",
+                repo_url="https://github.com/org/repo", commit_sha="abc123", ref="main")
+        assert result["version"] == 4
+        mock.set_model_provenance.assert_awaited_once_with(
+            "tm-001", "code", repo_url="https://github.com/org/repo",
+            commit_sha="abc123", ref="main", source_ref="", source_url="")
+
+    @pytest.mark.asyncio
+    async def test_bad_kind_raises(self) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError):
+                await set_model_provenance(
+                    server_version="0", model_id="tm-001", kind="guess")
+
+
+class TestGenerateThreatModelProvenance:
+    @pytest.mark.asyncio
+    async def test_forwards_provenance_when_kind_set(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await generate_threat_model(
+                server_version="0", feature_description="x", ctx=_mock_ctx(),
+                provenance_kind="code",
+                provenance_repo_url="https://github.com/org/repo",
+                provenance_commit_sha="abc123", provenance_ref="main")
+        prov = mock.generate_threat_model.await_args.kwargs["provenance"]
+        assert prov == {
+            "kind": "code", "repo_url": "https://github.com/org/repo",
+            "commit_sha": "abc123", "ref": "main", "source_ref": "", "source_url": "",
+        }
+
+    @pytest.mark.asyncio
+    async def test_omits_provenance_when_kind_empty(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await generate_threat_model(
+                server_version="0", feature_description="x", ctx=_mock_ctx())
+        assert mock.generate_threat_model.await_args.kwargs["provenance"] is None

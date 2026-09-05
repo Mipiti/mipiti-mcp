@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`get_control_work_order`** — the ticket for implementing one control:
+  scan brief, what counts as proof (the assertion contract), acceptance
+  criteria, steps, reconcile rules, what the calling agent may decide on
+  its own, open proposals, and the model's provenance. Call it before
+  implementing a control. Read-only.
+- **`reconcile_model`** — reconcile a model with the code it describes.
+  Takes the paths changed since the model's recorded commit plus the
+  agent's observations in four buckets (`mechanism_named`,
+  `component_present`, `component_absent`, `forbidden_behavior`); the
+  platform decides the consequence of each. Proposals are never applied
+  on the agent's word, except a component change on a code-derived model,
+  which is applied and queued for a person's review.
+- **`create_proposal`** / **`list_proposals`** / **`decide_proposal`** —
+  raise, poll, and decide changes of scope or design (`add_component`,
+  `remove_component`, `design_change`). Raising is not deciding; a
+  decision is refused with 403 and an `escalation_id` unless the
+  workspace's delegation policy names it for the agent at the proposal's
+  tier, and the refusal is parked for a person as a `decision_request`.
+- **`get_design_leverage`** — what eliminating each attacker position or
+  asset by design would remove from the matrix, ranked by critical then
+  high at-risk objectives removed, with an optional concrete
+  `design_move` per row. Read-only.
+- **`set_model_provenance`** — record where a model's description came
+  from (`code` / `ticket` / `document` / `manual` / `mixed`). `code` with
+  a commit SHA means the code is authoritative and the model follows it.
+
+### Changed
+
+- **`generate_threat_model`** accepts optional `provenance_kind`,
+  `provenance_repo_url`, `provenance_commit_sha`, `provenance_ref`,
+  `provenance_source_ref`, and `provenance_source_url` params so a model
+  generated from a repository records its source at creation. The
+  request is unchanged when they are empty.
+- **`get_review_queue`** rows now carry an `item_type` (`escalation`,
+  `proposal`, `open_assumption`, `stale_control`), ranked in that order;
+  escalations and proposals are decided with `decide_proposal`.
+- The server instructions say to call `get_control_work_order` before
+  implementing a control, to reconcile with `reconcile_model`, and that a
+  refused judgment is parked for a person: do not retry, poll
+  `list_proposals`.
+
 ### Removed
 
 - **`list_workspaces`.** Every MCP credential is bound to one workspace when

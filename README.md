@@ -86,13 +86,14 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->131<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->138<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
 | Tool | Description |
 |------|-------------|
-| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Progress reported automatically via MCP protocol — the tool blocks until complete. |
+| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Progress reported automatically via MCP protocol — the tool blocks until complete. Optional `provenance_*` params record where the description came from at creation (for a repository: `provenance_kind="code"` + `provenance_repo_url` + `provenance_commit_sha`). |
+| `set_model_provenance` | Record where a model's description came from (`code` / `ticket` / `document` / `manual` / `mixed`). `code` with a commit SHA means the code is authoritative and the model follows it; anything else means the description is intent and the code is measured against it. Bumps the model version. |
 | `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. |
 | `query_threat_model` | Ask a question about an existing threat model. |
 | `get_threat_model` | Get the full details of a specific threat model (trust boundaries, assets, attackers, assumptions). Use `include_cos=True` to include control objectives. |
@@ -157,10 +158,21 @@ uvx mipiti-mcp
 | `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |
 | `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? |
 | `get_scan_prompt` | Returns targeted prompts for scanning the codebase against not_implemented controls. |
-| `get_review_queue` | Controls not reviewed in 90+ days. Start here for periodic maintenance. |
+| `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal`, `open_assumption`, `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`. Start here for periodic maintenance. |
 | `submit_findings` / `list_findings` / `update_finding` | Report and track negative findings (gap discovery). |
 | `preview_finding_remediation` | Read-only. Returns a structured diff describing the changes a subsequent `apply_finding_remediation` call would make. Diff shape depends on the finding's kind (e.g. for `structural_duplicate_controls`: which controls would be kept, which dropped, the union of CO mappings + framework refs that would land on the survivor). Call before `apply_finding_remediation` so the operator can confirm. |
 | `apply_finding_remediation` | Mutates state: commits the changes `preview_finding_remediation` showed. Requires a non-empty `justification` (one-line operator rationale) recorded on the audit trail. The agent is responsible for the preview-then-apply norm — surface the diff and get explicit confirmation before calling. |
+
+### Agent work orders & delegation
+
+| Tool | Description |
+|------|-------------|
+| `get_control_work_order` | The ticket for implementing one control: scan brief, what counts as proof (assertion contract), acceptance criteria, steps, reconcile rules, what this agent may decide on its own, open proposals, and the model's provenance. Call before implementing a control. Read-only. |
+| `reconcile_model` | Reconcile the model with the code: pass the paths changed since the recorded commit and your observations (`mechanism_named`, `component_present`, `component_absent`, `forbidden_behavior`). The platform decides the consequence of each; proposals are never applied on the agent's word, except a component change on a code-derived model, which is applied and queued for a person's review. |
+| `create_proposal` | Raise a change of scope or design (`add_component`, `remove_component`, `design_change`). Raising is not deciding: a person (or an agent under a delegation rule) decides it with `decide_proposal`; design changes are never applied automatically. |
+| `list_proposals` | Proposals and escalations on a model with their status (`proposed` / `applied_pending_review` open; `accepted` / `rejected` / `reverted` / `superseded` closed). A refused judgment (403 with `escalation_id`) appears as a `decision_request`; poll here until a person resolves it. Read-only. |
+| `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. |
+| `get_design_leverage` | What eliminating each attacker position or asset by design would remove from the matrix, ranked by critical then high at-risk objectives removed. `include_design_moves=True` authors a concrete `design_move` per row; turn one into a `design_change` proposal with `create_proposal`. Read-only. |
 
 ### Assurance
 

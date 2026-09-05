@@ -2016,3 +2016,211 @@ async def test_classify_model_cwe_sends_force_param(mock_env: None) -> None:
     assert result["tags_written"] == 3
     assert route.calls.last.request.url.params["force"] == "true"
     await client.close()
+
+
+# ------------------------------------------------------------------
+# Agent work orders, reconcile, proposals, design leverage, provenance
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_generate_forwards_provenance(mock_env: None) -> None:
+    sse_payload = _build_sse_bytes([
+        ("result", {"type": "result", "markdown": "# Model", "csv": "", "threat_model": SAMPLE_THREAT_MODEL, "model_id": "tm-001", "version": 1}),
+    ])
+    route = respx.post("https://test.api.mipiti.io/api/model/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_payload,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    prov = {"kind": "code", "repo_url": "https://github.com/org/repo",
+            "commit_sha": "abc123", "ref": "main", "source_ref": "", "source_url": ""}
+    client = MipitiClient()
+    await client.generate_threat_model("Service", provenance=prov)
+    body = json.loads(route.calls.last.request.content)
+    assert body["provenance"] == prov
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_generate_omits_provenance_when_absent(mock_env: None) -> None:
+    sse_payload = _build_sse_bytes([
+        ("result", {"type": "result", "markdown": "# Model", "csv": "", "threat_model": SAMPLE_THREAT_MODEL, "model_id": "tm-001", "version": 1}),
+    ])
+    route = respx.post("https://test.api.mipiti.io/api/model/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_payload,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    client = MipitiClient()
+    await client.generate_threat_model("Service")
+    body = json.loads(route.calls.last.request.content)
+    assert "provenance" not in body
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_control_work_order(mock_env: None) -> None:
+    route = respx.get(f"{_BASE}/api/models/tm-001/controls/CTRL-01/work-order").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001", "control": {"id": "CTRL-01"}}),
+    )
+    client = MipitiClient()
+    result = await client.get_control_work_order("tm-001", "CTRL-01")
+    assert route.called
+    assert route.calls.last.request.method == "GET"
+    assert result["control"]["id"] == "CTRL-01"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_reconcile_model_sends_body(mock_env: None) -> None:
+    route = respx.post(f"{_BASE}/api/models/tm-001/reconcile").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001", "ignored": []}),
+    )
+    client = MipitiClient()
+    obs = [{"kind": "component_absent", "subject_id": "C1"}]
+    result = await client.reconcile_model(
+        "tm-001", ["a.py", "b.py"], repo_url="https://github.com/org/repo", observations=obs,
+    )
+    assert route.calls.last.request.method == "POST"
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "changed_paths": ["a.py", "b.py"],
+        "repo_url": "https://github.com/org/repo",
+        "observations": obs,
+    }
+    assert result["model_id"] == "tm-001"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_proposal_sends_body(mock_env: None) -> None:
+    route = respx.post(f"{_BASE}/api/models/tm-001/proposals").mock(
+        return_value=httpx.Response(201, json={"proposal": {"id": "P-1"}, "created": True}),
+    )
+    client = MipitiClient()
+    result = await client.create_proposal(
+        "tm-001", "design_change",
+        {"target_kind": "attacker", "target_id": "T1", "design_move": "Drop the public endpoint"},
+        "The endpoint is unused.", evidence={"paths": ["api/x.py"]},
+    )
+    assert route.calls.last.request.method == "POST"
+    body = json.loads(route.calls.last.request.content)
+    assert body["kind"] == "design_change"
+    assert body["payload"]["target_id"] == "T1"
+    assert body["rationale"] == "The endpoint is unused."
+    assert body["evidence"] == {"paths": ["api/x.py"]}
+    assert result["created"] is True
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_proposal_defaults_evidence_to_empty_object(mock_env: None) -> None:
+    route = respx.post(f"{_BASE}/api/models/tm-001/proposals").mock(
+        return_value=httpx.Response(201, json={"proposal": {}, "created": True}),
+    )
+    client = MipitiClient()
+    await client.create_proposal("tm-001", "remove_component", {"component_id": "C1"}, "No code.")
+    body = json.loads(route.calls.last.request.content)
+    assert body["evidence"] == {}
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_proposals_with_status_filter(mock_env: None) -> None:
+    route = respx.get(f"{_BASE}/api/models/tm-001/proposals").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001", "items": [], "count": 0}),
+    )
+    client = MipitiClient()
+    result = await client.list_proposals("tm-001", status="proposed")
+    assert route.calls.last.request.method == "GET"
+    assert route.calls.last.request.url.params["status"] == "proposed"
+    assert result["count"] == 0
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_proposals_without_status_sends_no_param(mock_env: None) -> None:
+    route = respx.get(f"{_BASE}/api/models/tm-001/proposals").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001", "items": [], "count": 0}),
+    )
+    client = MipitiClient()
+    await client.list_proposals("tm-001")
+    assert "status" not in route.calls.last.request.url.params
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_decide_proposal_sends_body(mock_env: None) -> None:
+    route = respx.post(f"{_BASE}/api/models/tm-001/proposals/P-1/decide").mock(
+        return_value=httpx.Response(200, json={"proposal": {"id": "P-1"}, "effect": "applied"}),
+    )
+    client = MipitiClient()
+    result = await client.decide_proposal("tm-001", "P-1", "accept", note="fine")
+    assert route.calls.last.request.method == "POST"
+    body = json.loads(route.calls.last.request.content)
+    assert body == {"decision": "accept", "note": "fine"}
+    assert result["effect"] == "applied"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_decide_proposal_refusal_raises_http_error(mock_env: None) -> None:
+    respx.post(f"{_BASE}/api/models/tm-001/proposals/P-1/decide").mock(
+        return_value=httpx.Response(
+            403, json={"detail": {"message": "not delegated", "escalation_id": "ESC-1"}}),
+    )
+    client = MipitiClient()
+    with pytest.raises(httpx.HTTPStatusError) as ei:
+        await client.decide_proposal("tm-001", "P-1", "accept")
+    assert ei.value.response.json()["detail"]["escalation_id"] == "ESC-1"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_design_leverage_sends_params(mock_env: None) -> None:
+    route = respx.get(f"{_BASE}/api/models/tm-001/design-leverage").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001", "ranked": []}),
+    )
+    client = MipitiClient()
+    result = await client.get_design_leverage("tm-001", include_design_moves=True, top=3)
+    assert route.calls.last.request.method == "GET"
+    params = route.calls.last.request.url.params
+    assert params["include_design_moves"] == "true"
+    assert params["top"] == "3"
+    assert result["ranked"] == []
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_set_model_provenance_sends_body(mock_env: None) -> None:
+    route = respx.put(f"{_BASE}/api/models/tm-001/provenance").mock(
+        return_value=httpx.Response(
+            200, json={"id": "tm-001", "version": 4, "description_provenance": {"kind": "code"}}),
+    )
+    client = MipitiClient()
+    result = await client.set_model_provenance(
+        "tm-001", "code", repo_url="https://github.com/org/repo", commit_sha="abc123", ref="main",
+    )
+    assert route.calls.last.request.method == "PUT"
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "kind": "code", "repo_url": "https://github.com/org/repo", "commit_sha": "abc123",
+        "ref": "main", "source_ref": "", "source_url": "",
+    }
+    assert result["version"] == 4
+    await client.close()
