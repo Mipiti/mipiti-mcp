@@ -129,6 +129,8 @@ A threat model produces control objectives. Controls are derived from these and 
 
 Sufficiency is evaluated automatically server-side when assertions are submitted — no manual trigger needed.
 
+Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
+
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
 1. `get_sufficiency` (or `get_verification_report` for the whole model) — **start here, it is free and it is usually the answer.** If `status` is `insufficient`, `details` names each uncovered clause and the evidence that would close it. That is the work list. Write those assertions.
@@ -654,6 +656,12 @@ async def generate_threat_model(
     ctx: Context,
     force: bool = False,
     parent_id: str | None = None,
+    provenance_kind: str = "",
+    provenance_repo_url: str = "",
+    provenance_commit_sha: str = "",
+    provenance_ref: str = "",
+    provenance_source_ref: str = "",
+    provenance_source_url: str = "",
 ) -> dict:
     """Generate a complete threat model from a feature description.
 
@@ -691,6 +699,23 @@ async def generate_threat_model(
             The child then inherits the parent's topology and
             participates in composition (delta / inherited control
             credit). Default None — the model is created flat.
+        provenance_kind: Where the description came from, one of
+            ``code``, ``ticket``, ``document``, ``manual``, ``mixed``.
+            Empty (default) records nothing. For an existing repository
+            pass ``provenance_kind="code"`` with ``provenance_repo_url``
+            and ``provenance_commit_sha`` (the HEAD you gathered from):
+            the code is then authoritative and the model follows it.
+            Any other kind means the description is intent and the code
+            is measured against it. The same record can be set later
+            with ``set_model_provenance``.
+        provenance_repo_url: Repository URL the description was
+            gathered from (``code`` kind).
+        provenance_commit_sha: Commit SHA the description was gathered
+            at (``code`` kind).
+        provenance_ref: Branch or tag name at that commit (optional).
+        provenance_source_ref: Identifier of the ticket or document the
+            description came from (``ticket`` / ``document`` kinds).
+        provenance_source_url: URL of that ticket or document.
 
     Return shape (normal generation):
         ``{"model_id", "version", "title", "asset_count",
@@ -724,11 +749,22 @@ async def generate_threat_model(
         last_progress_total[1] = total
         await _safe_report_progress(ctx, progress, total, message)
     try:
+        provenance = None
+        if provenance_kind.strip():
+            provenance = {
+                "kind": provenance_kind.strip(),
+                "repo_url": provenance_repo_url,
+                "commit_sha": provenance_commit_sha,
+                "ref": provenance_ref,
+                "source_ref": provenance_source_ref,
+                "source_url": provenance_source_url,
+            }
         result = await _get_client().generate_threat_model(
             feature_description,
             force_generate=force,
             parent_id=parent_id,
             on_progress=on_progress,
+            provenance=provenance,
         )
         # Emit a final 100% notification aligned with the sequence's total.
         # If on_progress was never called (stream had no step events), skip
@@ -2593,10 +2629,16 @@ async def assess_model(
 
 @mcp.tool()
 async def get_review_queue(server_version: str) -> dict:
-    """Returns controls not reviewed in 90+ days.
+    """Returns the workspace's review queue: what needs a decision or a
+    re-check, ranked. Read-only; no side effects.
 
-    Lists implemented/verified controls whose assertions have not been checked
-    recently. For each stale control, verify assertions against codebase.
+    Each row carries an ``item_type``, one of ``escalation`` (a judgment an
+    agent was refused and parked for a person), ``proposal`` (an open change
+    of scope or design), ``open_assumption``, or ``stale_control`` (an
+    implemented/verified control whose assertions have not been checked in
+    90+ days). Rows are ranked in that order. Escalations and proposals are
+    decided with ``decide_proposal``; for each stale control, verify its
+    assertions against the codebase. Start here for periodic maintenance.
     """
     try:
         return _dump(await _get_client().get_review_queue())
@@ -6522,6 +6564,469 @@ async def auto_remediate_compliance(
         if isinstance(result, dict) and "job_id" in result:
             return await _await_backend_job(client, result["job_id"], ctx)
         return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Agent work orders, reconcile, proposals, design leverage, provenance ===
+
+
+@mcp.tool()
+async def get_control_work_order(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+) -> dict:
+    """Get the work order for one control. Call this BEFORE implementing a
+    control: it is the ticket. Read-only; no side effects.
+
+    The work order bundles everything an implementing agent needs in one
+    read: the scan brief (where to look and what to look for), what counts
+    as proof (the ``assertion_contract``: which assertion types apply, the
+    evidence rule, what to submit with, and when the control counts as
+    verified), the ``acceptance_criteria`` and ``steps``, the
+    ``reconcile_rules`` to follow when the code disagrees with the model,
+    the ``delegation`` block (what this agent may decide on its own and
+    what must be escalated), any ``open_proposals`` on the control, and
+    the model's ``provenance`` (whether the code or the description is
+    authoritative).
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control to implement (e.g. "CTRL-03").
+
+    Returns the work order verbatim: ``{model_id, model_version,
+    control{id, description, status, verification_status, orphaned,
+    component_ids, implementation_notes, open_assumptions[],
+    verification_oracle, assertion_count}, objectives[{co_id, statement,
+    risk_tier, asset_id, attacker_id, mitigation_group, defense_in_depth}],
+    max_tier, scan_brief, assertion_contract{types[{name, description,
+    required_params, behavioral}], evidence_rule, submit_with,
+    verified_when}, acceptance_criteria[], steps[], reconcile_rules,
+    delegation{agent, permitted_rules[], note}, open_proposals[],
+    provenance}``.
+    """
+    try:
+        return await _get_client().get_control_work_order(model_id, control_id)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+def _parse_path_list(raw: Optional[str]) -> List[str]:
+    """Split a comma- or newline-separated path list into a clean list."""
+    if not raw:
+        return []
+    out: List[str] = []
+    for chunk in raw.replace("\r", "\n").split("\n"):
+        for item in chunk.split(","):
+            item = item.strip()
+            if item:
+                out.append(item)
+    return out
+
+
+_RECONCILE_OBSERVATION_KINDS = (
+    "mechanism_named", "component_present", "component_absent", "forbidden_behavior",
+)
+
+
+@mcp.tool()
+async def reconcile_model(
+    server_version: str,
+    model_id: str,
+    changed_paths: Optional[str] = None,
+    repo_url: str = "",
+    observations: Optional[str] = None,
+) -> dict:
+    """Reconcile a threat model with the code it describes. Call this after
+    reading the code and before (or instead of) editing the model by hand:
+    report what changed and what you observed, and the platform decides the
+    consequence of each observation. Mutating only where the platform
+    applies an observation (see below).
+
+    Two inputs, both optional:
+
+    - ``changed_paths``: the file paths that changed since the model's
+      recorded commit. For a code-derived model compute them with
+      ``git diff --name-only <commit_sha>..HEAD`` (the ``commit_sha`` from
+      the model's provenance). The platform maps them onto components and
+      reports which components changed, which paths no component claims,
+      and whether a refresh is recommended.
+    - ``observations``: what you saw in the code that the model does not
+      say. Each observation lands in one of four buckets by ``kind``:
+
+      * ``mechanism_named`` - the control's mechanism exists under another
+        name (``subject_id`` = control id). Follow up with ``refine_control``
+        using the ``codebase_findings`` returned in ``refine_suggested``.
+      * ``component_present`` - the code has a component the model lacks;
+        include a ``proposal`` (``{name, repo_url?, path?,
+        trust_boundary_ids?}``).
+      * ``component_absent`` - a modelled component has no code
+        (``subject_id`` = component id).
+      * ``forbidden_behavior`` - the code does something the model rules
+        out (``subject_id`` = control id, or empty).
+
+    The platform decides the consequence. Proposals are never applied on
+    the agent's word, with one exception: a component change on a
+    code-derived model (provenance ``kind="code"``) is applied immediately
+    and queued for a person's review as ``applied_pending_review``. Every
+    other proposal waits for ``decide_proposal``. Forbidden behaviors
+    become findings. Observations the platform could not use come back in
+    ``ignored`` with the reason.
+
+    Args:
+        model_id: ID of the threat model.
+        changed_paths: Comma- or newline-separated file paths that changed
+            since the model's recorded commit. Empty/None skips path mapping
+            (``changed_paths`` in the response is then null).
+        repo_url: Repository the paths belong to (optional; helps map paths
+            in multi-repo models).
+        observations: JSON string of an **array** of observation objects,
+            each ``{kind, subject_id?, evidence?: {paths?: [], symbols?: [],
+            note?: ""}, proposal?: {name, repo_url?, path?,
+            trust_boundary_ids?}}`` with ``kind`` one of ``mechanism_named``,
+            ``component_present``, ``component_absent``,
+            ``forbidden_behavior``. Empty/None sends no observations.
+
+    Returns ``{model_id, model_version, provenance{kind, authoritative,
+    code_derived, ...}, changed_paths: null | {components_changed[{
+    component_id, name, changed_files, sample_paths, live_controls}],
+    unmapped_paths[], unmapped_count, refresh_recommended},
+    refine_suggested[{control_id, current_description, open_assumptions,
+    codebase_findings, next}], proposals[], findings[], ignored[{index,
+    reason}]}``.
+    """
+    paths = _parse_path_list(changed_paths)
+    parsed_obs: List[dict] = []
+    if observations is not None and observations.strip():
+        try:
+            parsed_obs = json.loads(observations)
+        except json.JSONDecodeError as exc:
+            raise ToolError(
+                "observations must be a JSON array of observation objects."
+            ) from exc
+        if not isinstance(parsed_obs, list):
+            raise ToolError("observations must be a JSON array of observation objects.")
+        for i, obs in enumerate(parsed_obs):
+            if not isinstance(obs, dict):
+                raise ToolError(f"observations[{i}] must be an object.")
+            kind = obs.get("kind")
+            if kind not in _RECONCILE_OBSERVATION_KINDS:
+                raise ToolError(
+                    f"observations[{i}].kind must be one of "
+                    f"{', '.join(_RECONCILE_OBSERVATION_KINDS)}."
+                )
+            if "evidence" in obs and obs["evidence"] is not None and not isinstance(obs["evidence"], dict):
+                raise ToolError(f"observations[{i}].evidence must be an object.")
+            if "proposal" in obs and obs["proposal"] is not None and not isinstance(obs["proposal"], dict):
+                raise ToolError(f"observations[{i}].proposal must be an object.")
+    if not paths and not parsed_obs:
+        raise ToolError("Provide changed_paths, observations, or both.")
+    try:
+        return await _get_client().reconcile_model(
+            model_id, paths, repo_url=repo_url, observations=parsed_obs,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+_PROPOSAL_KINDS = ("add_component", "remove_component", "design_change")
+
+
+def _parse_json_object(raw: str, name: str, required: bool) -> dict:
+    """Parse a JSON-object string tool param; empty is ``{}`` when optional."""
+    if not raw or not raw.strip():
+        if required:
+            raise ToolError(f"{name} must be a JSON object.")
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ToolError(f"{name} must be a JSON object.") from exc
+    if not isinstance(parsed, dict):
+        raise ToolError(f"{name} must be a JSON object.")
+    return parsed
+
+
+@mcp.tool()
+async def create_proposal(
+    server_version: str,
+    model_id: str,
+    kind: str,
+    payload: str,
+    rationale: str,
+    evidence: str = "",
+) -> dict:
+    """Raise a proposal to change a model's scope or design. Call this when
+    the code or your analysis says the model should gain or lose a
+    component, or that an attacker position or asset should be removed by
+    design; do not edit the model directly for those changes. Mutating:
+    persists a proposal record.
+
+    A proposal is a change of scope or design. Raising one is not deciding
+    it: a person (or an agent under a delegation rule that names the
+    decision) decides it with ``decide_proposal``. Design changes are never
+    applied automatically. Poll ``list_proposals`` for the outcome.
+
+    Args:
+        model_id: ID of the threat model.
+        kind: One of ``add_component`` (payload ``{name, repo_url?, path?,
+            trust_boundary_ids?}``), ``remove_component`` (payload
+            ``{component_id}``), ``design_change`` (payload ``{target_kind:
+            "attacker"|"asset", target_id, design_move}``; take ``design_move``
+            from ``get_design_leverage``).
+        payload: JSON object string with the fields for ``kind``.
+        rationale: Why this change is right (what in the code or design
+            supports it).
+        evidence: Optional JSON object string, e.g. ``{paths: [], symbols:
+            [], note: ""}``, pointing at what you saw.
+
+    Returns ``{proposal, created}``.
+    """
+    if kind not in _PROPOSAL_KINDS:
+        raise ToolError(f"kind must be one of {', '.join(_PROPOSAL_KINDS)}.")
+    if not rationale.strip():
+        raise ToolError("rationale is required.")
+    parsed_payload = _parse_json_object(payload, "payload", required=True)
+    parsed_evidence = _parse_json_object(evidence, "evidence", required=False)
+    try:
+        return await _get_client().create_proposal(
+            model_id, kind, parsed_payload, rationale.strip(),
+            evidence=parsed_evidence,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_proposals(
+    server_version: str,
+    model_id: str,
+    status: str = "",
+) -> dict:
+    """List proposals and escalations on a model. Call this to poll the
+    outcome of a proposal you raised, or of a judgment you were refused.
+    Read-only; no side effects.
+
+    Statuses: ``proposed`` and ``applied_pending_review`` are open;
+    ``accepted``, ``rejected``, ``reverted``, ``superseded`` are closed.
+    Kinds include ``add_component``, ``remove_component``,
+    ``design_change``, and ``decision_request``: an escalation of a
+    judgment this agent was refused. A 403 from ``update_finding``,
+    ``create_risk_acceptance``, or ``decide_proposal`` carries an
+    ``escalation_id``; that escalation appears here as a
+    ``decision_request``. Poll it here until a person resolves it; do not
+    retry the refused call.
+
+    Args:
+        model_id: ID of the threat model.
+        status: Optional status filter (one of the values above). Empty
+            (default) returns every proposal.
+
+    Returns ``{model_id, model_version, items[], count}``.
+    """
+    try:
+        return await _get_client().list_proposals(model_id, status=status)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def decide_proposal(
+    server_version: str,
+    model_id: str,
+    proposal_id: str,
+    decision: str,
+    note: str = "",
+) -> dict:
+    """Accept or reject a proposal. Call this only when the workspace's
+    delegation policy names this decision for this agent at the proposal's
+    tier (the ``delegation`` block of ``get_control_work_order`` says what
+    you may decide). Mutating: closes the proposal and applies an accepted
+    change.
+
+    This is a judgment. The call is refused with HTTP 403 and an
+    ``escalation_id`` unless the delegation policy permits it; the refusal
+    parks the decision for a person as a ``decision_request``. Do not retry
+    a refusal: report the ``escalation_id``, poll ``list_proposals`` for the
+    outcome, and continue other work.
+
+    Args:
+        model_id: ID of the threat model.
+        proposal_id: ID of the proposal to decide.
+        decision: ``accept`` or ``reject``.
+        note: Optional note recorded with the decision.
+
+    Returns ``{proposal, effect}``.
+    """
+    if decision not in ("accept", "reject"):
+        raise ToolError("decision must be 'accept' or 'reject'.")
+    try:
+        return await _get_client().decide_proposal(
+            model_id, proposal_id, decision, note=note,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_design_leverage(
+    server_version: str,
+    model_id: str,
+    include_design_moves: bool = False,
+    top: int = 5,
+) -> dict:
+    """Rank what eliminating each attacker position or asset BY DESIGN
+    would remove from the matrix. Call this when deciding whether to
+    change the design instead of implementing controls: it shows which
+    single design change retires the most critical and high at-risk
+    objectives. Read-only; no side effects.
+
+    Each row in ``ranked`` is an attacker or asset with the objectives its
+    removal would take out of the matrix (``objectives_removed``, broken
+    down by tier in ``removes``), how many of those are currently at risk
+    (``removes_at_risk`` / ``removes_at_risk_by_tier``), and the controls
+    that would be retired. Rows are ranked by critical, then high, at-risk
+    objectives removed. ``design_move`` (a concrete change of design that
+    would eliminate the row) is filled only when ``include_design_moves``
+    is true. To act on a row, raise a ``design_change`` proposal with
+    ``create_proposal``; never apply a design change yourself.
+
+    Args:
+        model_id: ID of the threat model.
+        include_design_moves: Also author a ``design_move`` per row.
+            Default False.
+        top: Number of rows to return. Default 5.
+
+    Returns ``{model_id, model_version, at_risk_total, objectives_total,
+    ranked[{kind: "attacker"|"asset", id, name, objectives_removed,
+    removes{critical, high, medium, low}, removes_at_risk,
+    removes_at_risk_by_tier, controls_retired[], design_move}], next}``.
+    """
+    try:
+        return await _get_client().get_design_leverage(
+            model_id, include_design_moves=include_design_moves, top=top,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+_PROVENANCE_KINDS = ("code", "ticket", "document", "manual", "mixed")
+
+
+@mcp.tool()
+async def set_model_provenance(
+    server_version: str,
+    model_id: str,
+    kind: str,
+    repo_url: str = "",
+    commit_sha: str = "",
+    ref: str = "",
+    source_ref: str = "",
+    source_url: str = "",
+) -> dict:
+    """Record where a model's description came from. Call this right after
+    generating a model from a repository (or pass the ``provenance_*``
+    params to ``generate_threat_model``), and again whenever the source
+    changes. Mutating: bumps the model version.
+
+    ``kind="code"`` with a ``commit_sha`` means the code is authoritative
+    and the model follows it: ``reconcile_model`` measures the model
+    against the code, and component changes observed in the code are
+    applied and queued for review. Any other kind (``ticket``,
+    ``document``, ``manual``, ``mixed``) means the description is intent
+    and the code is measured against it.
+
+    Args:
+        model_id: ID of the threat model.
+        kind: One of ``code``, ``ticket``, ``document``, ``manual``, ``mixed``.
+        repo_url: Repository URL (``code``).
+        commit_sha: Commit the description was gathered at (``code``).
+        ref: Branch or tag at that commit (optional).
+        source_ref: Ticket key or document identifier (``ticket`` /
+            ``document``).
+        source_url: URL of the ticket or document.
+
+    Returns ``{id, version, description_provenance}``.
+    """
+    if kind not in _PROVENANCE_KINDS:
+        raise ToolError(f"kind must be one of {', '.join(_PROVENANCE_KINDS)}.")
+    try:
+        return await _get_client().set_model_provenance(
+            model_id, kind,
+            repo_url=repo_url, commit_sha=commit_sha, ref=ref,
+            source_ref=source_ref, source_url=source_url,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+_DECISION_KINDS = (
+    "finding_dismissed",
+    "finding_remediated",
+    "risk_accepted",
+    "not_applicable_declared",
+    "proposal_accepted",
+    "proposal_rejected",
+    "proposal_reverted",
+    "escalation_resolved",
+)
+
+
+@mcp.tool()
+async def list_decisions(
+    server_version: str,
+    model_id: str,
+    agent_only: bool = False,
+    outside_policy_only: bool = False,
+    decision: str = "",
+    limit: int = 0,
+) -> dict:
+    """List the decision ledger of a model: every judgment recorded on it
+    (finding dismissed or remediated, risk accepted, not-applicable
+    declared, proposal accepted / rejected / reverted, escalation
+    resolved), newest first, with who made it and whether it was within
+    the workspace's delegation policy. Read-only; no side effects.
+
+    Call this BEFORE raising a proposal or asking for a judgment, so you
+    do not propose what a person rejected or ask again for what was
+    already decided.
+
+    The ledger is append-only. There is no tool that edits it; to undo an
+    accepted proposal, revert or re-decide, never edit the record. Rows
+    with ``outcome == "refused"`` are judgments a program was refused;
+    their escalation, if any, is in ``list_proposals``. ``agent`` is null
+    for a person's decision.
+
+    Args:
+        model_id: ID of the threat model.
+        agent_only: Only decisions made by a program (``agent`` not null).
+            Default False.
+        outside_policy_only: Only decisions made outside the delegation
+            policy in force at the time (``within_policy`` false).
+            Default False.
+        decision: Optional kind filter, one of ``finding_dismissed``,
+            ``finding_remediated``, ``risk_accepted``,
+            ``not_applicable_declared``, ``proposal_accepted``,
+            ``proposal_rejected``, ``proposal_reverted``,
+            ``escalation_resolved``. Empty (default) returns every kind.
+        limit: Maximum rows to return. 0 (default) uses the server default.
+
+    Returns ``{model_id, model_version, items[{id, decision, subject_kind,
+    subject_id, outcome, principal_user_id, agent: null | {kind, client_id,
+    name}, policy_version, within_policy, rationale, created_at}], count,
+    total}``.
+    """
+    if decision and decision not in _DECISION_KINDS:
+        raise ToolError(f"decision must be one of {', '.join(_DECISION_KINDS)}.")
+    try:
+        return await _get_client().list_decisions(
+            model_id,
+            agent_only=agent_only,
+            outside_policy_only=outside_policy_only,
+            decision=decision,
+            limit=limit,
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 

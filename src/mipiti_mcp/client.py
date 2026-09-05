@@ -214,6 +214,7 @@ class MipitiClient:
         force_generate: bool = False,
         parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """POST /api/model/stream, consume SSE events, return final payload.
 
@@ -233,6 +234,8 @@ class MipitiClient:
             body["force_generate"] = True
         if parent_id:
             body["parent_id"] = parent_id
+        if provenance:
+            body["provenance"] = provenance
 
         # Generate a fresh Idempotency-Key for this stream request. The
         # streaming endpoint handles caching directly (the global middleware
@@ -304,6 +307,7 @@ class MipitiClient:
         force_generate: bool = False,
         parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> GenerateResult | dict:
         """Returns a ``GenerateResult`` on normal generation, OR a raw
         ``{"similar_models": [{id, title, reason}, ...]}`` dict when
@@ -315,12 +319,18 @@ class MipitiClient:
         under that parent on the recursive composition tree, so it
         inherits topology and participates in delta / inherited-credit
         composition.
+
+        When ``provenance`` is provided it is sent as the ``provenance``
+        key of the request body (``{kind, repo_url, commit_sha, ref,
+        source_ref, source_url}``) so the model records where its
+        description came from at creation time. ``None`` omits the key.
         """
         data = await self._stream_model(
             [{"role": "user", "content": feature_description}],
             force_generate=force_generate,
             parent_id=parent_id,
             on_progress=on_progress,
+            provenance=provenance,
         )
         if isinstance(data, dict) and "similar_models" in data:
             return data
@@ -2572,4 +2582,158 @@ class MipitiClient:
         """
         return await self._post(
             f"/api/models/{model_id}/cwe/classify", params={"force": force},
+        )
+
+
+    # ------------------------------------------------------------------
+    # Agent work orders, reconcile, proposals, design leverage, provenance
+    # ------------------------------------------------------------------
+
+    async def get_control_work_order(self, model_id: str, control_id: str) -> dict:
+        """GET /api/models/{model_id}/controls/{control_id}/work-order.
+
+        Read-only ticket for implementing one control: scan brief, the
+        assertion contract (what counts as proof), acceptance criteria,
+        steps, reconcile rules, the delegation the calling agent holds,
+        open proposals on the control, and the model's provenance.
+        Returned verbatim.
+        """
+        return await self._get(
+            f"/api/models/{model_id}/controls/{control_id}/work-order"
+        )
+
+    async def reconcile_model(
+        self,
+        model_id: str,
+        changed_paths: list[str],
+        repo_url: str = "",
+        observations: list[dict] | None = None,
+    ) -> dict:
+        """POST /api/models/{model_id}/reconcile.
+
+        Sends the paths that changed since the model's recorded commit plus
+        the agent's observations about the code; the server maps paths to
+        components, sorts the observations into buckets, and returns the
+        outcome envelope verbatim.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/reconcile",
+            {
+                "changed_paths": list(changed_paths),
+                "repo_url": repo_url,
+                "observations": list(observations or []),
+            },
+        )
+
+    async def create_proposal(
+        self,
+        model_id: str,
+        kind: str,
+        payload: dict,
+        rationale: str,
+        evidence: dict | None = None,
+    ) -> dict:
+        """POST /api/models/{model_id}/proposals.
+
+        Raises a proposal of the given kind (``add_component``,
+        ``remove_component``, ``design_change``). Returns
+        ``{proposal, created}``.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/proposals",
+            {
+                "kind": kind,
+                "payload": payload,
+                "rationale": rationale,
+                "evidence": evidence or {},
+            },
+        )
+
+    async def list_proposals(self, model_id: str, status: str = "") -> dict:
+        """GET /api/models/{model_id}/proposals[?status=].
+
+        Read-only. Returns ``{model_id, model_version, items, count}``.
+        """
+        params = {"status": status} if status else None
+        return await self._get(f"/api/models/{model_id}/proposals", params=params)
+
+    async def decide_proposal(
+        self, model_id: str, proposal_id: str, decision: str, note: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/proposals/{proposal_id}/decide.
+
+        Accept or reject a proposal. Returns ``{proposal, effect}``; a
+        refusal surfaces as an HTTP 403 whose detail carries
+        ``escalation_id``.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/proposals/{proposal_id}/decide",
+            {"decision": decision, "note": note},
+        )
+
+    async def get_design_leverage(
+        self, model_id: str, include_design_moves: bool = False, top: int = 5,
+    ) -> dict:
+        """GET /api/models/{model_id}/design-leverage.
+
+        Read-only ranking of what removing each attacker position or asset
+        by design would take out of the matrix.
+        """
+        return await self._get(
+            f"/api/models/{model_id}/design-leverage",
+            params={"include_design_moves": include_design_moves, "top": top},
+        )
+
+    async def set_model_provenance(
+        self,
+        model_id: str,
+        kind: str,
+        repo_url: str = "",
+        commit_sha: str = "",
+        ref: str = "",
+        source_ref: str = "",
+        source_url: str = "",
+    ) -> dict:
+        """PUT /api/models/{model_id}/provenance.
+
+        Records where the model's description came from. Bumps the model
+        version. Returns ``{id, version, description_provenance}``.
+        """
+        return await self._put(
+            f"/api/models/{model_id}/provenance",
+            {
+                "kind": kind,
+                "repo_url": repo_url,
+                "commit_sha": commit_sha,
+                "ref": ref,
+                "source_ref": source_ref,
+                "source_url": source_url,
+            },
+        )
+
+    async def list_decisions(
+        self,
+        model_id: str,
+        agent_only: bool = False,
+        outside_policy_only: bool = False,
+        decision: str = "",
+        limit: int = 0,
+    ) -> dict:
+        """GET /api/models/{model_id}/decisions[?agent_only=&outside_policy_only=&decision=&limit=].
+
+        Read-only. Only non-default filters are sent as query params
+        (booleans as ``true``/``false``). Returns ``{model_id,
+        model_version, items, count, total}`` newest first.
+        """
+        params: dict[str, Any] = {}
+        if agent_only:
+            params["agent_only"] = "true"
+        if outside_policy_only:
+            params["outside_policy_only"] = "true"
+        if decision:
+            params["decision"] = decision
+        if limit:
+            params["limit"] = limit
+        return await self._get(
+            f"/api/models/{model_id}/decisions", params=params or None,
         )
