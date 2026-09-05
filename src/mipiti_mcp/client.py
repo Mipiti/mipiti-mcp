@@ -2710,3 +2710,30 @@ class MipitiClient:
                 "source_url": source_url,
             },
         )
+
+    async def list_decisions(
+        self,
+        model_id: str,
+        agent_only: bool = False,
+        outside_policy_only: bool = False,
+        decision: str = "",
+        limit: int = 0,
+    ) -> dict:
+        """GET /api/models/{model_id}/decisions[?agent_only=&outside_policy_only=&decision=&limit=].
+
+        Read-only. Only non-default filters are sent as query params
+        (booleans as ``true``/``false``). Returns ``{model_id,
+        model_version, items, count, total}`` newest first.
+        """
+        params: dict[str, Any] = {}
+        if agent_only:
+            params["agent_only"] = "true"
+        if outside_policy_only:
+            params["outside_policy_only"] = "true"
+        if decision:
+            params["decision"] = decision
+        if limit:
+            params["limit"] = limit
+        return await self._get(
+            f"/api/models/{model_id}/decisions", params=params or None,
+        )

@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`set_model_provenance`** — record where a model's description came
   from (`code` / `ticket` / `document` / `manual` / `mixed`). `code` with
   a commit SHA means the code is authoritative and the model follows it.
+- **`list_decisions`** — the model's decision ledger: every judgment
+  recorded on it (finding dismissed / remediated, risk accepted,
+  not-applicable declared, proposal accepted / rejected / reverted,
+  escalation resolved), newest first, with who decided, whether it was
+  within the delegation policy, and the rationale. Filters: `agent_only`,
+  `outside_policy_only`, `decision`, `limit`. The ledger is append-only;
+  nothing edits it. Call it before raising a proposal or asking for a
+  judgment. Read-only.
 
 ### Changed
 
@@ -46,9 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `proposal`, `open_assumption`, `stale_control`), ranked in that order;
   escalations and proposals are decided with `decide_proposal`.
 - The server instructions say to call `get_control_work_order` before
-  implementing a control, to reconcile with `reconcile_model`, and that a
-  refused judgment is parked for a person: do not retry, poll
-  `list_proposals`.
+  implementing a control, to reconcile with `reconcile_model`, to check
+  `list_decisions` before proposing, and that a refused judgment is parked
+  for a person: do not retry, poll `list_proposals`.
 
 ### Removed
 

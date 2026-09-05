@@ -117,6 +117,7 @@ from mipiti_mcp.server import (
     decide_proposal,
     get_design_leverage,
     set_model_provenance,
+    list_decisions,
 )
 
 from .conftest import SAMPLE_CONTROLS, SAMPLE_MODELS_LIST, SAMPLE_THREAT_MODEL
@@ -649,6 +650,14 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         },
         "set_model_provenance": {"id": "tm-001", "version": 4,
                                  "description_provenance": {"kind": "code", "commit_sha": "abc"}},
+        "list_decisions": {
+            "model_id": "tm-001", "model_version": 3,
+            "items": [{"id": "D-1", "decision": "proposal_rejected", "subject_kind": "proposal",
+                       "subject_id": "P-1", "outcome": "decided", "principal_user_id": "u1",
+                       "agent": None, "policy_version": 2, "within_policy": True,
+                       "rationale": "out of scope", "created_at": "2026-09-01T00:00:00Z"}],
+            "count": 1, "total": 1,
+        },
     }
 
     for name, default_val in defaults.items():
@@ -5583,3 +5592,36 @@ class TestGenerateThreatModelProvenance:
             await generate_threat_model(
                 server_version="0", feature_description="x", ctx=_mock_ctx())
         assert mock.generate_threat_model.await_args.kwargs["provenance"] is None
+
+
+class TestListDecisions:
+    @pytest.mark.asyncio
+    async def test_success(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_decisions(
+                server_version="0", model_id="tm-001", agent_only=True,
+                outside_policy_only=True, decision="proposal_rejected", limit=10)
+        assert result["total"] == 1
+        assert result["items"][0]["decision"] == "proposal_rejected"
+        assert result["items"][0]["agent"] is None
+        mock.list_decisions.assert_awaited_once_with(
+            "tm-001", agent_only=True, outside_policy_only=True,
+            decision="proposal_rejected", limit=10)
+
+    @pytest.mark.asyncio
+    async def test_unknown_decision_raises(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="decision must be one of"):
+                await list_decisions(
+                    server_version="0", model_id="tm-001", decision="finding_ignored")
+        mock.list_decisions.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_defaults_not_sent(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await list_decisions(server_version="0", model_id="tm-001")
+        mock.list_decisions.assert_awaited_once_with(
+            "tm-001", agent_only=False, outside_policy_only=False, decision="", limit=0)

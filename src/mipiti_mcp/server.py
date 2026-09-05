@@ -129,7 +129,7 @@ A threat model produces control objectives. Controls are derived from these and 
 
 Sufficiency is evaluated automatically server-side when assertions are submitted — no manual trigger needed.
 
-Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
+Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -6956,6 +6956,76 @@ async def set_model_provenance(
             model_id, kind,
             repo_url=repo_url, commit_sha=commit_sha, ref=ref,
             source_ref=source_ref, source_url=source_url,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+_DECISION_KINDS = (
+    "finding_dismissed",
+    "finding_remediated",
+    "risk_accepted",
+    "not_applicable_declared",
+    "proposal_accepted",
+    "proposal_rejected",
+    "proposal_reverted",
+    "escalation_resolved",
+)
+
+
+@mcp.tool()
+async def list_decisions(
+    server_version: str,
+    model_id: str,
+    agent_only: bool = False,
+    outside_policy_only: bool = False,
+    decision: str = "",
+    limit: int = 0,
+) -> dict:
+    """List the decision ledger of a model: every judgment recorded on it
+    (finding dismissed or remediated, risk accepted, not-applicable
+    declared, proposal accepted / rejected / reverted, escalation
+    resolved), newest first, with who made it and whether it was within
+    the workspace's delegation policy. Read-only; no side effects.
+
+    Call this BEFORE raising a proposal or asking for a judgment, so you
+    do not propose what a person rejected or ask again for what was
+    already decided.
+
+    The ledger is append-only. There is no tool that edits it; to undo an
+    accepted proposal, revert or re-decide, never edit the record. Rows
+    with ``outcome == "refused"`` are judgments a program was refused;
+    their escalation, if any, is in ``list_proposals``. ``agent`` is null
+    for a person's decision.
+
+    Args:
+        model_id: ID of the threat model.
+        agent_only: Only decisions made by a program (``agent`` not null).
+            Default False.
+        outside_policy_only: Only decisions made outside the delegation
+            policy in force at the time (``within_policy`` false).
+            Default False.
+        decision: Optional kind filter, one of ``finding_dismissed``,
+            ``finding_remediated``, ``risk_accepted``,
+            ``not_applicable_declared``, ``proposal_accepted``,
+            ``proposal_rejected``, ``proposal_reverted``,
+            ``escalation_resolved``. Empty (default) returns every kind.
+        limit: Maximum rows to return. 0 (default) uses the server default.
+
+    Returns ``{model_id, model_version, items[{id, decision, subject_kind,
+    subject_id, outcome, principal_user_id, agent: null | {kind, client_id,
+    name}, policy_version, within_policy, rationale, created_at}], count,
+    total}``.
+    """
+    if decision and decision not in _DECISION_KINDS:
+        raise ToolError(f"decision must be one of {', '.join(_DECISION_KINDS)}.")
+    try:
+        return await _get_client().list_decisions(
+            model_id,
+            agent_only=agent_only,
+            outside_policy_only=outside_policy_only,
+            decision=decision,
+            limit=limit,
         )
     except Exception as exc:
         raise _api_error(exc) from exc

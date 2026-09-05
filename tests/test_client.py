@@ -2224,3 +2224,37 @@ async def test_set_model_provenance_sends_body(mock_env: None) -> None:
     }
     assert result["version"] == 4
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_decisions_sends_only_non_default_params(mock_env: None) -> None:
+    route = respx.get(f"{_BASE}/api/models/tm-001/decisions").mock(
+        return_value=httpx.Response(
+            200, json={"model_id": "tm-001", "model_version": 3, "items": [], "count": 0, "total": 0}),
+    )
+    client = MipitiClient()
+    result = await client.list_decisions(
+        "tm-001", agent_only=True, decision="risk_accepted", limit=5)
+    assert route.calls.last.request.method == "GET"
+    assert route.calls.last.request.url.path == "/api/models/tm-001/decisions"
+    params = route.calls.last.request.url.params
+    assert params["agent_only"] == "true"
+    assert params["decision"] == "risk_accepted"
+    assert params["limit"] == "5"
+    assert "outside_policy_only" not in params
+    assert result["total"] == 0
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_decisions_defaults_send_no_params(mock_env: None) -> None:
+    route = respx.get(f"{_BASE}/api/models/tm-001/decisions").mock(
+        return_value=httpx.Response(200, json={"model_id": "tm-001", "items": [], "count": 0, "total": 0}),
+    )
+    client = MipitiClient()
+    await client.list_decisions("tm-001")
+    assert route.calls.last.request.url.path == "/api/models/tm-001/decisions"
+    assert not dict(route.calls.last.request.url.params)
+    await client.close()

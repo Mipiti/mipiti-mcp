@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->138<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->139<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -173,6 +173,7 @@ uvx mipiti-mcp
 | `list_proposals` | Proposals and escalations on a model with their status (`proposed` / `applied_pending_review` open; `accepted` / `rejected` / `reverted` / `superseded` closed). A refused judgment (403 with `escalation_id`) appears as a `decision_request`; poll here until a person resolves it. Read-only. |
 | `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. |
 | `get_design_leverage` | What eliminating each attacker position or asset by design would remove from the matrix, ranked by critical then high at-risk objectives removed. `include_design_moves=True` authors a concrete `design_move` per row; turn one into a `design_change` proposal with `create_proposal`. Read-only. |
+| `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, escalation resolved), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
 
 ### Assurance
 
