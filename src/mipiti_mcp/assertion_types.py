@@ -31,14 +31,23 @@ class ParamSpec:
     pattern: str = ""
 
 
-# A mechanism reference: a repo-relative file (with an extension), ``::``, then
-# a symbol (``name``, ``Class.method``) or ``<kind>:<name>`` where kind names a
-# construct (module, function, task, class, always, initial, property,
-# sequence, assert, entity, architecture, process, procedure, impl, method).
+# The construct kinds a mechanism may name explicitly (``<file>::<kind>:<name>``).
+# This tuple is the one vocabulary: the verifier's definition locator and
+# disable adapters and the platform's anchor matcher agree with it exactly,
+# and a checker on each side asserts that they do.
+MECHANISM_KINDS = (
+    "function", "method", "class", "struct", "impl",
+    "module", "task", "always", "initial", "property", "sequence", "assert",
+    "entity", "architecture", "process", "procedure",
+    "interface", "package", "program",
+)
+
+# A mechanism reference: a repo-relative file (with an extension, no ``:``,
+# not ``../``), ``::``, then a symbol (``name``, ``Owner.leaf``) optionally
+# preceded by a kind from ``MECHANISM_KINDS`` and a single ``:``.
 MECHANISM_PATTERN = (
-    r"^(?!\.\.?/)[^\s:]+\.[A-Za-z0-9_+-]+::"
-    r"(?:(?:module|function|task|class|always|initial|property|sequence|assert|"
-    r"entity|architecture|process|procedure|impl|method):)?"
+    r"^(?!\.\.?/)(?=\S)[^:\r\n]*[^:\s]\.[A-Za-z0-9_+-]+::"
+    r"(?:(?:" + "|".join(MECHANISM_KINDS) + r"):)?"
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$"
 )
 

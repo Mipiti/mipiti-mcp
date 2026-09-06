@@ -49,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `submit_assertions` and `submit_functional_test_assertions` refuse a value
   that does not match before sending; the platform applies the same rule.
   `test_attested`'s `mechanism` declares the accepted forms
-  (`<file>::<symbol>`, `<file>::<Class.method>`, `<file>::<kind>:<name>`).
+  (`<file>::<symbol>`, `<file>::<Owner.leaf>`, `<file>::<kind>:<name>`);
+  `MECHANISM_KINDS` is the one vocabulary of construct kinds, shared with the
+  verifier and the platform.
 
 - **`generate_threat_model`** accepts optional `provenance_kind`,
   `provenance_repo_url`, `provenance_commit_sha`, `provenance_ref`,
