@@ -3649,8 +3649,7 @@ Submit assertions for a control or an assumption. Records typed claims
 checked later in CI; verifies nothing now.
 
 Call get_assertion_types for the full contract: every type's params, options and
-a worked example, as data. Your client may shorten this text; that tool cannot
-be shortened.
+an example, as data. Your client may shorten this text; that tool cannot be.
 
 Types, as name(required) [opt: optional]:
 {format_compact()}
@@ -3663,6 +3662,19 @@ pattern_matches and pattern_absent accept params.target="feature_description"
 instead of params.file, asserting against the design specification. That is the
 shape for a non-applicability claim, which has no file to cite.
 """
+
+
+def _refuse_malformed_params(assertions: list) -> None:
+    """A param whose format the catalogue declares is checked before the
+    submission leaves the client, with the same rule the platform applies."""
+    from .assertion_types import validate_param_formats
+
+    errors = [
+        e for a in assertions if isinstance(a, dict)
+        for e in validate_param_formats(str(a.get("type", "")), a.get("params") or {})
+    ]
+    if errors:
+        raise ToolError("; ".join(errors[:5]))
 
 
 @mcp.tool(description=_SUBMIT_ASSERTIONS_DOC)
@@ -3684,6 +3696,7 @@ async def submit_assertions(
         raise ToolError("assertions_json must be valid JSON array.")
     if not isinstance(assertions, list):
         raise ToolError("assertions_json must be a JSON array.")
+    _refuse_malformed_params(assertions)
     try:
         return _dump(await _get_client().submit_assertions(
             model_id, assertions,
@@ -6165,6 +6178,7 @@ async def submit_functional_test_assertions(
         raise ToolError("assertions_json must be a valid JSON array.")
     if not isinstance(assertions, list):
         raise ToolError("assertions_json must be a JSON array.")
+    _refuse_malformed_params(assertions)
     try:
         return _dump(await _get_client().submit_functional_tests(
             model_id, functional_test_id, assertions,

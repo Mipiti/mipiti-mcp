@@ -16,12 +16,56 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ParamSpec:
-    """Specification for an assertion parameter."""
+    """Specification for an assertion parameter.
+
+    ``pattern`` is an anchored regular expression the value must match when
+    present; it is the one definition of the value's format, applied by the
+    MCP server before a submission leaves the client and by the platform when
+    it arrives, so both refuse the same malformed value with the same message.
+    """
 
     name: str
     description: str
     required: bool = True
     example: str = ""
+    pattern: str = ""
+
+
+# A mechanism reference: a repo-relative file (with an extension), ``::``, then
+# a symbol (``name``, ``Class.method``) or ``<kind>:<name>`` where kind names a
+# construct (module, function, task, class, always, initial, property,
+# sequence, assert, entity, architecture, process, procedure, impl, method).
+MECHANISM_PATTERN = (
+    r"^(?!\.\.?/)[^\s:]+\.[A-Za-z0-9_+-]+::"
+    r"(?:(?:module|function|task|class|always|initial|property|sequence|assert|"
+    r"entity|architecture|process|procedure|impl|method):)?"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$"
+)
+
+
+def validate_param_formats(type_name: str, params: "dict") -> "list[str]":
+    """Errors for params whose declared ``pattern`` the value does not match.
+
+    Pure over the catalogue; the platform and the MCP server both call it.
+    A param the type does not declare, or one with no pattern, is not judged
+    here.
+    """
+    import re as _re
+
+    spec = next((t for t in ASSERTION_TYPES if t.name == type_name), None)
+    if spec is None:
+        return []
+    errors: list[str] = []
+    for p in spec.params:
+        if not p.pattern or p.name not in (params or {}):
+            continue
+        value = params[p.name]
+        if not isinstance(value, str) or not _re.match(p.pattern, value):
+            hint = f" e.g. {p.example}" if p.example else ""
+            errors.append(
+                f"Param '{p.name}' for type '{type_name}' is not in the accepted form{hint}: {value!r}"
+            )
+    return errors
 
 
 @dataclass(frozen=True)
@@ -269,7 +313,15 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             "passed, against the commit under verification. Proves the test "
             "passed in this repository's workflow at this commit; use it for "
             "a behavioral clause, beside a structural assertion for the "
-            "mechanism. Verification reads the statement and runs nothing: "
+            "mechanism. Name that mechanism in `mechanism` so the evidence "
+            "is bound to it. The attestation records the test's definition; "
+            "a later change to the test withdraws the accepted verdict until "
+            "the test is reviewed again. `mipiti-verify attest-tests "
+            "--coverage <coverage.json>` records what the test reached and "
+            "`mipiti-verify attest-dependence` records whether it fails with "
+            "the mechanism disabled; a runtime clause is credited on those "
+            "facts, not on the test's name. "
+            "Verification reads the statement and runs nothing: "
             "add 'mipiti-verify attest-tests --junit <report>' to the job that "
             "already runs your tests, after them. A run that selected no "
             "tests, or in which nothing passed, is refused."
@@ -289,6 +341,28 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
                 "this check.",
                 required=False,
                 example='{"FEATURE_AUTH": "on"}',
+            ),
+            ParamSpec(
+                "mechanism",
+                "The mechanism this test exercises, as "
+                "`<repo-relative file>::<symbol>` (a function, class, or "
+                "`Class.method`), or `<file>::<kind>:<name>` where the bare "
+                "name is ambiguous or the mechanism is a hardware construct "
+                "(`rtl/alu.sv::module:alu`, `rtl/fsm.sv::always:seq_logic`, "
+                "`hdl/ctl.vhd::process:p_ctl`). Matches a structural "
+                "assertion on the same control (for example a "
+                "`function_exists` or `module_exists` on that file and name) "
+                "and names the anchor the test's evidence is bound to: the "
+                "platform credits a runtime clause with this test only when "
+                "the anchor exists, and, when the CI run attests coverage "
+                "(`attest-tests --coverage` or `attest-reach`) and "
+                "dependence (`attest-dependence`), only when the test reached "
+                "the mechanism and fails without it. Omit only when the "
+                "control has exactly one structural assertion; then that one "
+                "is the anchor.",
+                required=False,
+                pattern=MECHANISM_PATTERN,
+                example="app/auth.py::require_token",
             ),
         ),
     ),

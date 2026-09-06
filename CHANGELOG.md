@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Assertion parameters may declare a value format (`ParamSpec.pattern`).
+  `submit_assertions` and `submit_functional_test_assertions` refuse a value
+  that does not match before sending; the platform applies the same rule.
+  `test_attested`'s `mechanism` declares the accepted forms
+  (`<file>::<symbol>`, `<file>::<Class.method>`, `<file>::<kind>:<name>`).
+
 - **`generate_threat_model`** accepts optional `provenance_kind`,
   `provenance_repo_url`, `provenance_commit_sha`, `provenance_ref`,
   `provenance_source_ref`, and `provenance_source_url` params so a model
@@ -57,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementing a control, to reconcile with `reconcile_model`, to check
   `list_decisions` before proposing, and that a refused judgment is parked
   for a person: do not retry, poll `list_proposals`.
+- **`test_attested`** takes an optional `mechanism` param
+  (`<repo-relative file>::<symbol>`) naming the mechanism the test
+  exercises, matching a structural assertion on the same control. The
+  type's description now states what the evidence is bound to: the
+  test's definition as attested, what the run reached (`mipiti-verify
+  attest-tests --coverage`), and whether the test fails with the
+  mechanism disabled (`mipiti-verify attest-dependence`). Omit
+  `mechanism` only when the control has exactly one structural assertion.
 
 ### Removed
 
