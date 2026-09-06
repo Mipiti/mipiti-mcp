@@ -302,15 +302,20 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
                 "mechanism",
                 "The mechanism this test exercises, as "
                 "`<repo-relative file>::<symbol>` (a function, class, or "
-                "`Class.method`), matching a structural assertion on the "
-                "same control (for example a `function_exists` on that file "
-                "and name). Names the anchor the test's evidence is bound "
-                "to: the platform credits a runtime clause with this test "
-                "only when the anchor exists, and, when the CI run attests "
-                "coverage and dependence, only when the test reached the "
-                "mechanism and fails without it. Omit only when the control "
-                "has exactly one structural assertion; then that one is the "
-                "anchor.",
+                "`Class.method`), or `<file>::<kind>:<name>` where the bare "
+                "name is ambiguous or the mechanism is a hardware construct "
+                "(`rtl/alu.sv::module:alu`, `rtl/fsm.sv::always:seq_logic`, "
+                "`hdl/ctl.vhd::process:p_ctl`). Matches a structural "
+                "assertion on the same control (for example a "
+                "`function_exists` or `module_exists` on that file and name) "
+                "and names the anchor the test's evidence is bound to: the "
+                "platform credits a runtime clause with this test only when "
+                "the anchor exists, and, when the CI run attests coverage "
+                "(`attest-tests --coverage` or `attest-reach`) and "
+                "dependence (`attest-dependence`), only when the test reached "
+                "the mechanism and fails without it. Omit only when the "
+                "control has exactly one structural assertion; then that one "
+                "is the anchor.",
                 required=False,
                 example="app/auth.py::require_token",
             ),
