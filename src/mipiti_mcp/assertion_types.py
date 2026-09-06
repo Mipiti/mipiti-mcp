@@ -136,6 +136,18 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Function or method name", example="verify_token"),
+            ParamSpec(
+                "mechanism",
+                "When `file` is a test file, the mechanism the test exercises, as "
+                "`<repo-relative file>::<symbol>` or `<file>::<kind>:<name>`, matching "
+                "a structural assertion on the same control (see test_attested's "
+                "`mechanism` for the binding rule). A test-file target is behavioral "
+                "evidence, and a behavioral citation with no anchor does not cover a "
+                "runtime clause. Ignored for a production-code target.",
+                required=False,
+                pattern=MECHANISM_PATTERN,
+                example="app/auth.py::require_token",
+            ),
         ),
     ),
     AssertionTypeSpec(
@@ -144,6 +156,18 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Class, struct, or interface name", example="UserIdentity"),
+            ParamSpec(
+                "mechanism",
+                "When `file` is a test file, the mechanism the test exercises, as "
+                "`<repo-relative file>::<symbol>` or `<file>::<kind>:<name>`, matching "
+                "a structural assertion on the same control (see test_attested's "
+                "`mechanism` for the binding rule). A test-file target is behavioral "
+                "evidence, and a behavioral citation with no anchor does not cover a "
+                "runtime clause. Ignored for a production-code target.",
+                required=False,
+                pattern=MECHANISM_PATTERN,
+                example="app/auth.py::require_token",
+            ),
         ),
     ),
     AssertionTypeSpec(

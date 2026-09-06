@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `function_exists` and `class_exists` accept an optional `mechanism` for a
+  test-file target: the mechanism the test exercises, in the same form and
+  under the same binding rule as `test_attested`'s.
 - `test_attested`'s `mechanism` states the binding rule: which structural
   types anchor and on which param, that pattern types anchor by file, that a
   test file is never a mechanism, what an unbound test costs, and that

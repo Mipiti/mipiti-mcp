@@ -3648,19 +3648,19 @@ _SUBMIT_ASSERTIONS_DOC = f"""\
 Submit assertions for a control or an assumption. Records typed claims
 checked later in CI; verifies nothing now.
 
-Call get_assertion_types for the full contract: every type's params, options and
-an example, as data. Your client may shorten this text; that tool cannot be.
+Call get_assertion_types for the full contract as data: params, options and an
+example per type. A client may shorten this text; that tool cannot be.
 
 Types, as name(required) [opt: optional]:
 {format_compact()}
 
 Each object in assertions_json carries type, params, a plain-language
-description, and repo: the "<owner>/<repo>" whose CI run checks it, or "no_repo"
-to opt out of every run. repo is required; empty is rejected.
+description, and repo: "<owner>/<repo>" whose CI run checks it, or "no_repo" to
+opt out of every run. repo is required.
 
 pattern_matches and pattern_absent accept params.target="feature_description"
-instead of params.file, asserting against the design specification. That is the
-shape for a non-applicability claim, which has no file to cite.
+instead of params.file: an assertion against the design specification, the
+shape of a non-applicability claim, which has no file to cite.
 """
 
 
