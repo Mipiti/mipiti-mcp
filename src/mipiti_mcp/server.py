@@ -3649,8 +3649,7 @@ Submit assertions for a control or an assumption. Records typed claims
 checked later in CI; verifies nothing now.
 
 Call get_assertion_types for the full contract: every type's params, options and
-a worked example, as data. Your client may shorten this text; that tool cannot
-be shortened.
+an example, as data. Your client may shorten this text; that tool cannot be.
 
 Types, as name(required) [opt: optional]:
 {format_compact()}

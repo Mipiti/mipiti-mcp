@@ -269,7 +269,15 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             "passed, against the commit under verification. Proves the test "
             "passed in this repository's workflow at this commit; use it for "
             "a behavioral clause, beside a structural assertion for the "
-            "mechanism. Verification reads the statement and runs nothing: "
+            "mechanism. Name that mechanism in `mechanism` so the evidence "
+            "is bound to it. The attestation records the test's definition; "
+            "a later change to the test withdraws the accepted verdict until "
+            "the test is reviewed again. `mipiti-verify attest-tests "
+            "--coverage <coverage.json>` records what the test reached and "
+            "`mipiti-verify attest-dependence` records whether it fails with "
+            "the mechanism disabled; a runtime clause is credited on those "
+            "facts, not on the test's name. "
+            "Verification reads the statement and runs nothing: "
             "add 'mipiti-verify attest-tests --junit <report>' to the job that "
             "already runs your tests, after them. A run that selected no "
             "tests, or in which nothing passed, is refused."
@@ -289,6 +297,22 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
                 "this check.",
                 required=False,
                 example='{"FEATURE_AUTH": "on"}',
+            ),
+            ParamSpec(
+                "mechanism",
+                "The mechanism this test exercises, as "
+                "`<repo-relative file>::<symbol>` (a function, class, or "
+                "`Class.method`), matching a structural assertion on the "
+                "same control (for example a `function_exists` on that file "
+                "and name). Names the anchor the test's evidence is bound "
+                "to: the platform credits a runtime clause with this test "
+                "only when the anchor exists, and, when the CI run attests "
+                "coverage and dependence, only when the test reached the "
+                "mechanism and fails without it. Omit only when the control "
+                "has exactly one structural assertion; then that one is the "
+                "anchor.",
+                required=False,
+                example="app/auth.py::require_token",
             ),
         ),
     ),
