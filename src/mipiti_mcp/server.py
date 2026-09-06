@@ -3664,6 +3664,19 @@ shape for a non-applicability claim, which has no file to cite.
 """
 
 
+def _refuse_malformed_params(assertions: list) -> None:
+    """A param whose format the catalogue declares is checked before the
+    submission leaves the client, with the same rule the platform applies."""
+    from .assertion_types import validate_param_formats
+
+    errors = [
+        e for a in assertions if isinstance(a, dict)
+        for e in validate_param_formats(str(a.get("type", "")), a.get("params") or {})
+    ]
+    if errors:
+        raise ToolError("; ".join(errors[:5]))
+
+
 @mcp.tool(description=_SUBMIT_ASSERTIONS_DOC)
 async def submit_assertions(
     server_version: str,
@@ -3683,6 +3696,7 @@ async def submit_assertions(
         raise ToolError("assertions_json must be valid JSON array.")
     if not isinstance(assertions, list):
         raise ToolError("assertions_json must be a JSON array.")
+    _refuse_malformed_params(assertions)
     try:
         return _dump(await _get_client().submit_assertions(
             model_id, assertions,
@@ -6164,6 +6178,7 @@ async def submit_functional_test_assertions(
         raise ToolError("assertions_json must be a valid JSON array.")
     if not isinstance(assertions, list):
         raise ToolError("assertions_json must be a JSON array.")
+    _refuse_malformed_params(assertions)
     try:
         return _dump(await _get_client().submit_functional_tests(
             model_id, functional_test_id, assertions,

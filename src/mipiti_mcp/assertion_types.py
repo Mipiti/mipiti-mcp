@@ -16,12 +16,56 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ParamSpec:
-    """Specification for an assertion parameter."""
+    """Specification for an assertion parameter.
+
+    ``pattern`` is an anchored regular expression the value must match when
+    present; it is the one definition of the value's format, applied by the
+    MCP server before a submission leaves the client and by the platform when
+    it arrives, so both refuse the same malformed value with the same message.
+    """
 
     name: str
     description: str
     required: bool = True
     example: str = ""
+    pattern: str = ""
+
+
+# A mechanism reference: a repo-relative file (with an extension), ``::``, then
+# a symbol (``name``, ``Class.method``) or ``<kind>:<name>`` where kind names a
+# construct (module, function, task, class, always, initial, property,
+# sequence, assert, entity, architecture, process, procedure, impl, method).
+MECHANISM_PATTERN = (
+    r"^(?!\.\.?/)[^\s:]+\.[A-Za-z0-9_+-]+::"
+    r"(?:(?:module|function|task|class|always|initial|property|sequence|assert|"
+    r"entity|architecture|process|procedure|impl|method):)?"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$"
+)
+
+
+def validate_param_formats(type_name: str, params: "dict") -> "list[str]":
+    """Errors for params whose declared ``pattern`` the value does not match.
+
+    Pure over the catalogue; the platform and the MCP server both call it.
+    A param the type does not declare, or one with no pattern, is not judged
+    here.
+    """
+    import re as _re
+
+    spec = next((t for t in ASSERTION_TYPES if t.name == type_name), None)
+    if spec is None:
+        return []
+    errors: list[str] = []
+    for p in spec.params:
+        if not p.pattern or p.name not in (params or {}):
+            continue
+        value = params[p.name]
+        if not isinstance(value, str) or not _re.match(p.pattern, value):
+            hint = f" e.g. {p.example}" if p.example else ""
+            errors.append(
+                f"Param '{p.name}' for type '{type_name}' is not in the accepted form{hint}: {value!r}"
+            )
+    return errors
 
 
 @dataclass(frozen=True)
@@ -317,6 +361,7 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
                 "control has exactly one structural assertion; then that one "
                 "is the anchor.",
                 required=False,
+                pattern=MECHANISM_PATTERN,
                 example="app/auth.py::require_token",
             ),
         ),
