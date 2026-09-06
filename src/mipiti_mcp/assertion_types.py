@@ -31,14 +31,23 @@ class ParamSpec:
     pattern: str = ""
 
 
-# A mechanism reference: a repo-relative file (with an extension), ``::``, then
-# a symbol (``name``, ``Class.method``) or ``<kind>:<name>`` where kind names a
-# construct (module, function, task, class, always, initial, property,
-# sequence, assert, entity, architecture, process, procedure, impl, method).
+# The construct kinds a mechanism may name explicitly (``<file>::<kind>:<name>``).
+# This tuple is the one vocabulary: the verifier's definition locator and
+# disable adapters and the platform's anchor matcher agree with it exactly,
+# and a checker on each side asserts that they do.
+MECHANISM_KINDS = (
+    "function", "method", "class", "struct", "impl",
+    "module", "task", "always", "initial", "property", "sequence", "assert",
+    "entity", "architecture", "process", "procedure",
+    "interface", "package", "program",
+)
+
+# A mechanism reference: a repo-relative file (with an extension, no ``:``,
+# not ``../``), ``::``, then a symbol (``name``, ``Owner.leaf``) optionally
+# preceded by a kind from ``MECHANISM_KINDS`` and a single ``:``.
 MECHANISM_PATTERN = (
-    r"^(?!\.\.?/)[^\s:]+\.[A-Za-z0-9_+-]+::"
-    r"(?:(?:module|function|task|class|always|initial|property|sequence|assert|"
-    r"entity|architecture|process|procedure|impl|method):)?"
+    r"^(?!\.\.?/)(?=\S)[^:\r\n]*[^:\s]\.[A-Za-z0-9_+-]+::"
+    r"(?:(?:" + "|".join(MECHANISM_KINDS) + r"):)?"
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$"
 )
 
@@ -127,6 +136,18 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Function or method name", example="verify_token"),
+            ParamSpec(
+                "mechanism",
+                "When `file` is a test file, the mechanism the test exercises, as "
+                "`<repo-relative file>::<symbol>` or `<file>::<kind>:<name>`, matching "
+                "a structural assertion on the same control (see test_attested's "
+                "`mechanism` for the binding rule). A test-file target is behavioral "
+                "evidence, and a behavioral citation with no anchor does not cover a "
+                "runtime clause. Ignored for a production-code target.",
+                required=False,
+                pattern=MECHANISM_PATTERN,
+                example="app/auth.py::require_token",
+            ),
         ),
     ),
     AssertionTypeSpec(
@@ -135,6 +156,18 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
         params=(
             _FILE,
             ParamSpec("name", "Class, struct, or interface name", example="UserIdentity"),
+            ParamSpec(
+                "mechanism",
+                "When `file` is a test file, the mechanism the test exercises, as "
+                "`<repo-relative file>::<symbol>` or `<file>::<kind>:<name>`, matching "
+                "a structural assertion on the same control (see test_attested's "
+                "`mechanism` for the binding rule). A test-file target is behavioral "
+                "evidence, and a behavioral citation with no anchor does not cover a "
+                "runtime clause. Ignored for a production-code target.",
+                required=False,
+                pattern=MECHANISM_PATTERN,
+                example="app/auth.py::require_token",
+            ),
         ),
     ),
     AssertionTypeSpec(
@@ -314,7 +347,10 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             "passed in this repository's workflow at this commit; use it for "
             "a behavioral clause, beside a structural assertion for the "
             "mechanism. Name that mechanism in `mechanism` so the evidence "
-            "is bound to it. The attestation records the test's definition; "
+            "is bound to it; a test-backed citation with no structural anchor "
+            "on the control does not cover a runtime clause, and a clause "
+            "worded as configuration still needs the test. The attestation "
+            "records the test's definition; "
             "a later change to the test withdraws the accepted verdict until "
             "the test is reviewed again. `mipiti-verify attest-tests "
             "--coverage <coverage.json>` records what the test reached and "
@@ -345,21 +381,33 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
             ParamSpec(
                 "mechanism",
                 "The mechanism this test exercises, as "
-                "`<repo-relative file>::<symbol>` (a function, class, or "
-                "`Class.method`), or `<file>::<kind>:<name>` where the bare "
-                "name is ambiguous or the mechanism is a hardware construct "
-                "(`rtl/alu.sv::module:alu`, `rtl/fsm.sv::always:seq_logic`, "
-                "`hdl/ctl.vhd::process:p_ctl`). Matches a structural "
-                "assertion on the same control (for example a "
-                "`function_exists` or `module_exists` on that file and name) "
-                "and names the anchor the test's evidence is bound to: the "
-                "platform credits a runtime clause with this test only when "
-                "the anchor exists, and, when the CI run attests coverage "
-                "(`attest-tests --coverage` or `attest-reach`) and "
-                "dependence (`attest-dependence`), only when the test reached "
-                "the mechanism and fails without it. Omit only when the "
-                "control has exactly one structural assertion; then that one "
-                "is the anchor.",
+                "`<repo-relative file>::<symbol>` (`app/auth.py::require_token`, "
+                "`app/auth.py::Auth.check`), or `<file>::<kind>:<name>` where the "
+                "bare name is ambiguous or the mechanism is a hardware construct "
+                "(`rtl/alu.sv::module:alu`, `rtl/fsm.sv::always:seq_logic`). "
+                "Binding rule: the value must equal the file plus the identifying "
+                "param of a structural assertion on the same control: `name` "
+                "(function_exists, class_exists, module_exists, signal_exists, "
+                "sva_assertion_present), `function` (decorator_present, "
+                "parameter_validated, error_handled), `middleware` "
+                "(middleware_registered), `key` (config_key_exists, "
+                "config_value_matches; a source kwarg such as "
+                "`allow_origin_regex=` counts), `module` (import_present), "
+                "`callee` or `caller` (function_calls), `header`, `variable`, "
+                "`package` (with the manifest as the file), `child` or `parent`, "
+                "`port`, `parameter`, `signal`. pattern_matches, pattern_absent, "
+                "file_hash and no_plaintext_secret name no symbol and anchor any "
+                "mechanism in their file. A test file is never a mechanism. "
+                "The platform credits a runtime clause with this test only when "
+                "that anchor exists and passes tier 1; a test with no anchor leaves "
+                "the clause insufficient, and the sufficiency report lists the "
+                "exact values it accepts. Re-submitting the same test with a "
+                "different `mechanism` replaces the earlier row rather than adding "
+                "a second one. With CI-attested coverage (`attest-tests --coverage` "
+                "or `attest-reach`) and dependence (`attest-dependence`) the clause "
+                "is credited only when the test reached the mechanism and fails "
+                "without it. Omit only when the control has exactly one structural "
+                "assertion; then that one is the anchor.",
                 required=False,
                 pattern=MECHANISM_PATTERN,
                 example="app/auth.py::require_token",

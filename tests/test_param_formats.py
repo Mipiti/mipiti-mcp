@@ -7,6 +7,7 @@ import pytest
 
 from mipiti_mcp.assertion_types import (
     ASSERTION_TYPES,
+    MECHANISM_KINDS,
     MECHANISM_PATTERN,
     validate_param_formats,
 )
@@ -20,6 +21,10 @@ GOOD = [
     "hdl/ctl.vhd::process:p_ctl",
     "src/lib.rs::impl:Limiter",
     "pkg/x.go::Limiter.Allow",
+    "src/lib.rs::struct:Limiter",
+    "rtl/bus_if.sv::interface:axi_if",
+    "rtl/pkg.sv::package:types_pkg",
+    "my dir/auth.py::require_token",
 ]
 BAD = [
     "require_token",
@@ -30,6 +35,9 @@ BAD = [
     "../app/auth.py::require_token",
     "app/auth.py::require token",
     "app/auth.py::a.b.c",
+    " app/auth.py::f",
+    "app/auth.py ::f",
+    "app/auth.py::Widget:f",
 ]
 
 
@@ -73,3 +81,13 @@ async def test_submit_refuses_before_sending(monkeypatch):
             server_version="x", model_id="m", functional_test_id="f", assertions_json=body,
         )
     assert called == []
+
+
+@pytest.mark.parametrize("kind", MECHANISM_KINDS)
+def test_every_kind_is_accepted(kind):
+    assert re.match(MECHANISM_PATTERN, f"src/a.sv::{kind}:name_1")
+
+
+def test_kinds_are_distinct_lowercase_identifiers():
+    assert len(set(MECHANISM_KINDS)) == len(MECHANISM_KINDS)
+    assert all(k == k.lower() and k.isidentifier() for k in MECHANISM_KINDS)

@@ -45,11 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `function_exists` and `class_exists` accept an optional `mechanism` for a
+  test-file target: the mechanism the test exercises, in the same form and
+  under the same binding rule as `test_attested`'s.
+- `test_attested`'s `mechanism` states the binding rule: which structural
+  types anchor and on which param, that pattern types anchor by file, that a
+  test file is never a mechanism, what an unbound test costs, and that
+  re-submitting a test with a different `mechanism` replaces the earlier row.
 - Assertion parameters may declare a value format (`ParamSpec.pattern`).
   `submit_assertions` and `submit_functional_test_assertions` refuse a value
   that does not match before sending; the platform applies the same rule.
   `test_attested`'s `mechanism` declares the accepted forms
-  (`<file>::<symbol>`, `<file>::<Class.method>`, `<file>::<kind>:<name>`).
+  (`<file>::<symbol>`, `<file>::<Owner.leaf>`, `<file>::<kind>:<name>`);
+  `MECHANISM_KINDS` is the one vocabulary of construct kinds, shared with the
+  verifier and the platform.
 
 - **`generate_threat_model`** accepts optional `provenance_kind`,
   `provenance_repo_url`, `provenance_commit_sha`, `provenance_ref`,
