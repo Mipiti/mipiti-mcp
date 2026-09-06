@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `test_attested`'s `mechanism` states the binding rule: which structural
+  types anchor and on which param, that pattern types anchor by file, that a
+  test file is never a mechanism, what an unbound test costs, and that
+  re-submitting a test with a different `mechanism` replaces the earlier row.
 - Assertion parameters may declare a value format (`ParamSpec.pattern`).
   `submit_assertions` and `submit_functional_test_assertions` refuse a value
   that does not match before sending; the platform applies the same rule.
