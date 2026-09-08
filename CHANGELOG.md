@@ -73,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An allowlist entry's `site` is declared as the line number a run resolves it
+  against, and refused at submission when it is anything else. The published
+  sentence had offered "a line or a symbol" while only a line number is honoured,
+  so a submission following it was accepted here and then failed as a stale entry
+  — which names the wrong problem. Per-key formats on an object item are part of
+  the published schema, so a consumer reads the rule rather than learning it by
+  being refused.
+
 - Parameter validation refuses a value still left as the `<...>` blank the
   guidance offered, for every declared param rather than only for those that
   declare a format. A param with no pattern was the one place an unanswered

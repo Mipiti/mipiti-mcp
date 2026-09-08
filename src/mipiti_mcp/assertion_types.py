@@ -90,7 +90,9 @@ class ParamSpec:
     regular expression every string item must match; ``required_keys``
     names the keys every item (then an object) must carry with a non-empty
     string value; ``key_enums`` restricts named keys of each object item to
-    the listed values when the key is present. An array param with none of
+    the listed values when the key is present; ``key_patterns`` is an anchored
+    regular expression a named key of each object item must match when
+    present. An array param with none of
     ``enum`` / ``item_pattern`` / ``required_keys`` accepts non-empty
     strings.
 
@@ -111,6 +113,7 @@ class ParamSpec:
     item_pattern: str = ""
     required_keys: tuple[str, ...] = ()
     key_enums: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    key_patterns: tuple[tuple[str, str], ...] = ()
 
 
 # The construct kinds a mechanism may name explicitly (``<file>::<kind>:<name>``).
@@ -190,6 +193,11 @@ def _array_violation(p: "ParamSpec", value: Any) -> "str | None":
             for key, allowed in p.key_enums:
                 if key in item and item[key] not in allowed:
                     return f"item {i} key {key!r} is not one of {list(allowed)}"
+            for key, expr in p.key_patterns:
+                if key in item and not (
+                    isinstance(item[key], str) and re.match(expr, item[key].strip())
+                ):
+                    return f"item {i} key {key!r} is not in the accepted form"
         elif p.item_pattern:
             if not isinstance(item, str) or not re.match(p.item_pattern, item):
                 return f"item {i} is not in the accepted form"
@@ -455,7 +463,7 @@ _SINKS = ParamSpec(
 _ALLOWLIST = ParamSpec(
     "allowlist",
     "Reviewed exceptions, each `{file, site, callee, reason, reviewed_by}`; "
-    "`site` locates the flagged site (a line or a symbol). Every entry must "
+    "`site` is the line number of the flagged site. Every entry must "
     "match a site the check flags -- a stale entry fails the check -- and "
     "the allowlist content is part of the evidence hash, so an edit reopens "
     "review.",
@@ -463,6 +471,12 @@ _ALLOWLIST = ParamSpec(
     example='[{"file": "src/db/admin.py", "site": "42", "callee": "execute", '
             '"reason": "table name from a fixed enum", "reviewed_by": "a.reviewer"}]',
     structure="array", required_keys=("file", "site", "callee", "reason", "reviewed_by"),
+    # A line number, because that is what a run resolves an entry against. The
+    # form is declared rather than described so a submission naming a symbol is
+    # refused where it is written, instead of by a check that cannot place it.
+    # Zero padding is accepted because the run accepts it: refusing here what
+    # the honoured route allows is the same divergence in the other direction.
+    key_patterns=(("site", r"0*[1-9][0-9]*$"),),
 )
 _WRAPPERS = ParamSpec(
     "wrappers",
@@ -1003,6 +1017,26 @@ def _check_catalogue() -> None:
             keys = [k for k, _ in p.key_enums]
             if len(set(keys)) != len(keys):
                 raise ValueError(f"{t.name}.{p.name}: key_enums names a key twice")
+            pattern_keys = [k for k, _ in p.key_patterns]
+            if len(set(pattern_keys)) != len(pattern_keys):
+                raise ValueError(f"{t.name}.{p.name}: key_patterns names a key twice")
+            for key, expr in p.key_patterns:
+                if key in dict(p.key_enums):
+                    raise ValueError(
+                        f"{t.name}.{p.name}: {key!r} is constrained twice, by an enum "
+                        "and a pattern"
+                    )
+                try:
+                    re.compile(expr)
+                except re.error as exc:
+                    raise ValueError(
+                        f"{t.name}.{p.name}: key_patterns[{key!r}] is not a regex: {exc}"
+                    ) from exc
+            if (p.key_enums or p.key_patterns) and not p.required_keys:
+                raise ValueError(
+                    f"{t.name}.{p.name}: a per-key constraint on a param that declares "
+                    "no object items constrains nothing"
+                )
         if t.soundness in SOUND_CLASSES and ({"file", "target"} & set(param_names)):
             # A sound witness ranges over a declared scope, never one file,
             # and its subject is never platform-held text.
@@ -1110,6 +1144,8 @@ def _describe_param(p: ParamSpec) -> dict:
             schema["required_keys"] = list(p.required_keys)
         if p.key_enums:
             schema["key_enums"] = {k: list(v) for k, v in p.key_enums}
+        if p.key_patterns:
+            schema["key_patterns"] = dict(p.key_patterns)
         out["item_schema"] = schema
     return out
 

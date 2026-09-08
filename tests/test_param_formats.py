@@ -357,3 +357,63 @@ def test_the_same_submission_with_the_blank_answered_passes():
         "safe_forms": ["literal"],
         "property": "Every statement reaches the driver with data bound as parameters.",
     }) == []
+
+
+# --- the allowlist's site is the form a run can resolve ----------------------
+
+def _allowlisted(site):
+    return validate_param_formats("sink_default_deny", {
+        "scope": ["src/db/**/*.py"],
+        "sinks": [{"callee": "execute", "positions": [0]}],
+        "safe_forms": ["literal"],
+        "property": "Every statement reaches the driver with data bound as parameters.",
+        "allowlist": [{"file": "src/db/a.py", "site": site, "callee": "execute",
+                       "reason": "table name from a fixed enum", "reviewed_by": "a.reviewer"}],
+    })
+
+
+@pytest.mark.parametrize("site", ["42", "1", "10345", "042", " 42 "])
+def test_a_line_number_locates_an_allowlisted_site(site):
+    """Padded and surrounded forms included: a run parses the value as an
+    integer after stripping it, so refusing them here would refuse what the
+    honoured route accepts — the same divergence, pointing the other way."""
+    assert _allowlisted(site) == []
+
+
+@pytest.mark.parametrize("site", ["handle_request", "app.py::handle", "0", "-3", "4.2", "", "  "])
+def test_anything_that_is_not_a_line_number_is_refused_where_it_is_written(site):
+    """A run resolves an allowlist entry against the line it flagged, so an
+    entry naming anything else matches no site and fails the check. Refusing it
+    at submission names the key; refusing it at run time names a stale entry,
+    which sends the reader to the wrong problem."""
+    errors = [e for e in _allowlisted(site) if "'allowlist'" in e]
+    assert errors, f"{site!r} was accepted"
+    assert "'site'" in errors[0], errors[0]
+
+
+def test_a_per_key_constraint_needs_object_items():
+    """A key pattern on a param whose items are plain strings constrains
+    nothing, and would read in the published schema as a rule that applies."""
+    from mipiti_mcp.assertion_types import ParamSpec, _array_violation
+
+    plain = ParamSpec("x", "d", structure="array", key_patterns=(("site", r"\d+$"),))
+    # No required_keys, so items are strings and the per-key branch is unreachable.
+    assert _array_violation(plain, ["anything"]) is None
+
+
+def test_the_published_schema_carries_the_key_constraint():
+    """A consumer reading the schema has to see the same rule the validator
+    applies, or it learns the shape only by being refused."""
+    spec = next(t for t in ASSERTION_TYPES if t.name == "sink_default_deny")
+    described = describe_types([spec.name])
+    assert "site" in json.dumps(described)
+    param = next(
+        p for p in _schema_params(spec.name) if p["name"] == "allowlist"
+    )
+    assert param["item_schema"]["key_patterns"]["site"] == r"0*[1-9][0-9]*$"
+
+
+def _schema_params(type_name):
+    from mipiti_mcp.assertion_types import _describe_param
+    spec = next(t for t in ASSERTION_TYPES if t.name == type_name)
+    return [_describe_param(p) for p in spec.params]
