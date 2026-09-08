@@ -40,9 +40,49 @@ class TestAddAttackerSurfaceExtent:
         with _patch(client):
             await add_attacker(
                 server_version="0", model_id="tm-001", capability="From the internet, can call any endpoint",
-                surface_extent="whole", ctx=_ctx(),
+                surface_extent="whole", change_reason="Every endpoint is on the public listener",
+                ctx=_ctx(),
             )
-        assert client.start_add_attacker.await_args.kwargs["surface_extent"] == "whole"
+        kwargs = client.start_add_attacker.await_args.kwargs
+        assert kwargs["surface_extent"] == "whole"
+        assert kwargs["change_reason"].startswith("Every endpoint")
+
+    async def test_a_declared_extent_needs_a_reason(self):
+        """The extent decides whether the objectives this attacker anchors are
+        for-all obligations, so the create records the declaration with its
+        reason, exactly as an edit does. Without one the API refuses the
+        create; refusing here spends no model version and says the same."""
+        client = _client()
+        with _patch(client):
+            with pytest.raises(ToolError, match="change_reason"):
+                await add_attacker(
+                    server_version="0", model_id="tm-001", capability="c",
+                    surface_extent="whole", ctx=_ctx(),
+                )
+        client.start_add_attacker.assert_not_awaited()
+
+    async def test_a_narrowing_is_not_declarable_on_a_create(self):
+        """``point`` is a statement about the objectives the attacker anchors,
+        and a create has none: they are derived from the attacker afterwards.
+        The narrowing belongs on the edit, where it is checked."""
+        client = _client()
+        with _patch(client):
+            with pytest.raises(ToolError, match="edit_attacker"):
+                await add_attacker(
+                    server_version="0", model_id="tm-001", capability="c",
+                    surface_extent="point", change_reason="Only /health is exposed",
+                    ctx=_ctx(),
+                )
+        client.start_add_attacker.assert_not_awaited()
+
+    async def test_a_reason_without_an_extent_still_creates(self):
+        client = _client()
+        with _patch(client):
+            await add_attacker(
+                server_version="0", model_id="tm-001", capability="c",
+                change_reason="noted", ctx=_ctx(),
+            )
+        assert "surface_extent" not in client.start_add_attacker.await_args.kwargs
 
     async def test_omitted_extent_is_not_sent(self):
         client = _client()

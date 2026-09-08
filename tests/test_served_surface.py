@@ -37,6 +37,10 @@ _UNSERVED = (
     "quantifier_source",
     # A promotion of an already-submitted assertion to a declared binding.
     "bind_assertion",
+    # A composed tier for a control. Evidence strength is composed per
+    # clause, and no read returns a control-level tier; naming one would
+    # have an agent report a grade nothing computes.
+    "soundness_tier",
 )
 
 # Field names that must not be documented as a returned object. Kept apart

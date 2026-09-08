@@ -109,7 +109,7 @@ uvx mipiti-mcp
 | Tool | Description |
 |------|-------------|
 | `add_asset` / `edit_asset` / `remove_entity (entity_type="asset")` | Targeted single-entity changes for assets. Creates a new version. |
-| `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. `surface_extent` (`whole`: the attacker's operations range over any entry of the interface it reaches; `point`: one named entry) decides whether the objectives it appears in are for-all obligations; supplying it on `edit_attacker` attests it and requires `change_reason`. |
+| `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. `surface_extent` (`whole`: the attacker's operations range over any entry of the interface it reaches; `point`: one named entry) decides whether the objectives it appears in are for-all obligations; supplying it attests it and requires `change_reason` on either tool. A create declares only `whole`; narrowing is an `edit_attacker` call, checked against the objectives the attacker anchors. |
 | `get_entity` | Read one entity of any kind. An attacker also carries `surface_extent` and `surface_extent_source`. |
 
 ### Trust Boundaries

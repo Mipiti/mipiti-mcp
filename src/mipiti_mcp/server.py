@@ -85,7 +85,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `generate_threat_model` — creates a new model with trust boundaries, assets, attackers, and control objectives. Automatically detects similar existing models and routes accordingly. Progress reported automatically.
 - `refine_threat_model` — updates an existing model when you already have a model ID and want to change it. Progress reported automatically.
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
-- `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. The extent decides whether the objectives the attacker appears in are for-all obligations (see Controls and assertions). Supplying it on `edit_attacker` attests it and requires `change_reason`; it is audited like a factor override.
+- `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. The extent decides whether the objectives the attacker appears in are for-all obligations (see Controls and assertions). Supplying it attests it and requires `change_reason` on either tool; it is audited like a factor override. On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (removals are audit-preserving; restore applies to `asset`, `attacker`, and `assumption`).
@@ -360,7 +360,7 @@ Components bridge security architecture (trust boundaries) to code organization 
 
 `generate_threat_model` proposes speculative components (with `repo_url=""`) when no topology has been supplied. These are a starting point — refine them as code grounding emerges:
 
-- **Existing codebase**: generation reads no components (`add_component` needs a `model_id`, and no generation prompt scopes anything to components), so call `generate_threat_model` first — with the services you found written into `feature_description` — and then `edit_component` on each speculative component it proposed, swapping `repo_url` and `path` to the real values, or `add_component` for the ones it missed.
+- **Existing codebase**: a component is created against a model, so there is none to supply before one exists. Call `generate_threat_model` first, with the services you found written into `feature_description`, then `edit_component` on each speculative component it proposed, swapping `repo_url` and `path` to the real values, or `add_component` for the ones it missed.
 - **Planning conversation, no code yet**: call `generate_threat_model` directly; the LLM-proposed speculative components serve as a topology starting point the user/developer refines as the design firms up. `repo_url` stays empty until code exists; the coherence report flags `component_unbound` findings on speculative components so they're visible to auditors.
 
 A component with empty `repo_url` is the natural signal "speculative — not yet bound to code." A component with a populated `repo_url` is grounded. There is no separate status field — the binding is the state.
@@ -2890,6 +2890,7 @@ async def add_attacker(
     archetype: str = "",
     trust_boundary_ids: Optional[str] = None,
     surface_extent: Optional[str] = None,
+    change_reason: Optional[str] = None,
 ) -> dict:
     """Add a new attacker to a threat model. Creates a new version.
 
@@ -2916,8 +2917,15 @@ async def add_attacker(
     attacker's operations range over. An attacker ranging over the whole
     interface makes the objectives it appears in for-all obligations,
     which only a sound witness (``typed_boundary`` /
-    ``sink_default_deny``) can credit. A generated suggestion can raise
-    the extent and never lower it. There is no attacker status to set.
+    ``sink_default_deny``) can credit. Declaring it here is an operator
+    statement about the attacker's reach, recorded attested with its
+    ``change_reason``, so a create takes the two together. Only ``whole``
+    is declarable on a create: narrowing to one named entry is a statement
+    about the objectives the attacker anchors, and a create has none yet —
+    add the attacker, then narrow it with ``edit_attacker`` and a
+    ``change_reason``, where the narrowing is checked against the assets
+    those objectives defend. A generated suggestion can raise the extent
+    and never lower it. There is no attacker status to set.
 
     Args:
         model_id: ID of the threat model.
@@ -2927,14 +2935,34 @@ async def add_attacker(
         trust_boundary_ids: Comma-separated trust boundary IDs.
         surface_extent: ``"whole"`` when, from its position, the attacker's
             operations range over ANY entry of the interface it reaches
-            (any endpoint, request, row, file, message or frame);
-            ``"point"`` when they range over one named entry. Recorded as
-            attested by this call. Omit to leave it undeclared.
+            (any endpoint, request, row, file, message or frame). Recorded
+            as attested by this call and requires ``change_reason``. Omit
+            to leave it undeclared, which is the ordinary case: the model
+            derives the reach.
+        change_reason: Required when ``surface_extent`` is supplied —
+            documents the declaration for the audit trail.
     """
     _validate_surface_extent(surface_extent)
+    if surface_extent == "point":
+        raise ToolError(
+            "An attacker is created with the reach the model derives for it. "
+            "Narrowing it to a single named entry is a declaration about the "
+            "objectives it anchors, which do not exist yet — add the attacker, "
+            "then narrow it with edit_attacker and a change_reason, where the "
+            "declaration is checked against the assets those objectives defend."
+        )
+    if surface_extent and not (change_reason and change_reason.strip()):
+        raise ToolError(
+            "change_reason is required when declaring an attacker's surface "
+            "extent. The extent decides whether the objectives this attacker "
+            "anchors are for-all obligations, so the declaration is recorded "
+            "with its reason."
+        )
     body: dict[str, Any] = {"capability": capability}
     if surface_extent:
         body["surface_extent"] = surface_extent
+    if change_reason is not None:
+        body["change_reason"] = change_reason
     if position:
         body["position"] = position
     if archetype:
@@ -3763,15 +3791,23 @@ def _refuse_malformed(assertions: list, *, covers_accepted: bool = True) -> None
     submission whose surface does not carry one: a field that would be
     dropped in transit has to be refused where the caller can see it, or the
     caller records a binding that does not exist.
+
+    Both halves of a param check run here: the format of the values that are
+    present, and the presence of the ones the type requires. A submission
+    that names one type and fills another type's parameter set is otherwise
+    well-formed in every value it carries, so only the absence check catches
+    it, and it is caught where the caller can still edit the submission.
     """
-    from .assertion_types import validate_param_formats
+    from .assertion_types import missing_required_params, validate_param_formats
 
     errors: list[str] = []
     for a in assertions:
         if not isinstance(a, dict):
             continue
         params = a.get("params") or {}
-        errors.extend(validate_param_formats(str(a.get("type", "")), params))
+        type_name = str(a.get("type", ""))
+        errors.extend(missing_required_params(type_name, params))
+        errors.extend(validate_param_formats(type_name, params))
         if isinstance(params, dict) and "covers" in params:
             # Inside params a binding would ride the dedup key and change the
             # assertion's identity, so the same declaration would name a
@@ -3803,8 +3839,11 @@ async def submit_assertions(
     proves. Prefer the objective id; name clause ids on a multi-clause
     control, where an objective ref only scopes review and sound credit
     needs the clause. A malformed declaration is refused on arrival with
-    the accepted form. A resubmission with a different ``covers``
-    supersedes the earlier row.
+    the accepted form. Resubmitting an assertion whose check is unchanged
+    re-points it: the new ``covers`` is adopted onto the row that is
+    already there, keeping its id and its verdicts. A resubmission that
+    carries no ``covers`` leaves a stored declaration standing —
+    withdrawing one is its own act, never a side effect of resubmitting.
 
     Composition rule, in observable terms: a clause is covered by the best
     admissible evidence bound to it. An existential clause takes an
@@ -3813,8 +3852,9 @@ async def submit_assertions(
     only ``typed_boundary`` (``constructed``) or ``sink_default_deny``
     (``sound``) that passed both tiers, bound with ``covers`` and whose
     scope covers every on-path component. Presence and scan types cover
-    no runtime clause on their own. A control's ``soundness_tier`` is the
-    weakest clause's tier.
+    no runtime clause on their own. A control is proven no more strongly
+    than its weakest clause: one for-all clause with no sound witness
+    leaves the control unproven however much evidence the others carry.
     """
     if not control_id and not assumption_id:
         raise ToolError("Exactly one of control_id or assumption_id must be provided.")

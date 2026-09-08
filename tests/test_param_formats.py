@@ -13,6 +13,7 @@ from mipiti_mcp.assertion_types import (
     SCOPE_ENTRY_PATTERN,
     SINK_KINDS,
     describe_types,
+    missing_required_params,
     validate_param_formats,
 )
 
@@ -208,3 +209,77 @@ def test_the_item_schema_is_exposed_as_data():
     assert params["scope"]["item_schema"]["item_pattern"] == SCOPE_ENTRY_PATTERN
     assert params["property"]["pattern"]
     assert "structure" not in params["property"]
+
+
+# ---------------------------------------------------------------------------
+# Required params: a submission that omits one is refused before it is sent.
+# ---------------------------------------------------------------------------
+
+
+def test_a_complete_submission_requires_nothing_more():
+    assert missing_required_params("sink_default_deny", _SDD) == []
+    assert missing_required_params("typed_boundary", _TB) == []
+    assert missing_required_params("file_exists", {"file": "a.py"}) == []
+
+
+def test_the_absent_required_params_are_named_one_by_one():
+    """A template that names one type and fills another type's parameter set
+    is well-formed in every value it carries, so only the absence check sees
+    it. Each missing key is named, in the words the API uses on arrival."""
+    template = {k: v for k, v in _SDD.items()}
+    errors = missing_required_params("typed_boundary", template)
+    assert errors == [
+        "Missing required param 'boundary_type' for type 'typed_boundary'",
+        "Missing required param 'constructors' for type 'typed_boundary'",
+    ]
+    assert validate_param_formats("typed_boundary", template) == []
+
+
+def test_an_optional_param_is_never_required():
+    assert missing_required_params("sink_default_deny", {**_SDD, "allowlist": []}) == []
+    without_optional = {k: v for k, v in _SDD.items()}
+    assert "wrappers" not in without_optional
+    assert missing_required_params("sink_default_deny", without_optional) == []
+
+
+def test_a_platform_target_stands_in_for_a_file():
+    """``target`` replaces ``file`` on the types that declare it, so a
+    submission carrying one is not asked for the other."""
+    assert missing_required_params("pattern_matches", {"pattern": "x"}) == [
+        "Missing required param 'file' for type 'pattern_matches'"
+    ]
+    assert missing_required_params(
+        "pattern_matches", {"pattern": "x", "target": "feature_description"}) == []
+
+
+def test_an_unpublished_type_requires_nothing():
+    assert missing_required_params("no_such_type", {}) == []
+    assert missing_required_params("file_exists", None) == [
+        "Missing required param 'file' for type 'file_exists'"
+    ]
+
+
+async def test_submit_refuses_an_incomplete_submission_before_sending(monkeypatch):
+    from fastmcp.exceptions import ToolError
+
+    from mipiti_mcp import server
+
+    called = []
+    monkeypatch.setattr(server, "_get_client", lambda: called.append(1))
+    body = json.dumps([{"type": "typed_boundary", "params": dict(_SDD), "repo": "o/r"}])
+    with pytest.raises(ToolError, match="boundary_type"):
+        await server.submit_assertions(
+            server_version="x", model_id="m", assertions_json=body, control_id="c")
+    assert called == []
+
+
+def test_the_binding_form_is_read_from_the_value_not_the_position():
+    """``parameter_binding`` is recorded from the shape of the value at the
+    site, and what it establishes is that the statement is fixed. The
+    published text has to say both, or an author admits it for a sink that
+    reads one of the bound entries as the statement."""
+    spec = next(t for t in ASSERTION_TYPES if t.name == "sink_default_deny")
+    forms = next(p for p in spec.params if p.name == "safe_forms").description
+    assert "read from the value's own shape, never from the position it occupies" in forms
+    assert "takes the structure as data" in forms
+    assert "a literal at the position with the data in a separate" not in forms

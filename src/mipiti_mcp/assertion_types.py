@@ -143,8 +143,10 @@ SAFE_FORMS: tuple[str, ...] = (
                           # or constant
     "literal_concat",     # a concatenation whose every operand is safe; a
                           # template with any expression part is a violation
-    "parameter_binding",  # a literal at the guarded position with the data
-                          # carried in a separate parameters argument
+    "parameter_binding",  # a data structure written at the site, carrying
+                          # the data beside a fixed statement; read from the
+                          # value's own shape, never from the position it
+                          # occupies
 )
 
 # What a declared sink is. Software and hardware sources are covered by the
@@ -228,6 +230,33 @@ def validate_param_formats(type_name: str, params: "dict") -> "list[str]":
             f"Param '{p.name}' for type '{type_name}' is not in the accepted form{hint}: {value!r}{detail}"
         )
     return errors
+
+
+def missing_required_params(type_name: str, params: "dict") -> "list[str]":
+    """Errors for required params the submission does not carry.
+
+    ``validate_param_formats`` judges the params that are present and says
+    nothing about the ones that are absent, so a submission built by naming
+    one type and filling another type's parameter set passes every format
+    check and is refused only on arrival. The declared params are the one
+    definition of what a type requires, so the absence check reads them here
+    and reports it in the platform's own words. ``target`` stands in for
+    ``file`` on the types that declare it, so a submission carrying one is
+    never asked for the other. A type the catalogue does not publish declares
+    no params and requires nothing.
+    """
+    spec = next((t for t in ASSERTION_TYPES if t.name == type_name), None)
+    if spec is None:
+        return []
+    supplied = params if isinstance(params, dict) else {}
+    has_target = supplied.get("target") is not None
+    return [
+        f"Missing required param '{p.name}' for type '{type_name}'"
+        for p in spec.params
+        if p.required
+        and not (p.name == "file" and has_target)
+        and p.name not in supplied
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -480,10 +509,15 @@ ASSERTION_TYPES: tuple[AssertionTypeSpec, ...] = (
                 "(a name bound once at module, class or package scope to a "
                 "literal, or an HDL parameter, localparam or constant); "
                 "`literal_concat` (every operand safe; a template with any "
-                "expression part is a violation); `parameter_binding` (a "
-                "literal at the position with the data in a separate "
-                "parameters argument). No taint reasoning: anything else is a "
-                "violation.",
+                "expression part is a violation); `parameter_binding` (a data "
+                "structure written at the site, carrying the data beside a "
+                "fixed statement -- read from the value's own shape, never "
+                "from the position it occupies). What `parameter_binding` "
+                "establishes is that the statement reaching the sink is "
+                "fixed, so admit it only for a sink that takes the structure "
+                "as data; where a sink reads one of its entries as the "
+                "statement, the form that proves the property is a boundary "
+                "type. No taint reasoning: anything else is a violation.",
                 example='["parameter_binding", "literal"]',
                 structure="array", min_items=1, enum=SAFE_FORMS,
             ),

@@ -37,10 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the `property` in one sentence. `sink_default_deny` adds `safe_forms`,
   a non-empty subset of `literal`, `named_constant`, `literal_concat`,
   `parameter_binding`; `typed_boundary` adds `boundary_type` and its
-  `constructors`. Every unclassifiable site is a violation, a scope that
-  matches nothing proves nothing, and the residual each type carries is
-  stated in its description. Neither takes `file` or `target`. Hardware
-  sources are covered by the same rule.
+  `constructors`. `parameter_binding` is read from the shape of the value
+  at the site, never from the position it occupies, and what it establishes
+  is that the statement reaching the sink is fixed. Every unclassifiable site
+  is a violation, a scope that matches nothing proves nothing, and the
+  residual each type carries is stated in its description. Neither takes
+  `file` or `target`. Hardware sources are covered by the same rule.
 - **`covers`** — a type-independent, top-level field on each object passed to
   `submit_assertions`: the objective id (`CO-NN`; `CO12` and `CO-12` name the
   same objective) or the clause ids (`cls_` + 12 hex) the evidence proves, at
@@ -53,9 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared one.
 - **`surface_extent`** on `add_attacker` and `edit_attacker` (`whole`: the
   attacker's operations range over any entry of the interface it reaches;
-  `point`: one named entry), and `attest_surface_extent` on `edit_attacker`;
-  an edit that supplies either requires `change_reason`. `get_entity`
-  returns an attacker's `surface_extent` and `surface_extent_source`.
+  `point`: one named entry), and `attest_surface_extent` on `edit_attacker`.
+  Supplying any of them attests the extent and requires `change_reason`, on
+  the create as much as on the edit. Only `whole` is declarable on a create:
+  narrowing to one named entry is a statement about the objectives the
+  attacker anchors, which a create does not have yet, so the narrowing is an
+  `edit_attacker` call, where it is checked against the assets those
+  objectives defend. `get_entity` returns an attacker's `surface_extent` and
+  `surface_extent_source`.
 - Array-valued parameter formats: `ParamSpec.structure="array"` with an item
   schema (`min_items`, `enum`, `item_pattern`, `required_keys`,
   `key_enums`), applied by `validate_param_formats` on both sides; scalar
@@ -93,8 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `attacker_irrelevant` risk reasons, none of which the API reports; they
   describe the attacker surface extent, the soundness classes and the for-all
   rule, and `covers`. Components are added or edited after
-  `generate_threat_model` (generation reads no components). A `sealed`
-  boundary decisively drops reachability only once its seal is attested
+  `generate_threat_model`, because a component is created against a model and
+  there is none to supply before one exists. A `sealed` boundary decisively
+  drops reachability only once its seal is attested
   (`edit_trust_boundary` with `seal_source="attested"` and a
   `change_reason`); `add_trust_boundary` says the same. `submit_attestation`
   states that an attestation is a responsible party's claim, never a proof
@@ -105,6 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   around one records work it never did. A test enumerates the held-out
   vocabulary and fails when any of it reaches a tool description or the
   instructions without a read behind it.
+- A submission is checked for the params its type requires as well as the
+  format of the ones it carries. A submission that names one type and fills
+  another type's parameter set is well-formed in every value it holds, so
+  only the absence check sees it, and it is seen before the submission leaves
+  the client. `missing_required_params` is exported and names each absent key
+  in the same words the API uses on arrival.
+- `submit_assertions` states what a resubmission does: an assertion whose
+  check is unchanged is re-pointed in place, keeping its id and its verdicts,
+  and a resubmission that carries no `covers` leaves a stored declaration
+  standing. Evidence strength is composed per clause and no control-level
+  grade is named, so the text states the consequence instead — a control is
+  proven no more strongly than its weakest clause.
 - The assertion type count is 30.
 
 ### Removed

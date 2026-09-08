@@ -276,9 +276,46 @@ def test_surface_extent_and_the_for_all_rule_are_stated() -> None:
 
 
 def test_components_are_added_after_generation() -> None:
+    """The routing is: model first, components after. The reason given for it
+    has to be one that holds -- a component is created against a model -- and
+    not a claim about what the generation pipeline reads, which this
+    repository cannot see and does not decide."""
     text = build_instructions("pro", "user")
     assert "BEFORE `generate_threat_model`" not in text
-    assert "generation reads no components" in text
+    assert "a component is created against a model" in text
+    assert "generation prompt" not in text
+    assert "generation reads no components" not in text
+
+
+def test_the_create_side_extent_contract_is_published() -> None:
+    """An extent supplied on a create is an attested declaration and is
+    recorded with its reason; a narrowing is not declarable there at all.
+    Both are stated where the caller reads the tool, so a plan is not built
+    around a call that is refused."""
+    doc = _flat_doc("add_attacker")
+    assert "change_reason" in doc
+    assert "Only ``whole`` is declarable on a create" in doc
+    assert "edit_attacker" in doc
+    text = build_instructions("pro", "user")
+    assert "only `whole` is declarable" in text
+
+
+def test_a_resubmission_is_documented_as_an_in_place_re_pointing() -> None:
+    """The row an agent already submitted keeps its id and its verdicts when
+    the declaration changes. Calling that a supersession would have the agent
+    look for a new row and a superseded count that never come back."""
+    doc = _flat_doc("submit_assertions")
+    assert "adopted onto the row that is already there" in doc
+    assert "supersedes the earlier row" not in doc
+
+
+def test_no_control_level_soundness_grade_is_promised() -> None:
+    """Evidence strength is composed per clause. A control-level grade is not
+    a field any read returns, so the text states the consequence -- the
+    weakest clause bounds the control -- without naming one."""
+    doc = _flat_doc("submit_assertions")
+    assert "no more strongly than its weakest clause" in doc
+    assert "soundness_tier" not in doc
 
 
 def test_only_an_attested_seal_drops_reachability() -> None:
