@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->141<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->139<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -110,8 +110,7 @@ uvx mipiti-mcp
 |------|-------------|
 | `add_asset` / `edit_asset` / `remove_entity (entity_type="asset")` | Targeted single-entity changes for assets. Creates a new version. |
 | `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. `surface_extent` (`whole`: the attacker's operations range over any entry of the interface it reaches; `point`: one named entry) decides whether the objectives it appears in are for-all obligations; supplying it on `edit_attacker` attests it and requires `change_reason`. |
-| `get_entity` | Read one entity of any kind. Every entity carries `entity_origin` (`inferred` / `declared`); an attacker also carries `surface_extent` and `surface_extent_source`. |
-| `get_inventory_completeness` | Per-entity origin and computed grounding, the closure results, and the per-control and model completeness tier (`inferred` < `declared` < `grounded` < `closed`). Grounding is computed by the platform from signed CI inventory statements and attested positions or seals, never accepted from a caller. Read-only. |
+| `get_entity` | Read one entity of any kind. An attacker also carries `surface_extent` and `surface_extent_source`. |
 
 ### Trust Boundaries
 
@@ -144,7 +143,7 @@ uvx mipiti-mcp
 | `edit_assumption` | Update description and/or linked COs. |
 | `remove_entity (entity_type="assumption")` | Soft-delete (preserved for audit). Linked COs are no longer mitigated by it. |
 | `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
-| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`; optional `covers` names the clauses it stands for. A claim, never a proof over every site: it can cover an existential clause and never a for-all one. |
+| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. A claim, never a proof over every site: it can cover an existential clause and never a for-all one. |
 | `list_attestations` | Attestation history for an assumption. |
 | `set_control_assumption_groups` | Declaratively set a control's assumption group structure: mark it externally handled by a single assumption (shorthand), clear that status (control reverts to not_implemented), or express compound cases with multiple groups (within a group = AND, across groups = OR; e.g. "AWS KMS + quarterly review"). Attested groups count as active for mitigation group completeness. |
 | `get_control_assumption_groups` | Inspect the current assumption group structure on a control. Groups express alternative sets of external claims (within = AND, across = OR). |
@@ -155,12 +154,11 @@ uvx mipiti-mcp
 | Tool | Description |
 |------|-------------|
 | `get_assertion_types` | The catalogue as data: every type, what it proves, its soundness class, its params (an array-valued param carries its item schema), and the class vocabulary. Read-only. |
-| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (<!--ASSERTION_TYPE_COUNT-->30<!--/ASSERTION_TYPE_COUNT--> assertion types). Each object may carry `covers`: the objective id (`CO-NN`) or clause ids (`cls_…`) it proves; a declared binding is checked structurally and survives review. |
-| `bind_assertion` | Declare `covers` on an existing assertion without resubmitting it; replaces the prior declaration and re-evaluates the control. |
+| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (<!--ASSERTION_TYPE_COUNT-->30<!--/ASSERTION_TYPE_COUNT--> assertion types). Each object may carry `covers`: the objective id (`CO-NN`) or clause ids (`cls_…`) it proves; a declared binding survives review, an undeclared one is inferred and capped below sound credit. |
 | `list_assertions` / `delete_assertion` | List or delete assertions for a control. |
 | `add_evidence` / `remove_evidence` | Attach auxiliary metadata (docs, links). Evidence is contextual — only assertions prove implementation. |
 | `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |
-| `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? Returns `clauses[]` — each clause's id, quantifier, covering evidence with class and binding origin, and `required_evidence` naming the class it needs with a prefilled `suggested_submission`, by-construction first. |
+| `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? For the per-clause work list — the class each clause still needs, the clause id to bind it to, and a prefilled submission — read `get_control_work_order`'s `required_evidence`. |
 | `get_scan_prompt` | Returns targeted prompts for scanning the codebase against not_implemented controls. |
 | `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal`, `open_assumption`, `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`. Start here for periodic maintenance. |
 | `submit_findings` / `list_findings` / `update_finding` | Report and track negative findings (gap discovery). |
@@ -197,7 +195,7 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 
 | Tool | Description |
 |------|-------------|
-| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation, coverage_gap, insufficient_by_design, soundness_gap) and, where surfaced, `assurance{soundness_tier, completeness_tier, binding_origin}` per CO and control. For per-CO reachability state call `get_reachability_verdicts`. |
+| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation, coverage_gap, insufficient_by_design). For per-CO reachability state call `get_reachability_verdicts`. |
 | `get_findings_risks` | Workspace-scoped triage dashboard: open findings, active risk acceptances, and at-risk COs across every model the workspace can access. Entry point when asked "what's open?". |
 | `get_risk_view (scope="model")` | Per-model Prioritized Risk View: one row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage, and open-finding count. |
 | `get_risk_view (scope="system")` | Cross-model variant of `get_risk_view (scope="model")`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |

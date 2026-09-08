@@ -42,22 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stated in its description. Neither takes `file` or `target`. Hardware
   sources are covered by the same rule.
 - **`covers`** — a type-independent, top-level field on each object passed to
-  `submit_assertions` and `submit_functional_test_assertions`, and a param on
-  `submit_attestation`: the objective id (`CO-NN`; `CO12` and `CO-12` name the
+  `submit_assertions`: the objective id (`CO-NN`; `CO12` and `CO-12` name the
   same objective) or the clause ids (`cls_` + 12 hex) the evidence proves, at
   most 16. The accepted form is one definition (`COVERS_PATTERN`,
   `COVERS_MAX`, `validate_covers`) applied before a submission leaves the
-  client and by the platform on arrival. **`bind_assertion`** declares
-  `covers` on an existing assertion without resubmitting it.
+  client and by the API on arrival. The clause ids to declare are named by
+  `get_control_work_order` in `required_evidence`. A `covers` key on a
+  functional-test submission is refused rather than dropped in transit: that
+  surface records no binding, and a caller must not be left believing it
+  declared one.
 - **`surface_extent`** on `add_attacker` and `edit_attacker` (`whole`: the
   attacker's operations range over any entry of the interface it reaches;
   `point`: one named entry), and `attest_surface_extent` on `edit_attacker`;
   an edit that supplies either requires `change_reason`. `get_entity`
-  returns an attacker's `surface_extent` and `surface_extent_source`, and
-  every entity's `entity_origin`.
-- **`get_inventory_completeness`** — per-entity origin and computed
-  grounding, the closure results, and the per-control and model completeness
-  tier.
+  returns an attacker's `surface_extent` and `surface_extent_source`.
 - Array-valued parameter formats: `ParamSpec.structure="array"` with an item
   schema (`min_items`, `enum`, `item_pattern`, `required_keys`,
   `key_enums`), applied by `validate_param_formats` on both sides; scalar
@@ -81,36 +79,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `no_plaintext_secret` state what a clean result cannot prove.
   `test_attested` states its bound (the path it drove) and that an unsigned
   statement or an unattested run is reported as a claim.
-- `get_sufficiency`, `get_controls` (detail mode) and `get_control_work_order`
-  document `clauses[]` (clause ids, quantifier and its source, covering
-  evidence with class and binding origin, `required_evidence` with a
-  prefilled `suggested_submission`, stated by-construction first);
-  `get_controls`, `assess_model`, `get_verification_report` and
-  `get_control_work_order` document `assurance{soundness_tier,
-  completeness_tier, binding_origin}`; `assess_model` documents the
-  `soundness_gap` risk reason; `get_control_objectives` and the work order's
-  objectives document the derived `obligation_quantifier`,
-  `quantifier_source` and `surface_extent`; the work order's
+- `get_control_work_order` documents `required_evidence[]`, one entry per
+  clause that still needs something: the clause text, its `clause_id` (the
+  value to put in `covers`), its `quantifier`, the `required_class` that
+  closes it, what is `missing`, and a prefilled `suggested_submission`. Its
   `assertion_contract` carries `soundness`, `universal_rule` and
-  `sound_types`, and its acceptance criteria are generated per clause.
-- `refine_control` states that a rewording dropping a for-all marker while
-  the objective's surface extent is undeclared is refused, and names the two
-  exits.
+  `sound_types`, and its acceptance criteria are generated from those
+  entries, so a clause that has to hold at every site the attacker reaches is
+  named as such. `get_sufficiency` and `get_controls` point at it rather than
+  restating the work list.
 - The server instructions no longer describe an asset or attacker `status`
   field, `asset_status` / `attacker_status`, or the `asset_absent` /
-  `attacker_irrelevant` risk reasons, none of which the platform reports;
-  they describe `entity_origin` (`inferred` / `declared`, with grounding
-  computed by the platform and never accepted from a caller), the attacker
-  surface extent, the soundness classes and the for-all rule, `covers`, and
-  the `soundness_gap` routing. Components are added or edited after
+  `attacker_irrelevant` risk reasons, none of which the API reports; they
+  describe the attacker surface extent, the soundness classes and the for-all
+  rule, and `covers`. Components are added or edited after
   `generate_threat_model` (generation reads no components). A `sealed`
   boundary decisively drops reachability only once its seal is attested
   (`edit_trust_boundary` with `seal_source="attested"` and a
   `change_reason`); `add_trust_boundary` says the same. `submit_attestation`
   states that an attestation is a responsible party's claim, never a proof
   over every site.
-- `add_component`, `edit_component` and `assign_to_components` state that
-  they mark the target `declared` and never accept or set grounding.
+- The published surface names only what the API answers. A tool whose call
+  has no route, a parameter the receiving surface drops, and a return field
+  that never appears are each held out of the catalogue: an agent that plans
+  around one records work it never did. A test enumerates the held-out
+  vocabulary and fails when any of it reaches a tool description or the
+  instructions without a read behind it.
 - The assertion type count is 30.
 
 ### Removed

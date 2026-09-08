@@ -84,8 +84,8 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 
 - `generate_threat_model` — creates a new model with trust boundaries, assets, attackers, and control objectives. Automatically detects similar existing models and routes accordingly. Progress reported automatically.
 - `refine_threat_model` — updates an existing model when you already have a model ID and want to change it. Progress reported automatically.
-- `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. Every entity carries `entity_origin`: `inferred` when generation or a refinement wrote it, `declared` once an operator or agent authored or edited it through these tools. Whether an entity is *grounded* (observed by a signed CI inventory statement, an attested position, an attested seal) is computed by the platform from its own facts and is never accepted from a caller; `get_inventory_completeness` reports it. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
-- `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. The platform also derives `whole` structurally for an uncredentialed remote attacker. The extent decides whether the objectives the attacker appears in are for-all obligations (see Controls and assertions). Supplying it on `edit_attacker` attests it and requires `change_reason`; it is audited like a factor override.
+- `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
+- `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. The extent decides whether the objectives the attacker appears in are for-all obligations (see Controls and assertions). Supplying it on `edit_attacker` attests it and requires `change_reason`; it is audited like a factor override.
 - **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (removals are audit-preserving; restore applies to `asset`, `attacker`, and `assumption`).
@@ -110,13 +110,12 @@ A threat model produces control objectives. Controls are derived from these and 
 - `submit_assertions` — provide proof for a control. Call `get_assertion_types` for the types and their params; the tool description is prose your client may shorten. Always verify locally first: `mipiti-verify verify <type> -p key=value --project-root .` Read the target file and confirm a reviewer would agree with the claim.
 - **Assertion design: prefer decomposition over breadth.** Tier 2 (semantic LLM check) evaluates each assertion with only its own check-type evidence. A single broad claim like "X calls Y to do A and B using C" will pass Tier 1 but fail Tier 2 — the mechanical evidence (e.g., a function_calls result) doesn't surface facts A, B, C. Split into multiple atomic assertions — one for each narrow aspect — each with a check type that directly shows the relevant code (`pattern_matches` on the specific line, `function_exists` for the named function, etc.). Submit them as a group on the same control. Sufficiency combines them; individually each is trivially provable.
 - **Behavioral clauses need a test, not just a mechanism.** A clause such as "rejects an expired token" is shown to *exist* by a structural type (`function_exists`, `pattern_matches`) and shown to *hold* only by a test that exercised it. `test_exists` proves the test file is in the tree and nothing ran; `test_attested` proves it passed: a statement the repository's own CI workflow signed about a run against the commit under verification, which a developer machine cannot produce. It says nothing about a control the run had switched off, so pin the control on with the `env` param when it is configuration-gated, and pair it with the structural assertion for the mechanism. Coverage of the control's code path is not proven. A signed pass is strong tier-1 evidence, not a verdict: sufficiency still decides whether the clause is covered. An unsigned statement or an unattested run still covers the clause but is reported as a *claim*, never a witness.
-- **A for-all clause needs a sound witness, not more tests.** Every assertion type declares a soundness class, returned by `get_assertion_types`: `presence` (a construct exists), `under_approximating_scan` (a pattern scan; clean proves absence of the form only), `existential_witness` (a signed run passed; proves the path it drove), `sound_over_approximation` (every sink site in a declared scope is a safe form or a reviewed exception) and `by_construction` (the sink accepts only a boundary type whose construction is default-denied). A clause that ranges over every entry of a surface — every endpoint, every query, every frame — is credited only by `typed_boundary` or `sink_default_deny` bound to it with `covers`; a test proves only the path it drove, and an attestation is a responsible party's claim, never a proof over every site. `get_sufficiency` and `get_control_work_order` name the class each clause needs (`required_evidence`, with a prefilled `suggested_submission`): read them before writing evidence, and when a clause reads unverifiable by the current evidence, submit the named class rather than more tests. Prefer `typed_boundary` where the sinks accept a boundary type; otherwise `sink_default_deny`. Hardware sources are covered by the same two types: an assignment or a module instantiation is a sink.
-- **Bind evidence to what it proves.** Each submitted assertion, and an attestation, may carry `covers`: the objective id (`CO-NN`) or, on a multi-clause control, the clause ids (`cls_…`) that `get_sufficiency` exposes. A declared binding is checked structurally at submission and survives review; an undeclared one is inferred by review and capped below sound credit. `bind_assertion` declares `covers` on an existing assertion without resubmitting it.
+- **A for-all clause needs a sound witness, not more tests.** Every assertion type declares a soundness class, returned by `get_assertion_types`: `presence` (a construct exists), `under_approximating_scan` (a pattern scan; clean proves absence of the form only), `existential_witness` (a signed run passed; proves the path it drove), `sound_over_approximation` (every sink site in a declared scope is a safe form or a reviewed exception) and `by_construction` (the sink accepts only a boundary type whose construction is default-denied). A clause that ranges over every entry of a surface — every endpoint, every query, every frame — is credited only by `typed_boundary` or `sink_default_deny` bound to it with `covers`; a test proves only the path it drove, and an attestation is a responsible party's claim, never a proof over every site. `get_control_work_order` names the class each clause needs (`required_evidence`, with the clause id to put in `covers` and a prefilled `suggested_submission`): read it before writing evidence, and when a clause reads unverifiable by the current evidence, submit the named class rather than more tests. Prefer `typed_boundary` where the sinks accept a boundary type; otherwise `sink_default_deny`. Hardware sources are covered by the same two types: an assignment or a module instantiation is a sink.
+- **Bind evidence to what it proves.** Each submitted assertion may carry `covers`: the objective id (`CO-NN`) or, on a multi-clause control, the clause ids (`cls_…`) that `get_control_work_order` names in `required_evidence`. The form of the declaration is refused on arrival when it is malformed. A declared binding survives review; an undeclared one is inferred by review and capped below sound credit. Resubmit the assertion with `covers` to change the declaration.
 - `list_assertions` / `delete_assertion` — list active assertions for a control; delete stale or incorrect ones before resubmitting.
-- `bind_assertion` — declare `covers` on an existing assertion (the objective or clause ids it proves) without resubmitting it; a changed declaration re-evaluates the control.
 - `update_control_status` — mark implemented or not_implemented. Requires at least one assertion BEFORE marking implemented. Always submit assertions first, then update status.
 - `get_verification_report` — shows which controls are verified, which have sufficiency gaps, and which lack assertions entirely. Read `sufficiency_details` for the specific aspects that still need proof. Each `sufficiency` block also carries `misaligned_assertion_ids` (off-topic assertions that should be rebound, superseded, or rewritten — do not treat them as evidence) and `stale: true` (cached verdict no longer matches current inputs; a background re-eval was triggered on read — call again shortly for a refreshed verdict).
-- `get_sufficiency` — quick check: do assertions for a single control collectively cover all aspects? Evaluated server-side at submission. Returns `clauses[]` — each clause's id, quantifier, the evidence covering it with its class and binding origin, and `required_evidence` naming the class it needs with a prefilled `suggested_submission` — the work list, by-construction first.
+- `get_sufficiency` — quick check: do assertions for a single control collectively cover all aspects? Evaluated server-side at submission. For the per-clause work list — the class each clause still needs, the clause id to bind it to, and a prefilled submission — read `get_control_work_order`'s `required_evidence`.
 - `get_mitigation_groups` — get the current group structure for a CO with control details (id, description, status) for each entry. Shows numbered groups (AND within, OR across), defense-in-depth controls, and unmapped controls available for assignment. Use before `set_mitigation_groups`, when reviewing why a CO is at_risk, or to find unmapped controls.
 - `set_mitigation_groups` — set which controls are required vs defense-in-depth for a CO. Use when a control is blocking a CO but is redundant with existing mitigations (e.g., HMAC signing redundant with TLS + content hash), or when restructuring alternative mitigation paths. Groups define: within group AND (all required), across groups OR (any complete group mitigates). AI-gated: rejected if the new structure doesn't satisfy the CO.
 - `refine_control` — modify a control's description if it doesn't match the actual security requirement. **Side effect on accepted refinements**: every assertion attached to the control is superseded — their claims were authored against the prior description and may not be on-topic for the new one. Response carries `superseded_assertions: <count>`. Re-submit any assertion that still applies; superseded rows remain in history.
@@ -162,17 +161,15 @@ If the alternative drops a framework binding the original carried, the platform 
 
 ## Assurance posture
 
-- `assess_model` — deterministic assessment of all control objectives. Returns mitigated/at_risk/unassessed counts and progressive metrics (defined/implemented/verified COs). Use `summary_only=True` for a compact response with just the counts and a contextual `message` explaining the current state (e.g., "13 controls not implemented, blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` and `unassessed` COs require action. Where the platform surfaces it, each CO and control also carries `assurance`: `soundness_tier` (`none` < `claimed` < `witnessed` < `sound` < `constructed`, the weakest clause's best admissible evidence), `completeness_tier` (`inferred` < `declared` < `grounded` < `closed`, how much of the inventory the claim rests on is declared or grounded) and `binding_origin` (`inferred` / `structural` / `declared`). The verified-status words are unchanged; `assurance` says how strong the verified claim is.
-- `get_inventory_completeness` — the model's inventory completeness: every asset, attacker, boundary, component and assumption with its `entity_origin` and computed `grounded`, the closure results (taxonomy, placement, component, position, description), and the per-control and model tiers. Read it when a claim reads `completeness_tier` below `grounded` to see which entities bound it.
+- `assess_model` — deterministic assessment of all control objectives. Returns mitigated/at_risk/unassessed counts and progressive metrics (defined/implemented/verified COs). Use `summary_only=True` for a compact response with just the counts and a contextual `message` explaining the current state (e.g., "13 controls not implemented, blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` and `unassessed` COs require action.
 
 **Reachability and risk reason**: Reachability per CO is exposed by `get_reachability_verdicts` (deterministic-computation provenance — re-derived from structural primitives, never persisted). Each CO assessment also includes:
-- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` (implement controls), `pending_attestation` (submit an attestation for the linked boundary assumption), `expired_attestation` (renew an expired attestation), `unassessed` (generate controls or create an assumption), `coverage_gap` (controls are implemented but do not span the CO's full threat — add controls to close the gap, or dismiss/accept if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented — a design gap, not an implementation gap; redesign or add controls so the group can span the threat), `soundness_gap` (a for-all objective whose only cover is an attestation or evidence below the sound classes — submit a sound witness bound to the control's clauses, or record a disposition). `insufficient_by_design` is more binding than `missing_controls` and takes precedence over it.
-- `obligation_quantifier` / `quantifier_source` — whether the objective is a for-all obligation (`universal`: the attacker's surface extent is whole, or the asset lives in several components) or a one-entry one (`existential`), or undeclared (`unknown`); `none` when the objective is decisively unreachable. Recomputed from structure on every read, never stored.
+- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` (implement controls), `pending_attestation` (submit an attestation for the linked boundary assumption), `expired_attestation` (renew an expired attestation), `unassessed` (generate controls or create an assumption), `coverage_gap` (controls are implemented but do not span the CO's full threat — add controls to close the gap, or dismiss/accept if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented — a design gap, not an implementation gap; redesign or add controls so the group can span the threat). `insufficient_by_design` is more binding than `missing_controls` and takes precedence over it.
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs that need attestation action.
 
 **Before acting on any risk_reason, check whether a control is actually REQUIRED for the objective.** `get_mitigation_groups` splits a CO's controls into numbered groups (within=AND, across=OR) and `defense_in_depth`. Only the groups earn mitigation credit. If a CO has controls attached but ALL of them sit in `defense_in_depth`, or it has no groups at all, then nothing is required to mitigate it and the CO cannot leave at-risk no matter how many controls you generate or how much evidence you submit. That is a modelling gap, not an evidence gap: decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups` (AI-gated, so the structure has to actually satisfy the CO). Generating or proving controls in this state is wasted work.
 
-**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `soundness_gap` → the objective is universal and its only cover is an attestation or evidence below the sound classes. Do NOT attest harder or add tests: submit `typed_boundary` or `sink_default_deny` bound with `covers` to the control's clauses, or, if the objective genuinely does not apply, `create_co_disposition`. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
+**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
 
 ## Gap discovery
 
@@ -224,7 +221,7 @@ Trust boundaries and assumptions are versioned (CRUD creates new model versions 
 - `edit_assumption` — update description and/or linked COs.
 - `remove_entity(entity_type="assumption")` — soft-delete an assumption (preserved for audit). Linked COs are no longer mitigated by it; controls with `assumed_by` pointing to it become inert (pointer preserved to enable restore).
 - `restore_entity(entity_type="assumption")` — restore a soft-deleted assumption. Controls with `assumed_by` pointing to it automatically reconnect. Re-attestation required before the assumption mitigates COs again.
-- `submit_attestation` — record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, and `expires_at` (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation. An attestation is a claim: it can cover an existential clause (optionally named in `covers`) and never a for-all one, and a CI-minted attestation is no stronger than the weakest assertion behind it.
+- `submit_attestation` — record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, and `expires_at` (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation. An attestation is a claim: it can cover an existential clause and never a for-all one, and a CI-minted attestation is no stronger than the weakest assertion behind it.
 - `list_attestations` — attestation history for an assumption.
 
 **Assumption types**: Two types, set via `assumption_type` in `add_assumption`:
@@ -363,10 +360,10 @@ Components bridge security architecture (trust boundaries) to code organization 
 
 `generate_threat_model` proposes speculative components (with `repo_url=""`) when no topology has been supplied. These are a starting point — refine them as code grounding emerges:
 
-- **Existing codebase**: generation reads no components (`add_component` needs a `model_id`, and no generation prompt scopes anything to components), so call `generate_threat_model` first — with the services you found written into `feature_description` — and then `edit_component` on each speculative component it proposed, swapping `repo_url` and `path` to the real values, or `add_component` for the ones it missed. A component added or edited this way is `declared`; it becomes `grounded` only when a signed CI inventory statement at the model's commit observed it (`get_inventory_completeness` shows which).
+- **Existing codebase**: generation reads no components (`add_component` needs a `model_id`, and no generation prompt scopes anything to components), so call `generate_threat_model` first — with the services you found written into `feature_description` — and then `edit_component` on each speculative component it proposed, swapping `repo_url` and `path` to the real values, or `add_component` for the ones it missed.
 - **Planning conversation, no code yet**: call `generate_threat_model` directly; the LLM-proposed speculative components serve as a topology starting point the user/developer refines as the design firms up. `repo_url` stays empty until code exists; the coherence report flags `component_unbound` findings on speculative components so they're visible to auditors.
 
-A component with empty `repo_url` is the natural signal "speculative — not yet bound to code." A component with a populated `repo_url` is bound to code; whether it is *grounded* — observed by a signed inventory statement — is computed by the platform and never declared. There is no separate status field — the binding is the state.
+A component with empty `repo_url` is the natural signal "speculative — not yet bound to code." A component with a populated `repo_url` is grounded. There is no separate status field — the binding is the state.
 
 But an empty `repo_url` covers two different things, and the component's trust boundary tells them apart. A component in one of YOUR internal zones (your own backend/frontend/service repos) is your code — ground it to the repo. A component in an EXTERNAL trust zone — e.g. a third-party service, the customer's IdP, or other infrastructure you call but do not own — has no repo of yours; leave it unbound, where `component_unbound` is the correct permanent marker of an external dependency, not a TODO. The test is the trust boundary, never "does some client code touch it": client code for almost every dependency lives in your repo, so that alone never justifies binding an external component.
 """
@@ -1478,16 +1475,6 @@ async def refine_control(
     the caller knows how many. Re-submit any assertion that still
     applies under the new description; superseded rows remain in
     history with ``superseded_by="control_refined:..."``.
-
-    **For-all wording is protected.** A rewording that drops a for-all
-    marker ("every request", "all inputs", "any frame") from a guarantee
-    clause while the objective's surface extent is undeclared is refused,
-    and the refusal names the two exits: attest ``surface_extent="point"``
-    on the named attacker with ``edit_attacker`` (with a ``change_reason``),
-    or keep the universal wording. When the objective's extent is already
-    ``whole``, the rewording is accepted and the response says the
-    obligation is structural — the clause stays a for-all obligation
-    whatever the text says.
 
     Args:
         model_id: ID of the threat model.
@@ -2630,18 +2617,6 @@ async def assess_model(
     Use summary_only=True to get just the counts without per-CO
     assessments.
 
-    Each CO assessment carries ``risk_reason`` (see the server
-    instructions; ``soundness_gap`` means a for-all objective whose only
-    cover is an attestation or evidence below the sound classes — the
-    exit is a sound witness bound to the control's clauses, or a
-    disposition) and, where the platform surfaces it, ``assurance``:
-    ``soundness_tier`` (``none`` < ``claimed`` < ``witnessed`` <
-    ``sound`` < ``constructed``), ``completeness_tier`` (``inferred`` <
-    ``declared`` < ``grounded`` < ``closed``) and ``binding_origin``.
-    The summary adds ``verified_closed`` / ``verified_bounded`` buckets.
-    Mitigation status words are unchanged; ``assurance`` says how strong
-    the claim behind them is.
-
     Args:
         model_id: ID of the threat model to assess.
         summary_only: If True, return only summary counts (no per-CO details).
@@ -2654,41 +2629,6 @@ async def assess_model(
             model_id, summary_only=summary_only,
             status=status or "", offset=offset, limit=limit,
         ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_inventory_completeness(server_version: str, model_id: str) -> dict:
-    """The model's inventory completeness: how much of the inventory a
-    verified claim rests on is declared or grounded. Read-only.
-
-    Every asset, attacker, trust boundary, component and assumption is
-    listed with its stored ``entity_origin`` (``inferred`` — written by
-    generation or a refinement; ``declared`` — authored or edited by an
-    operator or agent) and its computed ``grounded`` flag. Grounding is
-    never accepted from a caller: a component is grounded when a signed CI
-    inventory statement at a commit observed its repository and path; an
-    attacker when its position and surface extent are attested or
-    structurally derived; a boundary when its seal is attested or its
-    zone role matches the rules-first derivation; an asset when every
-    component it lives in is grounded; an assumption when its exclusion
-    predicate is active and attested. An entity carrying a quality
-    warning caps at ``inferred``.
-
-    Also returns the closure results (``taxonomy``, ``placement``,
-    ``component``, ``position``, ``description``; a closure the platform
-    cannot evaluate reads ``not_evaluated``), ``controls[]`` with each
-    control's ``completeness_tier`` and the ``bounded_by`` entities that
-    hold it there, and the model tier: ``inferred`` < ``declared`` <
-    ``grounded`` < ``closed`` (every live objective endpoint grounded and
-    every closure holding).
-
-    Args:
-        model_id: ID of the threat model.
-    """
-    try:
-        return _dump(await _get_client().get_inventory_completeness(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2744,12 +2684,9 @@ async def add_asset(
     ``quality_warning`` and the control objectives derived from it may
     be under-specified.
 
-    An asset added here carries ``entity_origin: "declared"`` (one
-    written by generation reads ``inferred``); whether it is grounded is
-    computed by the platform from the components it lives in and is
-    never accepted from a caller. There is no asset status to set: an
-    asset that does not apply is recorded with a non-applicability
-    assumption or ``create_co_disposition``.
+    There is no asset status to set: an asset that does not apply is
+    recorded with a non-applicability assumption or
+    ``create_co_disposition``.
 
     The caller supplies identity-bearing fields (name, description,
     security_properties, notes) plus optional component scoping; the
@@ -2840,8 +2777,8 @@ async def edit_asset(
     When changing identity fields, hold to the asset authoring
     contract: name the *data/resource protected* and its security
     property, not a mechanism — otherwise the result is flagged with a
-    ``quality_warning`` (see ``add_asset``). An edit marks the asset
-    ``entity_origin: "declared"``; there is no status field to set.
+    ``quality_warning`` (see ``add_asset``). There is no status field to
+    set.
 
     The composed ``impact`` is server-derived from the factor fields;
     there is no way to set it directly. To change the rating, set
@@ -2975,15 +2912,12 @@ async def add_attacker(
     mirror ``add_asset``. 503 on factor-reasoning or restore-candidate
     evaluator outage, 502 on malformed restore-candidate response.
 
-    An attacker added here carries ``entity_origin: "declared"``. Its
-    ``surface_extent`` decides whether the objectives it appears in are
-    for-all obligations: an attacker ranging over the whole interface
-    makes every objective it appears in universal, which only a sound
-    witness (``typed_boundary`` / ``sink_default_deny``) can credit.
-    The platform derives ``whole`` on its own for an uncredentialed
-    remote attacker (``privileges_required="None"`` with a Network or
-    Adjacent vector); a generated suggestion can raise the extent and
-    never lower it. There is no attacker status to set.
+    ``surface_extent`` says how much of the reached interface this
+    attacker's operations range over. An attacker ranging over the whole
+    interface makes the objectives it appears in for-all obligations,
+    which only a sound witness (``typed_boundary`` /
+    ``sink_default_deny``) can credit. A generated suggestion can raise
+    the extent and never lower it. There is no attacker status to set.
 
     Args:
         model_id: ID of the threat model.
@@ -3055,15 +2989,14 @@ async def edit_attacker(
     factor fields, ``surface_extent`` or ``attest_surface_extent`` are
     sent without ``change_reason``.
 
-    An edit marks the attacker ``entity_origin: "declared"``. Attesting
-    ``surface_extent`` is a person's audited structural declaration,
-    ledgered like a factor override: ``"whole"`` makes every objective
-    the attacker appears in a for-all obligation; ``"point"`` overrides
-    the structural floor the platform derives for an uncredentialed
-    remote attacker — but never the multi-component asset rule and never
-    a control clause whose text is universal — and is flagged with an
-    advisory when the clause text still reads for-all. Re-evaluation is
-    limited to the controls mapped to that attacker's objectives.
+    Attesting ``surface_extent`` is a person's audited structural
+    declaration, ledgered like a factor override and forking a model
+    version: ``"whole"`` makes every objective the attacker appears in a
+    for-all obligation. ``"point"`` is REFUSED where an asset on one of
+    those objectives is implemented by several components and is not
+    split-knowledge — reaching any one of them reaches the asset, so the
+    property is owed at every one — and it never makes a clause whose own
+    text is universal existential.
 
     Args:
         model_id: ID of the threat model.
@@ -3631,11 +3564,7 @@ async def add_component(
     trust-boundary footprint is the union of its components'
     ``trust_boundary_ids``.
 
-    A component added here carries ``entity_origin: "declared"``. Whether
-    it is *grounded* — observed by a signed CI inventory statement at a
-    commit, matching its repository and path — is computed by the platform
-    and never accepted from a caller; ``get_inventory_completeness`` shows
-    it. Generation reads no components, so add or edit them after
+    Generation reads no components, so add or edit them after
     ``generate_threat_model``, not before.
 
     A component with empty ``repo_url`` is either speculative (your own
@@ -3683,10 +3612,6 @@ async def edit_component(
     fips_level: Optional[int] = None,
 ) -> dict:
     """Edit a component's properties.
-
-    An edit marks the component ``entity_origin: "declared"``; grounding
-    is computed by the platform from signed inventory statements and is
-    never accepted here.
 
     Per-component level grades are orthogonal axes — set whichever
     apply to the program the component is in scope for. Leave a field
@@ -3823,11 +3748,22 @@ _COVERS_IN_PARAMS = (
     "description and repo -- never a param. Move it out of params."
 )
 
+_COVERS_NOT_HERE = (
+    "covers is not carried on this submission. A binding between evidence "
+    "and a control clause is declared on submit_assertions."
+)
 
-def _refuse_malformed(assertions: list) -> None:
+
+def _refuse_malformed(assertions: list, *, covers_accepted: bool = True) -> None:
     """A param whose format the catalogue declares, and a ``covers``
     declaration, are checked before the submission leaves the client, with
-    the same rule the platform applies on arrival."""
+    the same rule the platform applies on arrival.
+
+    ``covers_accepted=False`` refuses the declaration outright, for a
+    submission whose surface does not carry one: a field that would be
+    dropped in transit has to be refused where the caller can see it, or the
+    caller records a binding that does not exist.
+    """
     from .assertion_types import validate_param_formats
 
     errors: list[str] = []
@@ -3842,26 +3778,12 @@ def _refuse_malformed(assertions: list) -> None:
             # different row on every edit.
             errors.append(_COVERS_IN_PARAMS)
         if "covers" in a:
-            errors.extend(validate_covers(a.get("covers")))
+            if covers_accepted:
+                errors.extend(validate_covers(a.get("covers")))
+            else:
+                errors.append(_COVERS_NOT_HERE)
     if errors:
         raise ToolError("; ".join(errors[:5]))
-
-
-def _parse_covers(raw: Optional[str], *, required: bool = False) -> Optional[List[str]]:
-    """A comma-separated ``covers`` argument as the list the platform takes,
-    refused with the catalogue's message when malformed."""
-    values = [c.strip() for c in (raw or "").split(",") if c.strip()]
-    if not values:
-        if required:
-            raise ToolError(
-                "covers is required: one or more objective ids (CO-NN) or "
-                "clause ids (cls_ + 12 hex), comma-separated."
-            )
-        return None
-    errors = validate_covers(values)
-    if errors:
-        raise ToolError("; ".join(errors[:5]))
-    return values
 
 
 @mcp.tool(description=_SUBMIT_ASSERTIONS_DOC)
@@ -3876,15 +3798,13 @@ async def submit_assertions(
 
     Each object carries ``type``, ``params``, ``description``, ``repo`` and
     optionally ``covers`` (top-level, never inside ``params``): the
-    objective id (``CO-NN``) or clause ids (``cls_`` + 12 hex, from
-    ``get_sufficiency``'s ``clauses[]``) the evidence proves. Prefer the
-    objective id; name clause ids on a multi-clause control, where an
-    objective ref only scopes review and sound credit needs the clause.
-    The platform checks a declaration structurally (membership, class
-    admissibility for the clause's quantifier, a named anchor for a test,
-    on-path scope) and refuses one that cannot hold, naming the accepted
-    values. A resubmission with a different ``covers`` supersedes the
-    earlier row; ``bind_assertion`` declares it without resubmitting.
+    objective id (``CO-NN``) or clause ids (``cls_`` + 12 hex, named by
+    ``get_control_work_order``'s ``required_evidence``) the evidence
+    proves. Prefer the objective id; name clause ids on a multi-clause
+    control, where an objective ref only scopes review and sound credit
+    needs the clause. A malformed declaration is refused on arrival with
+    the accepted form. A resubmission with a different ``covers``
+    supersedes the earlier row.
 
     Composition rule, in observable terms: a clause is covered by the best
     admissible evidence bound to it. An existential clause takes an
@@ -4001,42 +3921,6 @@ async def delete_assertion(
         raise _api_error(exc) from exc
 
 
-@mcp.tool()
-async def bind_assertion(
-    server_version: str,
-    model_id: str,
-    control_id: str,
-    assertion_id: str,
-    covers: str,
-) -> dict:
-    """Declare which objectives or clauses an existing assertion proves,
-    without resubmitting it. Mutating.
-
-    ``covers`` replaces the assertion's prior declaration: the objective id
-    (``CO-NN``; ``CO12`` and ``CO-12`` name the same objective) or the
-    clause ids (``cls_`` + 12 hex) exposed by ``get_sufficiency``'s
-    ``clauses[]``. A clause ref binds exactly that clause; an objective ref
-    binds the clause of a single-clause control and only scopes review on
-    a multi-clause one, so sound credit on a multi-clause control needs
-    clause refs. The platform checks the declaration structurally
-    (membership, class admissibility for the clause's quantifier, a named
-    anchor for a test, on-path scope) and refuses one that cannot hold,
-    naming the accepted values. The control is re-evaluated.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control the assertion belongs to.
-        assertion_id: ID of the assertion (from ``list_assertions``).
-        covers: Comma-separated objective or clause ids (at most 16).
-    """
-    values = _parse_covers(covers, required=True)
-    try:
-        return _dump(await _get_client().bind_assertion(
-            model_id, control_id, assertion_id, values,
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
 
 @mcp.tool()
 async def get_verification_report(
@@ -4071,13 +3955,6 @@ async def get_verification_report(
       decision was computed under outdated inputs) can be flagged without
       overloading ``status``.
 
-    Where the platform surfaces it, each control also carries
-    ``assurance{soundness_tier, completeness_tier, binding_origin}``: the
-    verification status word is unchanged, and ``assurance`` says how
-    strong the claim behind it is. A for-all clause with no sound witness
-    reads ``partially_verified`` with a typed ``required_evidence`` naming
-    the class it needs; a control whose for-all clauses are all proven by
-    construction reads ``verified`` with ``soundness_tier: constructed``.
     A drift item means the accepted evidence changed (a test's definition,
     a witness's scope or allowlist) and its verdict was withdrawn until
     reviewed again.
@@ -4122,35 +3999,19 @@ async def get_sufficiency(
     control describes a mechanism the system does not actually use, that
     is a signal to ``refine_control`` instead of manufacturing evidence.
 
-    Returns ``clauses[]``, one per clause of the control: ``clause_id``
-    (``cls_`` + 12 hex — the value to put in ``covers``), ``text``,
-    ``class`` (runtime / structural / pipeline / organizational),
-    ``quantifier`` (``universal`` — ranges over every entry of a surface;
-    ``existential``; ``unknown``; ``none``), ``quantifier_source``
-    (``structural`` / ``attested`` / ``suggested`` / ``text`` / ``unset``),
-    ``quantified_by`` (the objective, asset and attacker that set it),
-    ``co_ids``, ``required_class[]``, ``tier`` (``none`` < ``claimed`` <
-    ``witnessed`` < ``sound`` < ``constructed``), ``binding_origin``,
-    ``covering[]`` (each edge: assertion or assumption id, kind, class,
-    level, origin, passes) and ``required_evidence``.
-
-    ``required_evidence`` is the steer, by-construction first: for a
-    for-all clause its ``required_class`` is ``[by_construction,
-    sound_over_approximation]`` and ``missing[]`` says a test proves only
-    the path it drives — prefer ``typed_boundary`` (declare the type the
-    sinks accept and its constructors), else ``sink_default_deny``
-    (declare the sinks that realise the clause, the safe forms, a reviewed
-    allowlist). ``suggested_submission`` is prefilled: the type, a
-    ``params_template`` (scope from the on-path components, a sinks
-    placeholder, safe forms, an empty allowlist, the clause text as the
-    property) and ``covers`` with this clause's id. When evidence of the
-    wrong class is bound, ``class_mismatch`` is set and ``missing[]`` says
-    so — the evidence is the wrong CLASS, not merely incomplete; more of
-    it will not help. A clause that reads unverifiable by the current
-    evidence needs the named sound type, not more tests. When a witness
-    exists but fails, its mechanical counts (``sites_unproven``) ride
-    along. An attestation covers an existential clause and never a
-    for-all one; the only legitimate non-mitigation exit for a for-all
+    The per-clause work list is served by ``get_control_work_order`` in
+    ``required_evidence``: the clause id to put in ``covers``, the clause
+    text and its quantifier, the ``required_class`` that closes it and a
+    prefilled ``suggested_submission``. It is stated by-construction
+    first — for a for-all clause the required class is
+    ``[by_construction, sound_over_approximation]``, so prefer
+    ``typed_boundary`` (declare the type the sinks accept and its
+    constructors), else ``sink_default_deny`` (declare the sinks that
+    realise the clause, the safe forms, a reviewed allowlist). When
+    evidence of the wrong class is bound, ``class_mismatch`` is set: the
+    evidence is the wrong CLASS, not merely incomplete, and more of it
+    will not help. An attestation covers an existential clause and never
+    a for-all one; the only legitimate non-mitigation exit for a for-all
     clause is a risk acceptance or a not-applicable disposition.
 
     Args:
@@ -4866,7 +4727,6 @@ async def submit_attestation(
     server_version: str, model_id: str, assumption_id: str,
     attested_by: str = "", statement: str = "",
     expires_at: str = "", evidence_url: str = "",
-    covers: Optional[str] = None,
 ) -> dict:
     """Record that a responsible party affirmed an assumption holds.
 
@@ -4882,9 +4742,8 @@ async def submit_attestation(
     site: it can cover an existential clause of a control (its tier reads
     ``claimed``) and never a for-all one, where only a sound witness
     counts. An attestation the platform mints from CI results is no
-    stronger than the weakest assertion behind it. Naming a for-all
-    objective in ``covers`` is refused; the exits for a universal
-    objective that cannot be proven are a risk acceptance or a
+    stronger than the weakest assertion behind it. The exits for a
+    universal objective that cannot be proven are a risk acceptance or a
     not-applicable disposition.
 
     Args:
@@ -4894,17 +4753,12 @@ async def submit_attestation(
         statement: What was attested.
         expires_at: ISO 8601 expiry date (e.g., "2026-06-30T00:00:00Z").
         evidence_url: Optional link to supporting documentation.
-        covers: Optional comma-separated objective ids (``CO-NN``) or
-            clause ids (``cls_`` + 12 hex) this attestation stands for;
-            existential clauses only.
     """
-    parsed_covers = _parse_covers(covers)
     try:
         return await _get_client().submit_attestation(
             model_id, assumption_id,
             attested_by=attested_by, statement=statement,
             expires_at=expires_at, evidence_url=evidence_url,
-            covers=parsed_covers,
         )
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -5472,12 +5326,6 @@ async def get_entity(
       Soft-deleted assumptions carry ``deleted: true``. ``entity_id``
       e.g. ``AS-01``.
 
-    Every entity carries ``entity_origin`` (``inferred`` — written by
-    generation or a refinement; ``declared`` — authored or edited through
-    the entity tools, a decided proposal, a lift or a certain
-    reconciliation match). Whether it is grounded is computed at read time
-    and reported by ``get_inventory_completeness``, never stored.
-
     Args:
         model_id: ID of the threat model.
         entity_type: Which entity to read — one of ``asset``,
@@ -5756,7 +5604,7 @@ async def export_report(
     - ``scope="model"`` (``scope_id`` = model id) supports ``format`` ∈ {``csv``, ``pdf``, ``html``, ``archive``}:
         - ``csv`` — the model's current state rendered as CSV; returned inline as UTF-8 text in ``content``.
         - ``pdf`` / ``html`` — rendered document returned base64-encoded in ``content_b64`` (with ``content_type``). Runs as a server-side job; progress is reported automatically while it completes, which may take time for large models.
-        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle: every version, controls, assertions (with Tier 1 / Tier 2 verdicts, attested flags and ``covers`` declarations), findings, risk acceptances, assumption overrides, attestations, and instance sufficiency signatures; the audit package's ``inventory`` section (per-entity origin, computed grounding, closure results, description witness) and ``provenance_health.inventory_tier`` travel with it. Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
+        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle: every version, controls, assertions (with Tier 1 / Tier 2 verdicts and attested flags), findings, risk acceptances, assumption overrides, attestations, and instance sufficiency signatures; each control's per-clause evidence basis travels with it. Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
     - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, aggregating every member model's report plus the cross-model dependency graph and attestation status into one HTML document, returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
 
     Args:
@@ -6489,7 +6337,7 @@ async def submit_functional_test_assertions(
     Args:
         model_id: ID of the threat model.
         functional_test_id: The already-existing functional test the assertions prove.
-        assertions_json: JSON array of assertion objects, each {"type": "test_attested" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>", "covers": [...]?}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository. An optional top-level ``covers`` names the control clause ids (``cls_`` + 12 hex) or objective ids an adversarial test also proves: with it, a passing ``test_attested`` is a declared existential witness on that control clause and goes through the same composition as a control assertion; without it, the test counts toward functional conformance only.
+        assertions_json: JSON array of assertion objects, each {"type": "test_attested" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository. These assertions count toward functional conformance; a ``covers`` declaration is refused here, because a binding to a control clause is declared on ``submit_assertions``.
     """
     try:
         assertions = json.loads(assertions_json)
@@ -6497,7 +6345,7 @@ async def submit_functional_test_assertions(
         raise ToolError("assertions_json must be a valid JSON array.")
     if not isinstance(assertions, list):
         raise ToolError("assertions_json must be a JSON array.")
-    _refuse_malformed(assertions)
+    _refuse_malformed(assertions, covers_accepted=False)
     try:
         return _dump(await _get_client().submit_functional_tests(
             model_id, functional_test_id, assertions,
@@ -6580,20 +6428,10 @@ async def get_controls(
     for evidence narrower than the description promises, and the fix is
     more assertions (or a narrower description), never a verdict recompute.
 
-    Where the platform surfaces it, a control carries
-    ``assurance{soundness_tier, completeness_tier, binding_origin,
-    quantifier_summary, bounded_by[]}`` beside the status fields:
-    ``soundness_tier`` (``none`` < ``claimed`` < ``witnessed`` <
-    ``sound`` < ``constructed``) is the weakest clause's best admissible
-    evidence; ``completeness_tier`` (``inferred`` < ``declared`` <
-    ``grounded`` < ``closed``) is how much of the inventory the claim
-    rests on is declared or grounded, with ``bounded_by`` naming the
-    entities holding it down; ``binding_origin`` is the weakest binding
-    among the covering evidence. In detail mode the control also carries
-    ``clauses[]`` (clause ids, quantifier, covering evidence with class
-    and origin, ``required_evidence``) — the same shape ``get_sufficiency``
-    documents. A for-all clause is credited only by a sound type bound to
-    it; an attestation never substitutes.
+    A for-all clause — one that ranges over every entry of a surface — is
+    credited only by a sound type bound to it with ``covers``; an
+    attestation never substitutes. What each clause still needs is served
+    per clause by ``get_control_work_order`` in ``required_evidence``.
 
     Filtering ``status="implemented"`` returns controls the operator marked
     implemented that have NOT been promoted to verified — the right filter
@@ -6677,18 +6515,6 @@ async def get_control_objectives(
       because reach state is frozen at the removal version.
       ``offset``/``limit`` are ignored in this mode.
 
-    In both modes each CO carries the derived ``obligation_quantifier``
-    (``universal`` — the obligation ranges over every entry of the
-    attacker's surface, because the attacker's extent is ``whole`` or the
-    asset lives in more than one component; ``existential`` — one named
-    entry, attested; ``unknown`` — undeclared; ``none`` — decisively
-    unreachable), its ``quantifier_source`` (``structural`` /
-    ``attested`` / ``suggested`` / ``text`` / ``unset`` / ``unreachable``)
-    and the attacker's ``surface_extent``. Recomputed from structure on
-    every read, never stored: a universal objective is credited only by a
-    control whose for-all clauses carry a sound witness. Risk tier, CAL
-    and likelihood never enter the quantifier.
-
     For pass/fail assurance scoring use ``assess_model``.
 
     Args:
@@ -6738,12 +6564,7 @@ async def assign_to_components(
       instance). ``target_id`` is the asset ID (e.g. "A1").
 
     Both variants are mechanical / non-AI-gated and validate only that
-    every referenced component exists on the model. Scoping marks the
-    target ``entity_origin: "declared"``; it never grounds anything (that
-    is computed from signed inventory statements). Scoping a control never
-    lowers the quantifier of its objectives: an asset that lives in
-    several components makes its objectives for-all obligations for the
-    defender, whatever the attacker's extent.
+    every referenced component exists on the model.
 
     Args:
         model_id: ID of the threat model.
@@ -6794,9 +6615,6 @@ async def get_scan_prompt(
       ``submit_findings`` and what is present with ``submit_assertions``.
       Pass ``control_id`` to scope the prompt to one control; empty
       (default) returns prompts for all not-yet-implemented controls.
-      For a whole-surface objective the brief also asks you to identify
-      the sinks the clause realises and the boundary type they accept —
-      the inputs of a ``typed_boundary`` / ``sink_default_deny`` witness.
 
     - ``"functional"`` — the agent brief for implementing
       functional-conformance tests. Generation specifies the functional
@@ -6959,20 +6777,22 @@ async def get_control_work_order(
     escalated), any ``open_proposals`` on the control, and the model's
     ``provenance`` (whether the code or the description is authoritative).
 
-    The proof the order asks for is stated by-construction first. Each
-    objective carries its ``obligation_quantifier`` and
-    ``quantifier_source`` (see ``get_control_objectives``) and the
-    attacker's ``surface_extent``; ``clauses[]`` (same shape as
-    ``get_sufficiency``) carries each clause's id, quantifier, covering
-    evidence and ``required_evidence`` with a prefilled
-    ``suggested_submission``; and ``acceptance_criteria[]`` is GENERATED
-    per clause from the same rule — a for-all clause asks for
-    ``typed_boundary`` first, then ``sink_default_deny``; an existential
-    runtime clause asks for an anchored, signed test with reach and
-    dependence facts; other classes ask for their class standard — plus
-    "ground the inventory endpoints of this control: <entities>" when its
-    ``completeness_tier`` is below ``grounded``. ``steps[]`` reads: for
-    each clause, submit the class the order names, bound with ``covers``.
+    The proof the order asks for is stated by-construction first.
+    ``required_evidence[]`` carries one entry per clause that still needs
+    something: the ``clause`` text, its ``clause_id`` (the value to put in
+    ``covers``), its ``quantifier``, the ``required_class`` that closes
+    it, what is ``missing``, and a prefilled ``suggested_submission``
+    (type, ``params_template``, ``covers``). For a for-all clause the
+    required class is ``[by_construction, sound_over_approximation]`` and
+    the suggestion prefers ``typed_boundary`` — declare the type the sinks
+    accept and its constructors — else ``sink_default_deny`` — declare the
+    sinks that realise the clause, the safe forms, a reviewed allowlist.
+    When evidence of the wrong class is already bound, ``missing`` says so:
+    the evidence is the wrong CLASS, not merely incomplete.
+    ``acceptance_criteria[]`` is GENERATED from those entries — a clause
+    that has to hold at every site the attacker reaches is named as such,
+    so no number of tests reads as closing it. ``steps[]`` reads: for each
+    clause, submit the class the order names, bound with ``covers``.
 
     Args:
         model_id: ID of the threat model.
@@ -6981,15 +6801,14 @@ async def get_control_work_order(
     Returns the work order verbatim: ``{model_id, model_version,
     control{id, description, status, verification_status, orphaned,
     component_ids, implementation_notes, open_assumptions[],
-    verification_oracle, assertion_count, assurance{soundness_tier,
-    completeness_tier, binding_origin}}, objectives[{co_id, statement,
-    risk_tier, asset_id, attacker_id, mitigation_group, defense_in_depth,
-    obligation_quantifier, quantifier_source, surface_extent}], max_tier,
-    scan_brief, clauses[], assertion_contract{types[{name, description,
+    verification_oracle, assertion_count}, objectives[{co_id, statement,
+    risk_tier, asset_id, attacker_id, mitigation_group, defense_in_depth}],
+    max_tier, scan_brief, assertion_contract{types[{name, description,
     required_params, soundness, behavioral}], evidence_rule,
     universal_rule, sound_types[], submit_with, verified_when},
-    acceptance_criteria[], steps[], reconcile_rules, delegation{agent,
-    permitted_rules[], note}, open_proposals[], provenance}``.
+    acceptance_criteria[], required_evidence[], steps[], reconcile_rules,
+    delegation{agent, permitted_rules[], note}, open_proposals[],
+    provenance}``.
     ``behavioral`` is kept for older readers and equals ``soundness ==
     "existential_witness"``.
     """

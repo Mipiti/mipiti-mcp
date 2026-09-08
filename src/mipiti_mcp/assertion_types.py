@@ -239,8 +239,9 @@ def validate_param_formats(type_name: str, params: "dict") -> "list[str]":
 # (``CO-NN``; ``CO12`` and ``CO-12`` name the same objective) or clause ids
 # (``cls_`` + 12 hex) the evidence is declared to prove. An objective ref
 # binds the clause of a single-clause control and scopes the review of a
-# multi-clause one; a clause ref binds exactly that clause. The platform
-# checks each declaration structurally and refuses one that cannot hold.
+# multi-clause one; a clause ref binds exactly that clause. The accepted form
+# is one definition, applied before a submission leaves the client and again
+# on arrival, so both refuse the same value with the same sentence.
 COVERS_PATTERN = r"^(?:CO-?\d{1,4}|cls_[0-9a-f]{12})$"
 COVERS_MAX = 16
 

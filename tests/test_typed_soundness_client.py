@@ -1,4 +1,9 @@
-"""HTTP contract of the binding and inventory-completeness client calls."""
+"""HTTP contract of the attestation call.
+
+An attestation body carries only the fields the attestation record has. A
+declaration of which clause the evidence stands for is not one of them: it is
+declared on the assertion, where the record keeps it.
+"""
 
 import json
 
@@ -13,40 +18,25 @@ _BASE = "https://test.api.mipiti.io"
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_bind_assertion_puts_the_declaration(mock_env: None) -> None:
-    route = respx.put(f"{_BASE}/api/models/tm-001/controls/CTRL-01/assertions/a1/covers").mock(
-        return_value=httpx.Response(200, json={"assertion": {"id": "a1", "covers": ["CO-3"]}}),
-    )
-    client = MipitiClient()
-    result = await client.bind_assertion("tm-001", "CTRL-01", "a1", ["CO-3"])
-    assert route.called
-    assert json.loads(route.calls.last.request.content) == {"covers": ["CO-3"]}
-    assert result["assertion"]["covers"] == ["CO-3"]
-    await client.close()
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_inventory_completeness_reads_the_record(mock_env: None) -> None:
-    route = respx.get(f"{_BASE}/api/models/tm-001/inventory-completeness").mock(
-        return_value=httpx.Response(200, json={"model_id": "tm-001", "tier": "inferred"}),
-    )
-    client = MipitiClient()
-    result = await client.get_inventory_completeness("tm-001")
-    assert route.called and route.calls.last.request.method == "GET"
-    assert result["tier"] == "inferred"
-    await client.close()
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_submit_attestation_carries_covers_only_when_given(mock_env: None) -> None:
+async def test_submit_attestation_sends_only_attestation_fields(mock_env: None) -> None:
     route = respx.post(f"{_BASE}/api/models/tm-001/assumptions/AS1/attest").mock(
         return_value=httpx.Response(200, json={"id": "att-1"}),
     )
     client = MipitiClient()
-    await client.submit_attestation("tm-001", "AS1", attested_by="a", covers=["CO-2"])
-    assert json.loads(route.calls.last.request.content) == {"attested_by": "a", "covers": ["CO-2"]}
-    await client.submit_attestation("tm-001", "AS1", attested_by="a")
-    assert "covers" not in json.loads(route.calls.last.request.content)
+    await client.submit_attestation(
+        "tm-001", "AS1", attested_by="a", statement="holds",
+        expires_at="2027-01-01T00:00:00Z", evidence_url="https://example.test/e",
+    )
+    assert json.loads(route.calls.last.request.content) == {
+        "attested_by": "a",
+        "statement": "holds",
+        "expires_at": "2027-01-01T00:00:00Z",
+        "evidence_url": "https://example.test/e",
+    }
     await client.close()
+
+
+def test_the_client_takes_no_binding_declaration_on_an_attestation() -> None:
+    import inspect
+
+    assert "covers" not in inspect.signature(MipitiClient.submit_attestation).parameters

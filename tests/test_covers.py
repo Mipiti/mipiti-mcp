@@ -93,10 +93,6 @@ async def test_submit_assertions_refuses_malformed_covers_before_sending(monkeyp
                         "covers": ["CTRL-01"]}])
     with pytest.raises(ToolError, match="covers\\[0\\]"):
         await server.submit_assertions(server_version="x", model_id="m", assertions_json=body, control_id="c")
-    with pytest.raises(ToolError, match="covers\\[0\\]"):
-        await server.submit_functional_test_assertions(
-            server_version="x", model_id="m", functional_test_id="f", assertions_json=body,
-        )
     assert called == []
 
 
@@ -113,76 +109,31 @@ async def test_covers_is_a_top_level_field_forwarded_verbatim():
     assert "covers" not in sent[0]["params"]
 
 
-async def test_functional_test_assertions_forward_covers():
+async def test_a_binding_on_a_functional_test_submission_is_refused(monkeypatch):
+    """A functional-test submission does not carry a binding to a control
+    clause. A field that would be dropped in transit is refused where the
+    caller can see it, so a caller never records a binding that does not
+    exist."""
+    called = []
+    monkeypatch.setattr(server, "_get_client", lambda: called.append(1))
+    body = json.dumps([{"type": "test_attested", "params": {"test": "t"}, "repo": "o/r",
+                        "covers": ["CO-1"]}])
+    with pytest.raises(ToolError, match="declared on submit_assertions"):
+        await server.submit_functional_test_assertions(
+            server_version="x", model_id="m", functional_test_id="f", assertions_json=body,
+        )
+    assert called == []
+
+
+async def test_functional_test_assertions_forward_the_rest_verbatim():
     client = _client(submit_functional_tests={"functional_test_id": "FT-1", "assertions": []})
-    payload = [{"type": "test_attested", "params": {"test": "t"}, "repo": "o/r", "covers": ["CO1"]}]
+    payload = [{"type": "test_attested", "params": {"test": "t"}, "repo": "o/r"}]
     with patch("mipiti_mcp.server._get_client", return_value=client):
         await server.submit_functional_test_assertions(
             server_version="x", model_id="m", functional_test_id="FT-1",
             assertions_json=json.dumps(payload),
         )
     client.submit_functional_tests.assert_awaited_once_with("m", "FT-1", payload)
-
-
-async def test_submit_attestation_forwards_covers_as_a_list():
-    client = _client(submit_attestation={"id": "att-1"})
-    with patch("mipiti_mcp.server._get_client", return_value=client):
-        await server.submit_attestation(
-            server_version="x", model_id="m", assumption_id="AS1",
-            attested_by="a", statement="s", expires_at="2027-01-01T00:00:00Z",
-            covers="CO-2, cls_0123456789ab",
-        )
-    assert client.submit_attestation.await_args.kwargs["covers"] == ["CO-2", "cls_0123456789ab"]
-
-
-async def test_submit_attestation_without_covers_sends_none():
-    client = _client(submit_attestation={"id": "att-1"})
-    with patch("mipiti_mcp.server._get_client", return_value=client):
-        await server.submit_attestation(
-            server_version="x", model_id="m", assumption_id="AS1", attested_by="a",
-        )
-    assert client.submit_attestation.await_args.kwargs["covers"] is None
-
-
-async def test_submit_attestation_refuses_malformed_covers_before_sending(monkeypatch):
-    called = []
-    monkeypatch.setattr(server, "_get_client", lambda: called.append(1))
-    with pytest.raises(ToolError, match="covers\\[1\\]"):
-        await server.submit_attestation(
-            server_version="x", model_id="m", assumption_id="AS1", covers="CO-1,CTRL-1",
-        )
-    assert called == []
-
-
-async def test_bind_assertion_forwards_the_declaration():
-    client = _client(bind_assertion={"assertion": {"id": "a1", "covers": ["CO-3"]}})
-    with patch("mipiti_mcp.server._get_client", return_value=client):
-        out = await server.bind_assertion(
-            server_version="x", model_id="m", control_id="CTRL-01", assertion_id="a1",
-            covers="CO-3",
-        )
-    client.bind_assertion.assert_awaited_once_with("m", "CTRL-01", "a1", ["CO-3"])
-    assert out["assertion"]["covers"] == ["CO-3"]
-
-
-async def test_bind_assertion_requires_a_declaration(monkeypatch):
-    called = []
-    monkeypatch.setattr(server, "_get_client", lambda: called.append(1))
-    with pytest.raises(ToolError, match="covers is required"):
-        await server.bind_assertion(
-            server_version="x", model_id="m", control_id="c", assertion_id="a", covers="",
-        )
-    with pytest.raises(ToolError, match="repeats"):
-        await server.bind_assertion(
-            server_version="x", model_id="m", control_id="c", assertion_id="a", covers="CO12,CO-12",
-        )
-    assert called == []
-
-
-def test_bind_assertion_documents_the_expansion_rule():
-    fn = server.bind_assertion
-    doc = (getattr(fn, "__doc__", "") or "") + (getattr(getattr(fn, "fn", None), "__doc__", "") or "")
-    assert "multi-clause" in doc and "clause refs" in doc
 
 
 async def test_a_binding_hidden_inside_params_is_refused(monkeypatch):

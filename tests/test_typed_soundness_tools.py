@@ -1,4 +1,4 @@
-"""Tool pass-throughs for the attacker surface extent and inventory completeness."""
+"""Tool pass-throughs for the attacker surface extent."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -8,7 +8,6 @@ from fastmcp.exceptions import ToolError
 from mipiti_mcp.server import (
     add_attacker,
     edit_attacker,
-    get_inventory_completeness,
 )
 
 
@@ -121,31 +120,3 @@ class TestEditAttackerSurfaceExtent:
                 capability="Updated", ctx=_ctx(),
             )
         assert "model" in out
-
-
-class TestGetInventoryCompleteness:
-    async def test_returns_the_record_verbatim(self):
-        record = {
-            "model_id": "tm-001",
-            "tier": "declared",
-            "entities": [{"id": "CMP1", "kind": "component", "entity_origin": "declared", "grounded": False}],
-            "closures": {"taxonomy": True, "position": "not_evaluated"},
-            "controls": [{"id": "CTRL-01", "completeness_tier": "declared", "bounded_by": ["CMP1"]}],
-        }
-        client = _client(get_inventory_completeness=record)
-        with _patch(client):
-            out = await get_inventory_completeness(server_version="0", model_id="tm-001")
-        assert out == record
-        client.get_inventory_completeness.assert_awaited_once_with("tm-001")
-
-    async def test_api_errors_become_tool_errors(self):
-        import httpx
-
-        client = _client()
-        client.get_inventory_completeness = AsyncMock(side_effect=httpx.HTTPStatusError(
-            "nope", request=httpx.Request("GET", "https://api/x"),
-            response=httpx.Response(404, json={"detail": "Threat model not found."}),
-        ))
-        with _patch(client):
-            with pytest.raises(ToolError, match="404"):
-                await get_inventory_completeness(server_version="0", model_id="missing")
