@@ -198,23 +198,37 @@ def _array_violation(p: "ParamSpec", value: Any) -> "str | None":
     return None
 
 
-def _placeholder_reason(value) -> "str | None":
+def _placeholder_reason(value, _at: str = "") -> "str | None":
     """Why this value is still a blank rather than an answer, or None.
 
-    A blank is a whole value of the form ``<...>``: it is the question, copied
-    across unanswered. A value that merely CONTAINS an angle bracket is left
+    A blank is a whole string of the form ``<...>``: the question, copied
+    across unanswered. A string that merely CONTAINS an angle bracket is left
     alone, since a property sentence may legitimately say ``count < limit``.
-    """
-    def _blank(item) -> bool:
-        text = item.strip() if isinstance(item, str) else ""
-        return text.startswith("<") and text.endswith(">") and len(text) > 2
 
-    if _blank(value):
-        return "still the blank it was offered as"
+    The search descends through lists AND objects to any depth, because a
+    param's blank is not always its whole value: a param declaring an array of
+    objects carries its questions one level further in, and a check that reads
+    only the top of the value accepts the skeleton exactly where it is least
+    filled. Names where it found one, so the refusal points at the blank rather
+    than at the param alone.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("<") and text.endswith(">") and len(text) > 2:
+            return f"still the blank it was offered as at {_at}" if _at \
+                else "still the blank it was offered as"
+        return None
     if isinstance(value, (list, tuple)):
         for i, item in enumerate(value):
-            if _blank(item):
-                return f"still the blank it was offered as at item {i}"
+            found = _placeholder_reason(item, f"{_at}[{i}]" if _at else f"item {i}")
+            if found:
+                return found
+        return None
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found = _placeholder_reason(item, f"{_at}.{key}" if _at else str(key))
+            if found:
+                return found
     return None
 
 

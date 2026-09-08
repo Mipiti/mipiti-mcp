@@ -332,3 +332,28 @@ def test_a_value_that_merely_carries_an_angle_bracket_is_not_a_blank(value):
     whole value of the form ``<...>`` is the question copied across."""
     errors = validate_param_formats("sink_default_deny", {"property": value})
     assert not [e for e in errors if "blank" in e], errors
+
+
+def test_a_blank_nested_in_an_object_is_refused_and_placed():
+    """A param declaring an array of objects carries its questions one level
+    further in than a plain array does. A check reading only the top of the
+    value accepts the skeleton exactly where it is least filled."""
+    errors = validate_param_formats("sink_default_deny", {
+        "scope": ["services/api"],
+        "sinks": [{"callee": "<the call that realises this clause>"}],
+        "safe_forms": ["literal"],
+        "property": "Every statement reaches the driver with data bound as parameters.",
+    })
+    sinks = [e for e in errors if "'sinks'" in e]
+    assert sinks, errors
+    assert "item 0.callee" in sinks[0], sinks[0]
+    assert not [e for e in errors if "'scope'" in e or "'property'" in e], errors
+
+
+def test_the_same_submission_with_the_blank_answered_passes():
+    assert validate_param_formats("sink_default_deny", {
+        "scope": ["services/api"],
+        "sinks": [{"callee": "execute", "positions": [0]}],
+        "safe_forms": ["literal"],
+        "property": "Every statement reaches the driver with data bound as parameters.",
+    }) == []

@@ -78,9 +78,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declare a format. A param with no pattern was the one place an unanswered
   blank passed, and a submission that passes while saying nothing about the
   caller's code is recorded as a claim until some later check catches it; an
-  immediate refusal naming the param is the better failure. Only a whole value
-  of that shape is a blank, so a property sentence saying `count < limit` is
-  untouched, and an array is judged item by item.
+  immediate refusal naming the param is the better failure.
+
+  Only a whole string of that shape is a blank, so a property sentence saying
+  `count < limit` is untouched. The search descends through arrays AND objects
+  to any depth, because a param declaring an array of objects carries its
+  questions a level further in than a plain array does, and a check reading
+  only the top of the value accepts the submission exactly where it is least
+  filled. The refusal names where it found one, so it points at the blank
+  rather than at the param alone.
 
 - The `submit_assertions` description is re-cut to the length a client was
   observed to truncate at, and spends it on what a cut must not lose: the
