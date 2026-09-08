@@ -212,6 +212,12 @@ def _tool_doc(name: str) -> str:
         getattr(getattr(fn, "fn", None), "__doc__", "") or "")
 
 
+def _flat_doc(name: str) -> str:
+    """A tool's rendered description with line wrapping collapsed, so a
+    phrase check does not depend on where the docstring breaks a line."""
+    return " ".join(_tool_doc(name).split())
+
+
 def test_auto_resolved_is_filterable():
     """An agent triaging findings has to be able to select the ones the
     platform closed, or it cannot tell them from the ones still open."""
@@ -236,3 +242,117 @@ def test_auto_resolved_is_not_offered_as_a_manual_transition():
         "auto_resolved is listed among the manually settable statuses"
     )
     assert "NOT settable" in doc or "not settable" in doc
+
+
+# ---------------------------------------------------------------------------
+# The typed soundness model: what the instructions and tool texts assert.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tier,role", [("pro", "user"), ("developer", "user")])
+def test_no_phantom_entity_status_fields(tier: str, role: str) -> None:
+    """Assets and attackers carry no status field, and the assessment reports
+    no asset_status / attacker_status and no asset_absent /
+    attacker_irrelevant risk reasons; guidance must not name them."""
+    text = build_instructions(tier=tier, role=role)
+    for phantom in ("asset_status", "attacker_status", "asset_absent", "attacker_irrelevant",
+                    "`status` field", "`confirmed`", "`absent`"):
+        assert phantom not in text, phantom
+    assert "entity_origin" in text
+    assert "get_inventory_completeness" in text
+
+
+def test_surface_extent_and_the_for_all_rule_are_stated() -> None:
+    text = build_instructions("pro", "user")
+    assert "surface_extent" in text
+    assert "A for-all clause needs a sound witness" in text
+    section_start = text.index("A for-all clause needs a sound witness")
+    section = text[section_start:section_start + 2000]
+    for cls in ("presence", "under_approximating_scan", "existential_witness",
+                "sound_over_approximation", "by_construction"):
+        assert cls in section, cls
+    assert section.index("typed_boundary") < section.index("sink_default_deny")
+    assert "never a proof over every site" in section
+    assert "required_evidence" in section and "suggested_submission" in section
+    assert "covers" in text and "bind_assertion" in text
+
+
+def test_soundness_gap_routes_to_a_sound_witness_not_more_tests() -> None:
+    text = build_instructions("pro", "user")
+    assert "`soundness_gap`" in text
+    routing = text[text.index("**Action routing by risk_reason**"):]
+    assert "`soundness_gap` →" in routing
+    seg = routing[routing.index("`soundness_gap` →"):][:500]
+    assert "Do NOT attest harder or add tests" in seg
+    assert "create_co_disposition" in seg
+
+
+def test_components_are_added_after_generation_and_grounding_is_computed() -> None:
+    text = build_instructions("pro", "user")
+    assert "BEFORE `generate_threat_model`" not in text
+    assert "generation reads no components" in text
+    assert "computed by the platform and never declared" in text
+
+
+def test_only_an_attested_seal_drops_reachability() -> None:
+    text = build_instructions("pro", "user")
+    assert "only an attested seal" in text
+    doc = _flat_doc("add_trust_boundary")
+    assert "only an ATTESTED seal" in doc and 'seal_source="attested"' in doc
+
+
+
+def test_an_attestation_is_a_claim_never_a_for_all_proof() -> None:
+    doc = _flat_doc("submit_attestation")
+    assert "never a proof over every site" in doc
+    assert "never a for-all one" in doc
+    assert "covers" in doc
+    text = build_instructions("pro", "user")
+    assert "An attestation is a claim" in text
+
+
+def test_refine_control_names_the_exits_of_a_for_all_refusal() -> None:
+    doc = _flat_doc("refine_control")
+    assert "For-all wording is protected" in doc
+    assert 'surface_extent="point"' in doc and "edit_attacker" in doc
+    assert "keep the universal wording" in doc
+
+
+def test_sufficiency_and_work_order_state_by_construction_first() -> None:
+    for name in ("get_sufficiency", "get_control_work_order"):
+        doc = _tool_doc(name)
+        assert doc.index("typed_boundary") < doc.index("sink_default_deny"), name
+        assert "clauses[]" in doc and "required_evidence" in doc, name
+        assert "suggested_submission" in doc, name
+    doc = _flat_doc("get_sufficiency")
+    assert "wrong CLASS" in doc
+    assert "not more tests" in doc
+    wo = _flat_doc("get_control_work_order")
+    assert "GENERATED" in wo and "universal_rule" in wo and "sound_types" in wo
+    assert "test_passes" not in wo
+
+
+def test_assurance_object_is_documented_where_controls_are_read() -> None:
+    for name in ("get_controls", "assess_model", "get_verification_report", "get_control_work_order"):
+        doc = _tool_doc(name)
+        assert "soundness_tier" in doc and "completeness_tier" in doc and "binding_origin" in doc, name
+    assert "soundness_gap" in _tool_doc("assess_model")
+
+
+def test_objectives_carry_the_derived_quantifier() -> None:
+    doc = _flat_doc("get_control_objectives")
+    assert "obligation_quantifier" in doc and "quantifier_source" in doc and "surface_extent" in doc
+    assert "never stored" in doc
+    assert "Risk tier, CAL" in doc
+
+
+def test_entity_reads_expose_extent_and_origin_and_never_take_an_origin() -> None:
+    doc = _tool_doc("get_entity")
+    assert "surface_extent_source" in doc and "entity_origin" in doc
+    for name in ("add_component", "edit_component", "assign_to_components"):
+        d = _tool_doc(name)
+        assert "declared" in d and ("never accepted" in d or "never grounds" in d), name
+    assert "add or edit them after" in _flat_doc("add_component")
+    for name in ("add_asset", "edit_asset", "add_attacker", "edit_attacker"):
+        d = _tool_doc(name)
+        assert "entity_origin" in d, name
+        assert "`status`" not in d, name

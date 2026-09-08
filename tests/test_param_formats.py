@@ -9,6 +9,10 @@ from mipiti_mcp.assertion_types import (
     ASSERTION_TYPES,
     MECHANISM_KINDS,
     MECHANISM_PATTERN,
+    SAFE_FORMS,
+    SCOPE_ENTRY_PATTERN,
+    SINK_KINDS,
+    describe_types,
     validate_param_formats,
 )
 
@@ -91,3 +95,116 @@ def test_every_kind_is_accepted(kind):
 def test_kinds_are_distinct_lowercase_identifiers():
     assert len(set(MECHANISM_KINDS)) == len(MECHANISM_KINDS)
     assert all(k == k.lower() and k.isidentifier() for k in MECHANISM_KINDS)
+
+
+# ---------------------------------------------------------------------------
+# Array-valued params carry an item schema; both sides apply it.
+# ---------------------------------------------------------------------------
+
+_SDD = {
+    "scope": ["src/db/**/*.py", "rtl/bus.sv"],
+    "sinks": [{"callee": "execute", "positions": [0]}, {"callee": "data_q", "kind": "assign"}],
+    "safe_forms": ["parameter_binding", "literal"],
+    "property": "Every SQL statement reaches the driver with data bound as parameters.",
+}
+_TB = {
+    "scope": ["src/"],
+    "sinks": [{"callee": "execute"}],
+    "boundary_type": "sql.Identifier",
+    "constructors": ["sql.Identifier", "SafeSql.literal"],
+    "property": "Every identifier reaching the driver was built through the boundary type.",
+}
+
+
+def test_well_formed_witnesses_pass():
+    assert validate_param_formats("sink_default_deny", _SDD) == []
+    assert validate_param_formats("typed_boundary", _TB) == []
+
+
+def _one(type_name, override):
+    base = dict(_SDD if type_name == "sink_default_deny" else _TB)
+    base.update(override)
+    errors = validate_param_formats(type_name, base)
+    assert len(errors) == 1, errors
+    return errors[0]
+
+
+@pytest.mark.parametrize("entry", ["src/**", "rtl/top.v", "my dir/x.py", "..foo/x", "a/.../b"])
+def test_scope_entries_accepted(entry):
+    assert re.match(SCOPE_ENTRY_PATTERN, entry)
+
+
+@pytest.mark.parametrize("entry", ["../x", "a/../b", "/abs/x", " src", "src ", "", "a/..", "..", "x\ny"])
+def test_scope_entries_refused(entry):
+    assert not re.match(SCOPE_ENTRY_PATTERN, entry)
+    assert "'scope'" in _one("sink_default_deny", {"scope": [entry]})
+
+
+def test_scope_must_be_a_non_empty_array():
+    assert "expected a JSON array" in _one("sink_default_deny", {"scope": "src/"})
+    assert "at least 1" in _one("sink_default_deny", {"scope": []})
+
+
+def test_sinks_need_a_callee_and_a_known_kind():
+    assert "lacks 'callee'" in _one("sink_default_deny", {"sinks": [{"kind": "call"}]})
+    assert "is not an object" in _one("sink_default_deny", {"sinks": ["execute"]})
+    assert "'kind' is not one of" in _one("sink_default_deny", {"sinks": [{"callee": "x", "kind": "store"}]})
+    for kind in SINK_KINDS:
+        assert validate_param_formats("sink_default_deny", {**_SDD, "sinks": [{"callee": "x", "kind": kind}]}) == []
+
+
+def test_safe_forms_is_a_non_empty_subset_without_repeats():
+    assert SAFE_FORMS == ("literal", "named_constant", "literal_concat", "parameter_binding")
+    assert "at least 1" in _one("sink_default_deny", {"safe_forms": []})
+    assert "is not one of" in _one("sink_default_deny", {"safe_forms": ["tainted"]})
+    assert "repeats" in _one("sink_default_deny", {"safe_forms": ["literal", "literal"]})
+    assert validate_param_formats("sink_default_deny", {**_SDD, "safe_forms": list(SAFE_FORMS)}) == []
+
+
+def test_allowlist_entries_carry_a_reviewed_reason():
+    entry = {"file": "src/db/admin.py", "site": "42", "callee": "execute",
+             "reason": "table name from a fixed enum", "reviewed_by": "a.reviewer"}
+    assert validate_param_formats("sink_default_deny", {**_SDD, "allowlist": [entry]}) == []
+    for missing in ("file", "site", "callee", "reason", "reviewed_by"):
+        bad = {k: v for k, v in entry.items() if k != missing}
+        assert f"lacks '{missing}'" in _one("sink_default_deny", {"allowlist": [bad]})
+    assert "lacks 'reason'" in _one("sink_default_deny", {"allowlist": [{**entry, "reason": "  "}]})
+
+
+def test_wrappers_and_constructors_are_names():
+    assert validate_param_formats("sink_default_deny", {**_SDD, "wrappers": ["run_query", "db::run", "$readmemh"]}) == []
+    assert "item 0" in _one("sink_default_deny", {"wrappers": ["run query"]})
+    assert "item 1" in _one("typed_boundary", {"constructors": ["ok", "not ok"]})
+    assert "at least 1" in _one("typed_boundary", {"constructors": []})
+
+
+def test_boundary_type_and_property_are_scalars_with_a_form():
+    assert "'boundary_type'" in _one("typed_boundary", {"boundary_type": "Safe Sql"})
+    assert validate_param_formats("typed_boundary", {**_TB, "boundary_type": "pkg::safe_addr_t"}) == []
+    assert "'property'" in _one("typed_boundary", {"property": "short"})
+    assert "'property'" in _one("typed_boundary", {"property": "one line\nand another line of text"})
+    assert "not a string" in _one("typed_boundary", {"property": ["a", "b"]})
+
+
+def test_string_pattern_params_are_unchanged_by_the_array_branch():
+    assert validate_param_formats("test_attested", {"test": "t", "mechanism": "app/a.py::f"}) == []
+    errors = validate_param_formats("test_attested", {"test": "t", "mechanism": ["app/a.py::f"]})
+    assert len(errors) == 1 and "not a string" in errors[0]
+
+
+def test_every_array_example_validates_against_its_own_schema():
+    for t in ASSERTION_TYPES:
+        for p in t.params:
+            if p.structure == "array":
+                assert validate_param_formats(t.name, {p.name: json.loads(p.example)}) == [], (t.name, p.name)
+
+
+def test_the_item_schema_is_exposed_as_data():
+    (entry,) = describe_types(["sink_default_deny"])
+    params = {p["name"]: p for p in entry["required_params"] + entry["optional_params"]}
+    assert params["safe_forms"]["item_schema"] == {"min_items": 1, "enum": list(SAFE_FORMS)}
+    assert params["sinks"]["item_schema"]["required_keys"] == ["callee"]
+    assert params["sinks"]["item_schema"]["key_enums"] == {"kind": list(SINK_KINDS)}
+    assert params["scope"]["item_schema"]["item_pattern"] == SCOPE_ENTRY_PATTERN
+    assert params["property"]["pattern"]
+    assert "structure" not in params["property"]

@@ -2162,6 +2162,29 @@ class MipitiClient:
     async def get_sufficiency(self, model_id: str, control_id: str) -> dict:
         return await self._get(f"/api/models/{model_id}/controls/{control_id}/sufficiency")
 
+    async def bind_assertion(
+        self, model_id: str, control_id: str, assertion_id: str, covers: list[str],
+    ) -> dict:
+        """PUT /api/models/{model_id}/controls/{control_id}/assertions/{assertion_id}/covers.
+
+        Declares which objectives or clauses an existing assertion proves;
+        the platform validates the declaration structurally and re-evaluates
+        the control. The prior declaration is replaced, not merged.
+        """
+        return await self._put(
+            f"/api/models/{model_id}/controls/{control_id}/assertions/{assertion_id}/covers",
+            {"covers": covers},
+        )
+
+    async def get_inventory_completeness(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/inventory-completeness.
+
+        The model's inventory completeness: per-entity origin and computed
+        grounding, the closure results, and the per-control and model tiers.
+        Read-only; returned verbatim.
+        """
+        return await self._get(f"/api/models/{model_id}/inventory-completeness")
+
     # ------------------------------------------------------------------
     # Findings
     # ------------------------------------------------------------------
@@ -2441,6 +2464,7 @@ class MipitiClient:
         self, model_id: str, assumption_id: str,
         attested_by: str = "", statement: str = "",
         expires_at: str = "", evidence_url: str = "",
+        covers: list[str] | None = None,
     ) -> dict:
         body: dict = {}
         if attested_by:
@@ -2451,6 +2475,8 @@ class MipitiClient:
             body["expires_at"] = expires_at
         if evidence_url:
             body["evidence_url"] = evidence_url
+        if covers:
+            body["covers"] = covers
         return await self._post(f"/api/models/{model_id}/assumptions/{assumption_id}/attest", body)
 
     async def list_attestations(self, model_id: str, assumption_id: str) -> dict:
