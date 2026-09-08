@@ -309,13 +309,15 @@ def test_a_resubmission_is_documented_as_an_in_place_re_pointing() -> None:
     assert "supersedes the earlier row" not in doc
 
 
-def test_no_control_level_soundness_grade_is_promised() -> None:
-    """Evidence strength is composed per clause. A control-level grade is not
-    a field any read returns, so the text states the consequence -- the
-    weakest clause bounds the control -- without naming one."""
+def test_the_submission_surface_states_the_bound_and_not_the_grade() -> None:
+    """Evidence strength is composed per clause, and the composed grade is
+    read from the claim (``get_sufficiency``), not returned by a submission.
+    So the submit text states the consequence -- the weakest clause bounds
+    the control -- and leaves the field name to the read that answers it."""
     doc = _flat_doc("submit_assertions")
     assert "no more strongly than its weakest clause" in doc
     assert "soundness_tier" not in doc
+    assert "soundness_tier" in _flat_doc("get_sufficiency")
 
 
 def test_only_an_attested_seal_drops_reachability() -> None:

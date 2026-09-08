@@ -377,9 +377,14 @@ _RTL_FILE = ParamSpec("file", "File path relative to project root", example="rtl
 _SCOPE = ParamSpec(
     "scope",
     "Repo-relative paths, directories or globs naming every source file the "
-    "property lives in. Exact: a file in scope that cannot be parsed, or "
-    "whose language has no parser, fails the check; a scope that matches "
-    "nothing proves nothing. No absolute paths, no `..`.",
+    "property lives in. For a clause that has to hold at every entry of a "
+    "surface, that is the region holding the components the control defends: "
+    "a scope over test sources, vendored code or a sibling area witnesses "
+    "those files and says nothing about the surface the clause ranges over, "
+    "and the caller writing the scope is the one who knows which region it "
+    "is. Exact: a file in scope that cannot be parsed, or whose language has "
+    "no parser, fails the check; a scope that matches nothing proves nothing. "
+    "No absolute paths, no `..`.",
     example='["src/db/**/*.py", "src/api/queries.py"]',
     structure="array", min_items=1, item_pattern=SCOPE_ENTRY_PATTERN,
 )
