@@ -57,7 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attacker's operations range over any entry of the interface it reaches;
   `point`: one named entry), and `attest_surface_extent` on `edit_attacker`.
   Supplying any of them attests the extent and requires `change_reason`, on
-  the create as much as on the edit. Only `whole` is declarable on a create:
+  the create as much as on the edit; the published effect is the attested
+  one — an attested `whole` makes the objectives that attacker anchors
+  for-all obligations — and no text describes an extent the platform arrives
+  at on its own. Only `whole` is declarable on a create:
   narrowing to one named entry is a statement about the objectives the
   attacker anchors, which a create does not have yet, so the narrowing is an
   `edit_attacker` call, where it is checked against the assets those
@@ -86,15 +89,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `no_plaintext_secret` state what a clean result cannot prove.
   `test_attested` states its bound (the path it drove) and that an unsigned
   statement or an unattested run is reported as a claim.
-- `get_control_work_order` documents `required_evidence[]`, one entry per
-  clause that still needs something: the clause text, its `clause_id` (the
-  value to put in `covers`), its `quantifier`, the `required_class` that
-  closes it, what is `missing`, and a prefilled `suggested_submission`. Its
-  `assertion_contract` carries `soundness`, `universal_rule` and
-  `sound_types`, and its acceptance criteria are generated from those
-  entries, so a clause that has to hold at every site the attacker reaches is
-  named as such. `get_sufficiency` and `get_controls` point at it rather than
-  restating the work list.
+- `get_control_work_order` documents `required_evidence[]` in observable
+  terms: where the order names a required class for a clause, the entry
+  carries the clause text, its `clause_id` (the value to put in `covers`),
+  its `quantifier`, the `required_class` that closes it, what is `missing`,
+  and a `suggested_submission` **skeleton**. The skeleton is a fill-in, not a
+  submission: its `<...>` placeholders are values only the caller can supply,
+  and one left unreplaced is refused before the submission leaves the client
+  and again on arrival, by the one format rule both ends apply — a
+  placeholder that validated would be recorded as a claim about the caller's
+  code that nothing backs. Its `assertion_contract` carries `soundness`,
+  `universal_rule` and `sound_types`, and its acceptance criteria are
+  generated from those entries, so a clause that has to hold at every site
+  the attacker reaches is named as such. `behavioral` is documented as a
+  compatibility field for readers written before the classes; `soundness` is
+  the field to branch on. `get_sufficiency` and `get_controls` point at the
+  order rather than restating the work list.
 - The server instructions no longer describe an asset or attacker `status`
   field, `asset_status` / `attacker_status`, or the `asset_absent` /
   `attacker_irrelevant` risk reasons, none of which the API reports; they
@@ -107,12 +117,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `change_reason`); `add_trust_boundary` says the same. `submit_attestation`
   states that an attestation is a responsible party's claim, never a proof
   over every site.
-- The published surface names only what the API answers. A tool whose call
-  has no route, a parameter the receiving surface drops, and a return field
-  that never appears are each held out of the catalogue: an agent that plans
-  around one records work it never did. A test enumerates the held-out
-  vocabulary and fails when any of it reaches a tool description or the
-  instructions without a read behind it.
+- The published surface names only what the API answers, and says which of
+  two reasons holds a name out. A tool whose call has no route, a parameter
+  the receiving surface drops and a return field that never appears are
+  promises nothing can keep; a shape the API does answer and this release
+  does not steer agents at is an editorial decision, not a missing
+  capability. The two are enumerated apart, each with the reason true of it,
+  and a test fails when either reaches a tool description or the
+  instructions. A guard whose stated ground its own list falsifies is worse
+  than no guard: the next reader trusts the reason instead of the code.
 - A submission is checked for the params its type requires as well as the
   format of the ones it carries. A submission that names one type and fills
   another type's parameter set is well-formed in every value it holds, so
@@ -122,16 +135,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `submit_assertions` states what a resubmission does: an assertion whose
   check is unchanged is re-pointed in place, keeping its id and its verdicts,
   and a resubmission that carries no `covers` leaves a stored declaration
-  standing. Evidence strength is composed per clause and no control-level
-  grade is named, so the text states the consequence instead — a control is
-  proven no more strongly than its weakest clause.
+  standing. Evidence strength is composed per clause, so the submission
+  surface states the consequence rather than a grade — a control is proven
+  no more strongly than its weakest clause — and leaves the composed
+  `soundness_tier` to the read that answers for it (`get_sufficiency`).
+- A restored archive is published as arriving **unverified**.
+  `import_threat_model_archive`, `export_report (format="archive")` and the
+  server instructions say whose record the envelope's assertion verdicts and
+  run-attested flags are: the origin's, kept so a third party can check them
+  against the signatures, and not credit in the workspace that imports them —
+  a verdict belongs to the run that produced it and the judge that decided
+  it, and an importing workspace has neither. Verification is earned there by
+  running it against code that workspace can reach.
+- The credit path for a for-all clause is published as a read rather than a
+  fixed pair of names: the two sound classes are the rule,
+  `get_assertion_types` returns the types that carry them, and
+  `get_control_work_order`'s
+  `assertion_contract.sound_types` names the ones a platform takes. Where it
+  names none, the instructions name the acts that remain — scope the asset to
+  the component the attacker actually reaches, attest a `point` extent with
+  its reason, or record a risk acceptance or a not-applicable disposition —
+  so an obligation is never stated with nothing that discharges it.
+- The `scope` param of both sound witness types says what the scope has to be
+  for a clause that ranges over every entry of a surface: the region holding
+  the components the control defends. A scope over test sources, vendored
+  code or a sibling area witnesses those files and says nothing about the
+  surface the clause ranges over.
+- `get_sufficiency` publishes the composed `soundness_tier` a claim may carry
+  and the rule that bounds it — a control is proven no more strongly than its
+  weakest clause — so the grade is read as that bound and never as a
+  control-level pass.
 - The assertion type count is 30.
 
 ### Removed
 
-- The `mechanism` param on `function_exists` and `class_exists`. It existed
-  to promote a test-file target to behavioral evidence; a test file's
-  definition existing is presence, so there is nothing for it to carry.
+- The optional `mechanism` param on `function_exists` and `class_exists`.
+  Both types report **presence** — a named definition is in the tree — and a
+  presence check runs no execution, so there is no execution whose mechanism
+  could be named. It existed to promote a test-file target to behavioral
+  evidence, which the class vocabulary now settles: a test file's definition
+  existing is presence, and a run that passed is `test_attested`. A caller
+  that still sends the key is unaffected — an undeclared param is ignored on
+  arrival — so nothing an agent submits today breaks.
 
 ### Added
 
