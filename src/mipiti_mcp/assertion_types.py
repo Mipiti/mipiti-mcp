@@ -198,12 +198,39 @@ def _array_violation(p: "ParamSpec", value: Any) -> "str | None":
     return None
 
 
+def _placeholder_reason(value) -> "str | None":
+    """Why this value is still a blank rather than an answer, or None.
+
+    A blank is a whole value of the form ``<...>``: it is the question, copied
+    across unanswered. A value that merely CONTAINS an angle bracket is left
+    alone, since a property sentence may legitimately say ``count < limit``.
+    """
+    def _blank(item) -> bool:
+        text = item.strip() if isinstance(item, str) else ""
+        return text.startswith("<") and text.endswith(">") and len(text) > 2
+
+    if _blank(value):
+        return "still the blank it was offered as"
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            if _blank(item):
+                return f"still the blank it was offered as at item {i}"
+    return None
+
+
 def validate_param_formats(type_name: str, params: "dict") -> "list[str]":
-    """Errors for params whose declared format the value does not match.
+    """Errors for params whose value the type does not accept.
 
     Pure over the catalogue; the platform and the MCP server both call it.
-    A param the type does not declare, or one with neither a ``pattern``
-    nor an array structure, is not judged here.
+
+    Two things are judged. A declared format (a ``pattern``, or an array
+    structure) is checked against the value. And EVERY declared param is
+    checked for a value still left as the ``<...>`` blank the guidance offers,
+    whatever format it declares or does not — a param with no pattern is the
+    one where an unanswered blank would otherwise pass, and a submission that
+    passes while saying nothing about the caller's code is recorded as a claim
+    until some later check catches it. Refusing it here, naming the param, is
+    the better failure. A param the type does not declare is not judged.
     """
     spec = next((t for t in ASSERTION_TYPES if t.name == type_name), None)
     if spec is None:
@@ -213,6 +240,13 @@ def validate_param_formats(type_name: str, params: "dict") -> "list[str]":
         if p.name not in (params or {}):
             continue
         value = params[p.name]
+        blank = _placeholder_reason(value)
+        if blank is not None:
+            hint = f" e.g. {p.example}" if p.example else ""
+            errors.append(
+                f"Param '{p.name}' for type '{type_name}' is {blank}{hint}: {value!r}"
+            )
+            continue
         if p.structure == "array":
             reason = _array_violation(p, value)
         elif p.pattern:

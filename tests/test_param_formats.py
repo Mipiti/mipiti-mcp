@@ -283,3 +283,52 @@ def test_the_binding_form_is_read_from_the_value_not_the_position():
     assert "read from the value's own shape, never from the position it occupies" in forms
     assert "takes the structure as data" in forms
     assert "a literal at the position with the data in a separate" not in forms
+
+
+# --- an unfilled blank is refused, whatever format the param declares -------
+
+def test_a_param_left_as_the_blank_is_refused_even_with_no_declared_format():
+    """The guidance offers a skeleton whose values are questions. A param that
+    declares a pattern refuses its own blank as a format error; a param that
+    declares none would otherwise accept the question as an answer, and a
+    submission that passes while saying nothing about the caller's code is
+    recorded as a claim until some later check catches it."""
+    errors = validate_param_formats("test_attested", {
+        "test": "<test id that fails without the control>",
+        "mechanism": "<file>::<symbol of the guard>",
+    })
+    assert any("'test'" in e for e in errors), errors
+    assert any("'mechanism'" in e for e in errors), errors
+
+
+def test_a_filled_submission_of_the_same_shape_passes():
+    """So the refusal above is about the blank, not about the type."""
+    assert validate_param_formats("test_attested", {
+        "test": "tests/test_auth.py::test_rejects_expired_token",
+        "mechanism": "app/auth.py::require_token",
+    }) == []
+
+
+def test_a_blank_inside_an_array_is_refused_and_named():
+    errors = validate_param_formats("sink_default_deny", {
+        "scope": ["<path of each component on the path>"],
+        "sinks": [{"callee": "execute", "positions": [0]}],
+        "safe_forms": ["parameter_binding"],
+        "property": "Every statement reaches the driver with data bound as parameters.",
+    })
+    assert [e for e in errors if "'scope'" in e], errors
+    assert not [e for e in errors if "'sinks'" in e or "'safe_forms'" in e], errors
+
+
+@pytest.mark.parametrize("value", [
+    "count < limit",
+    "the handler rejects a token issued <before> the rotation",
+    "a<b",
+    "<",
+    "<>",
+])
+def test_a_value_that_merely_carries_an_angle_bracket_is_not_a_blank(value):
+    """A property sentence is prose, and prose contains comparisons. Only a
+    whole value of the form ``<...>`` is the question copied across."""
+    errors = validate_param_formats("sink_default_deny", {"property": value})
+    assert not [e for e in errors if "blank" in e], errors

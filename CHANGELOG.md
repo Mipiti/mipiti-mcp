@@ -73,6 +73,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Parameter validation refuses a value still left as the `<...>` blank the
+  guidance offered, for every declared param rather than only for those that
+  declare a format. A param with no pattern was the one place an unanswered
+  blank passed, and a submission that passes while saying nothing about the
+  caller's code is recorded as a claim until some later check catches it; an
+  immediate refusal naming the param is the better failure. Only a whole value
+  of that shape is a blank, so a property sentence saying `count < limit` is
+  untouched, and an array is judged item by item.
+
 - The `submit_assertions` description is re-cut to the length a client was
   observed to truncate at, and spends it on what a cut must not lose: the
   types grouped by soundness class, strongest first; the object shape,
