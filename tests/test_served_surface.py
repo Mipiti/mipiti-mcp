@@ -1,16 +1,27 @@
-"""The catalogue advertises only what the API answers.
+"""The catalogue advertises only what the API answers, for a stated reason.
 
 A tool is a promise: an agent that reads one plans around it. A tool whose
 call has no route, a parameter the receiving surface drops, or a documented
 return field that never appears is worse than a missing feature -- the agent
 records work it never did and reports a binding that does not exist.
 
-So the catalogue holds a vocabulary OUT until an API surface produces it.
-Each name below is a shape the catalogue described before anything answered
-for it; the guard fails when one comes back into the published text without
-a surface behind it. Adding a name here is the cheap half of shipping the
-capability; deleting one is the deliberate act of saying the API now serves
-it, and belongs in the same change as the read that proves it.
+So the catalogue holds a vocabulary OUT of its published text. It is held
+out for two different reasons, and the difference is the whole value of this
+file to the next reader:
+
+``_UNANSWERED`` names a shape no API surface produces. Publishing one would
+be a promise nothing can keep. Deleting a name from it is the deliberate act
+of saying a read now answers for it, and belongs in the same change as that
+read.
+
+``_UNADVERTISED`` names a shape the API DOES answer and this release
+deliberately does not steer agents at. Nothing here is a false promise;
+these are editorial decisions about which surface an agent should read
+first, and deleting one is an editorial change, not a capability claim.
+
+A guard whose stated ground its own list falsifies is worse than no guard,
+because the next reader trusts the reason rather than re-deriving it. Keep
+each name in the list whose reason is true of it.
 """
 
 import asyncio
@@ -21,37 +32,55 @@ import pytest
 from mipiti_mcp import server
 from mipiti_mcp.client import MipitiClient
 
-# Names the published text must not carry. Each is a field or a tool whose
-# value would have to come from a read the API does not answer.
-_UNSERVED = (
-    # A per-model inventory-completeness record, and the tier and per-entity
-    # grounding computed from it.
+# Names no API surface answers for. A value here would have to be invented.
+_UNANSWERED = (
+    # A risk reason on an assessment.
+    "soundness_gap",
+    # A per-objective quantifier on an assessment.
+    "obligation_quantifier",
+)
+
+# Names the API answers and this release does not advertise.
+_UNADVERTISED = (
+    # The per-model inventory-completeness record, its tier, and the stored
+    # provenance of an entity. Answered; the catalogue steers an agent at the
+    # per-clause work list instead, because that is the surface that names an
+    # act to perform. An entity's provenance follows from how the entity came
+    # to exist rather than from anything an agent calls.
     "get_inventory_completeness",
     "inventory-completeness",
     "completeness_tier",
-    # The stored provenance of an inventory entity.
     "entity_origin",
-    # A risk reason and a per-objective quantifier on an assessment.
-    "soundness_gap",
-    "obligation_quantifier",
+    # The quantifier's provenance, and the weakest binding origin, on a served
+    # claim. The catalogue publishes the acts -- write `covers`, submit the
+    # class the work order names -- rather than the shapes they move.
     "quantifier_source",
-    # A promotion of an already-submitted assertion to a declared binding.
+    "binding_origin",
+    # Re-pointing an assertion already submitted. Answered on a route this
+    # release does not advertise: a declaration is re-checked when the
+    # evidence is evaluated either way, so the published act is to declare
+    # `covers` on the submission.
     "bind_assertion",
-    # A composed tier for a control. Evidence strength is composed per
-    # clause, and no read returns a control-level tier; naming one would
-    # have an agent report a grade nothing computes.
-    "soundness_tier",
 )
 
+_HELD_OUT = _UNANSWERED + _UNADVERTISED
+
 # Field names that must not be documented as a returned object. Kept apart
-# from _UNSERVED because each is an ordinary English word elsewhere.
-_UNSERVED_SHAPES = (
-    "clauses[]",
+# from the name lists because each is an ordinary English word elsewhere.
+_UNANSWERED_SHAPES = (
     "assurance{",
     "verified_closed",
     "verified_bounded",
     "sites_unproven",
 )
+
+# Answered on the served claim; the catalogue points at the work order, which
+# names the clause id to bind to, rather than documenting the claim's shape.
+_UNADVERTISED_SHAPES = (
+    "clauses[",
+)
+
+_HELD_OUT_SHAPES = _UNANSWERED_SHAPES + _UNADVERTISED_SHAPES
 
 
 def _tools() -> dict:
@@ -72,27 +101,43 @@ def _tool_texts() -> dict:
     return texts
 
 
-@pytest.mark.parametrize("name", _UNSERVED)
-def test_no_published_text_names_an_unserved_field(name: str) -> None:
+def test_the_two_held_out_lists_are_kept_apart() -> None:
+    """One list with one reason is how a true reason rots into a false one:
+    a name that becomes served stays under 'nothing answers for it' and the
+    next reader believes the sentence instead of the code."""
+    assert _UNANSWERED, "the list of shapes nothing answers for is empty"
+    assert _UNADVERTISED, "the list of answered-but-unadvertised shapes is empty"
+    assert set(_UNANSWERED).isdisjoint(_UNADVERTISED)
+    assert set(_UNANSWERED_SHAPES).isdisjoint(_UNADVERTISED_SHAPES)
+
+
+def test_a_served_name_is_not_filed_as_unanswered() -> None:
+    """The composed tier of a control is read from a served claim, so it is
+    published (see ``get_sufficiency``) and belongs in neither list."""
+    assert "soundness_tier" not in _HELD_OUT
+
+
+@pytest.mark.parametrize("name", _HELD_OUT)
+def test_no_published_text_names_a_held_out_field(name: str) -> None:
     offenders = [where for where, text in _tool_texts().items() if name in text]
     assert offenders == [], f"{name} is published by: {offenders}"
 
 
-@pytest.mark.parametrize("shape", _UNSERVED_SHAPES)
-def test_no_published_text_documents_an_unserved_return_shape(shape: str) -> None:
+@pytest.mark.parametrize("shape", _HELD_OUT_SHAPES)
+def test_no_published_text_documents_a_held_out_return_shape(shape: str) -> None:
     offenders = [where for where, text in _tool_texts().items() if shape in text]
     assert offenders == [], f"{shape} is published by: {offenders}"
 
 
-@pytest.mark.parametrize("name", _UNSERVED)
-def test_the_client_calls_no_unserved_route(name: str) -> None:
-    assert not hasattr(MipitiClient, name), f"MipitiClient.{name} calls a route nothing answers"
+@pytest.mark.parametrize("name", _HELD_OUT)
+def test_the_client_calls_no_held_out_route(name: str) -> None:
+    assert not hasattr(MipitiClient, name), f"MipitiClient.{name} calls a route the catalogue holds out"
     source = inspect.getsource(MipitiClient)
     assert name not in source, f"{name} appears in the client"
 
 
-def test_no_tool_is_registered_for_an_unserved_route() -> None:
-    assert set(_tools()).isdisjoint(set(_UNSERVED))
+def test_no_tool_is_registered_for_a_held_out_route() -> None:
+    assert set(_tools()).isdisjoint(set(_HELD_OUT))
 
 
 def test_an_attestation_carries_no_binding_declaration() -> None:
