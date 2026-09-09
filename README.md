@@ -101,15 +101,16 @@ uvx mipiti-mcp
 | `rename_threat_model` | Rename a model (metadata only, no new version). Titles must be unique within a workspace (case-insensitive). |
 | `delete_threat_model` | Permanently delete a model and all its data. |
 | `export_report (scope="model")` | Export as PDF, HTML, or CSV. |
-| `export_report (scope="model", format="archive")` | Export the self-contained JSON audit archive (every version, controls, assertions with CI verdicts, findings, attestations, sufficiency signatures). Independently verifiable. |
-| `import_threat_model_archive` | Restore an audit archive into a target workspace. Fresh `model_id` per import; title collisions auto-suffix. |
+| `export_report (scope="model", format="archive")` | Export the self-contained JSON audit archive (every version, controls, assertions with CI verdicts, findings, attestations, sufficiency signatures). Independently verifiable: the verdicts in it are the origin's record of what it claimed, which is what a third party checks against the signatures. |
+| `import_threat_model_archive` | Restore an audit archive into a target workspace. Fresh `model_id` per import; title collisions auto-suffix. The restored model arrives unverified — the origin's assertion verdicts and run-attested flags are not credited in the importing workspace, which earns them by running verification against code it can reach. |
 
 ### Entity CRUD
 
 | Tool | Description |
 |------|-------------|
 | `add_asset` / `edit_asset` / `remove_entity (entity_type="asset")` | Targeted single-entity changes for assets. Creates a new version. |
-| `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. |
+| `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. `surface_extent` (`whole`: the attacker's operations range over any entry of the interface it reaches; `point`: one named entry) is an operator declaration: supplying it attests it and requires `change_reason` on either tool, and an attested `whole` makes the objectives that attacker anchors for-all obligations. A create declares only `whole`; narrowing is an `edit_attacker` call, checked against the objectives the attacker anchors. |
+| `get_entity` | Read one entity of any kind. An attacker also carries `surface_extent` and `surface_extent_source`, which says whether a person attested it. |
 
 ### Trust Boundaries
 
@@ -142,7 +143,7 @@ uvx mipiti-mcp
 | `edit_assumption` | Update description and/or linked COs. |
 | `remove_entity (entity_type="assumption")` | Soft-delete (preserved for audit). Linked COs are no longer mitigated by it. |
 | `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
-| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. |
+| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. A claim, never a proof over every site: it can cover an existential clause and never a for-all one. |
 | `list_attestations` | Attestation history for an assumption. |
 | `set_control_assumption_groups` | Declaratively set a control's assumption group structure: mark it externally handled by a single assumption (shorthand), clear that status (control reverts to not_implemented), or express compound cases with multiple groups (within a group = AND, across groups = OR; e.g. "AWS KMS + quarterly review"). Attested groups count as active for mitigation group completeness. |
 | `get_control_assumption_groups` | Inspect the current assumption group structure on a control. Groups express alternative sets of external claims (within = AND, across = OR). |
@@ -152,16 +153,31 @@ uvx mipiti-mcp
 
 | Tool | Description |
 |------|-------------|
-| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (<!--ASSERTION_TYPE_COUNT-->28<!--/ASSERTION_TYPE_COUNT--> assertion types). |
+| `get_assertion_types` | The catalogue as data: every type, what it proves, its soundness class, its params (an array-valued param carries its item schema), and the class vocabulary. Read-only. |
+| `submit_assertions` | Submit typed, machine-verifiable claims about system properties (<!--ASSERTION_TYPE_COUNT-->30<!--/ASSERTION_TYPE_COUNT--> assertion types). Each object may carry `covers`: the objective id (`CO-NN`) or clause ids (`cls_…`) it proves; a declared binding survives review, an undeclared one is inferred and capped below sound credit. |
 | `list_assertions` / `delete_assertion` | List or delete assertions for a control. |
 | `add_evidence` / `remove_evidence` | Attach auxiliary metadata (docs, links). Evidence is contextual — only assertions prove implementation. |
 | `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |
-| `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? |
+| `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? For the per-clause work list read `get_control_work_order`: where the order names a required class for a clause, `required_evidence` carries the class, the clause id to bind evidence to, and a submission skeleton to fill in. A claim that carries a `soundness_tier` reports its weakest clause's tier. |
 | `get_scan_prompt` | Returns targeted prompts for scanning the codebase against not_implemented controls. |
 | `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal`, `open_assumption`, `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`. Start here for periodic maintenance. |
 | `submit_findings` / `list_findings` / `update_finding` | Report and track negative findings (gap discovery). |
 | `preview_finding_remediation` | Read-only. Returns a structured diff describing the changes a subsequent `apply_finding_remediation` call would make. Diff shape depends on the finding's kind (e.g. for `structural_duplicate_controls`: which controls would be kept, which dropped, the union of CO mappings + framework refs that would land on the survivor). Call before `apply_finding_remediation` so the operator can confirm. |
 | `apply_finding_remediation` | Mutates state: commits the changes `preview_finding_remediation` showed. Requires a non-empty `justification` (one-line operator rationale) recorded on the audit trail. The agent is responsible for the preview-then-apply norm — surface the diff and get explicit confirmation before calling. |
+
+### Evidence soundness classes
+
+Every assertion type declares the class of the fact it reports, and the class bounds what a passing verdict can establish. `get_assertion_types` returns it per type; the platform and the CI verifier hold their own tables equal to the catalogue's.
+
+| Class | A pass establishes | Types |
+|-------|--------------------|-------|
+| `presence` | A named construct, configuration value, dependency, file or pattern occurrence exists in the tree. Existence, not behaviour; a test file existing is presence. | `function_exists`, `class_exists`, `test_exists`, the configuration, dependency, semantic and RTL structure types |
+| `under_approximating_scan` | A syntactic scan over a scope with no false-positive guarantee. A clean result proves the absence of the syntactic form only. | `pattern_matches`, `pattern_absent`, `no_plaintext_secret` |
+| `existential_witness` | A signed statement that a named execution ran and passed at this commit. Proves the path it drove and nothing beyond it. | `test_attested` |
+| `sound_over_approximation` | Every site in a declared scope that can violate the property was enumerated, and each is a declared safe form or a reviewed exception. Sound modulo the declared sink list. | `sink_default_deny` |
+| `by_construction` | The sink accepts only a declared boundary type, and every construction site of that type is default-denied. | `typed_boundary` |
+
+A clause that ranges over every entry of a surface (every endpoint, every query, every frame) is credited only by one of the two sound classes bound to it with `covers`; a test proves only the path it drove, and an attestation is a responsible party's claim. Which types carrying those classes a platform takes is a read, not an assumption: `get_control_work_order`'s `assertion_contract.sound_types` names them, and where it names none the acts that remain are to scope the asset to the component the attacker actually reaches, attest a `point` extent with its reason, or record a risk acceptance or a not-applicable disposition. The two sound types take a declared `scope`, the `sinks` through which the property could be violated (a call, a constructor, a macro, a store to a named target such as an HDL assignment, or a module instantiation), a reviewed `allowlist`, and the `property` in one sentence; `sink_default_deny` adds the accepted `safe_forms`, `typed_boundary` the `boundary_type` and its `constructors`. Hardware sources are covered by the same rule.
 
 ### Agent work orders & delegation
 
@@ -179,7 +195,7 @@ uvx mipiti-mcp
 
 | Tool | Description |
 |------|-------------|
-| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation). For per-CO reachability state call `get_reachability_verdicts`. |
+| `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation, coverage_gap, insufficient_by_design). For per-CO reachability state call `get_reachability_verdicts`. |
 | `get_findings_risks` | Workspace-scoped triage dashboard: open findings, active risk acceptances, and at-risk COs across every model the workspace can access. Entry point when asked "what's open?". |
 | `get_risk_view (scope="model")` | Per-model Prioritized Risk View: one row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage, and open-finding count. |
 | `get_risk_view (scope="system")` | Cross-model variant of `get_risk_view (scope="model")`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |

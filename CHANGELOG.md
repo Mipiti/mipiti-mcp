@@ -9,6 +9,200 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Soundness classes.** Every assertion type declares the class of the fact
+  it reports, one of a closed vocabulary ordered weakest to strongest:
+  `presence` (a named construct, value, dependency, file or pattern occurrence
+  exists), `under_approximating_scan` (a syntactic scan; a clean result proves
+  the absence of the form only), `existential_witness` (a signed run passed;
+  proves the path it drove), `sound_over_approximation` (every site in a
+  declared scope that can violate the property is a declared safe form or a
+  reviewed exception) and `by_construction` (the sink accepts only a boundary
+  type whose construction is default-denied). The class is declared once,
+  here, by the fact reported; the platform and the CI verifier hold their
+  tables equal to it. `AssertionTypeSpec.soundness` is required and the
+  catalogue refuses to import with a missing or unknown value.
+  `get_assertion_types` returns `soundness` per type, the class vocabulary
+  with what each pass establishes, and the two classes that can credit a
+  for-all clause. The module exports `SOUNDNESS_CLASSES`, `SOUNDNESS_RANK`,
+  `SOUND_CLASSES`, `SOUNDNESS_BY_TYPE`, `SOUND_TYPES`, `soundness_of` and
+  `soundness_rank_of`.
+- **`typed_boundary`** (`by_construction`) and **`sink_default_deny`**
+  (`sound_over_approximation`): the two witness types that credit a clause
+  ranging over every entry of a surface. Both take a declared `scope`, the
+  `sinks` through which the property could be violated (`callee` plus an
+  optional `kind` of `call`, `constructor`, `macro`, `assign` — a store to a
+  named target such as an HDL blocking or non-blocking assignment — or
+  `instantiate`, and optional guarded `positions`), a reviewed `allowlist`
+  (`file`, `site`, `callee`, `reason`, `reviewed_by`), optional `wrappers`,
+  and the `property` in one sentence. `sink_default_deny` adds `safe_forms`,
+  a non-empty subset of `literal`, `named_constant`, `literal_concat`,
+  `parameter_binding`; `typed_boundary` adds `boundary_type` and its
+  `constructors`. `parameter_binding` is read from the shape of the value
+  at the site, never from the position it occupies, and what it establishes
+  is that the statement reaching the sink is fixed. Every unclassifiable site
+  is a violation, a scope that matches nothing proves nothing, and the
+  residual each type carries is stated in its description. Neither takes
+  `file` or `target`. Hardware sources are covered by the same rule.
+- **`covers`** — a type-independent, top-level field on each object passed to
+  `submit_assertions`: the objective id (`CO-NN`; `CO12` and `CO-12` name the
+  same objective) or the clause ids (`cls_` + 12 hex) the evidence proves, at
+  most 16. The accepted form is one definition (`COVERS_PATTERN`,
+  `COVERS_MAX`, `validate_covers`) applied before a submission leaves the
+  client and by the API on arrival. The clause ids to declare are named by
+  `get_control_work_order` in `required_evidence`. A `covers` key on a
+  functional-test submission is refused rather than dropped in transit: that
+  surface records no binding, and a caller must not be left believing it
+  declared one.
+- **`surface_extent`** on `add_attacker` and `edit_attacker` (`whole`: the
+  attacker's operations range over any entry of the interface it reaches;
+  `point`: one named entry), and `attest_surface_extent` on `edit_attacker`.
+  Supplying any of them attests the extent and requires `change_reason`, on
+  the create as much as on the edit; the published effect is the attested
+  one — an attested `whole` makes the objectives that attacker anchors
+  for-all obligations — and no text describes an extent the platform arrives
+  at on its own. Only `whole` is declarable on a create:
+  narrowing to one named entry is a statement about the objectives the
+  attacker anchors, which a create does not have yet, so the narrowing is an
+  `edit_attacker` call, where it is checked against the assets those
+  objectives defend. `get_entity` returns an attacker's `surface_extent` and
+  `surface_extent_source`.
+- Array-valued parameter formats: `ParamSpec.structure="array"` with an item
+  schema (`min_items`, `enum`, `item_pattern`, `required_keys`,
+  `key_enums`), applied by `validate_param_formats` on both sides; scalar
+  `pattern` params are unchanged. `describe_types` exposes the item schema.
+
+### Changed
+
+- An allowlist entry's `site` is declared as the line number a run resolves it
+  against, and refused at submission when it is anything else. The published
+  sentence had offered "a line or a symbol" while only a line number is honoured,
+  so a submission following it was accepted here and then failed as a stale entry
+  — which names the wrong problem. Per-key formats on an object item are part of
+  the published schema, so a consumer reads the rule rather than learning it by
+  being refused.
+
+- Parameter validation refuses a value still left as the `<...>` blank the
+  guidance offered, for every declared param rather than only for those that
+  declare a format. A param with no pattern was the one place an unanswered
+  blank passed, and a submission that passes while saying nothing about the
+  caller's code is recorded as a claim until some later check catches it; an
+  immediate refusal naming the param is the better failure.
+
+  Only a whole string of that shape is a blank, so a property sentence saying
+  `count < limit` is untouched. The search descends through arrays AND objects
+  to any depth, because a param declaring an array of objects carries its
+  questions a level further in than a plain array does, and a check reading
+  only the top of the value accepts the submission exactly where it is least
+  filled. The refusal names where it found one, so it points at the blank
+  rather than at the param alone.
+
+- The `submit_assertions` description is re-cut to the length a client was
+  observed to truncate at, and spends it on what a cut must not lose: the
+  types grouped by soundness class, strongest first; the object shape,
+  including `covers` beside `params` and never inside it; and the for-all
+  rule, naming `typed_boundary` when the sinks accept one boundary type and
+  `sink_default_deny` when they do not. Everything else — per-param formats
+  and value patterns, examples, and the `target` option on the pattern types
+  — is returned in full, as data, by `get_assertion_types`, which the
+  description points at. A submission carrying `covers` inside `params` is
+  refused before it is sent, with the fix named.
+- `test_exists` is presence: files matching a glob exist, and nothing ran.
+  `function_exists` and `class_exists` on a test file are presence and never
+  anchor a test. `pattern_matches`, `pattern_absent` and
+  `no_plaintext_secret` state what a clean result cannot prove.
+  `test_attested` states its bound (the path it drove) and that an unsigned
+  statement or an unattested run is reported as a claim.
+- `get_control_work_order` documents `required_evidence[]` in observable
+  terms: where the order names a required class for a clause, the entry
+  carries the clause text, its `clause_id` (the value to put in `covers`),
+  its `quantifier`, the `required_class` that closes it, what is `missing`,
+  and a `suggested_submission` **skeleton**. The skeleton is a fill-in, not a
+  submission: its `<...>` placeholders are values only the caller can supply,
+  and one left unreplaced is refused before the submission leaves the client
+  and again on arrival, by the one format rule both ends apply — a
+  placeholder that validated would be recorded as a claim about the caller's
+  code that nothing backs. Its `assertion_contract` carries `soundness`,
+  `universal_rule` and `sound_types`, and its acceptance criteria are
+  generated from those entries, so a clause that has to hold at every site
+  the attacker reaches is named as such. `behavioral` is documented as a
+  compatibility field for readers written before the classes; `soundness` is
+  the field to branch on. `get_sufficiency` and `get_controls` point at the
+  order rather than restating the work list.
+- The server instructions no longer describe an asset or attacker `status`
+  field, `asset_status` / `attacker_status`, or the `asset_absent` /
+  `attacker_irrelevant` risk reasons, none of which the API reports; they
+  describe the attacker surface extent, the soundness classes and the for-all
+  rule, and `covers`. Components are added or edited after
+  `generate_threat_model`, because a component is created against a model and
+  there is none to supply before one exists. A `sealed` boundary decisively
+  drops reachability only once its seal is attested
+  (`edit_trust_boundary` with `seal_source="attested"` and a
+  `change_reason`); `add_trust_boundary` says the same. `submit_attestation`
+  states that an attestation is a responsible party's claim, never a proof
+  over every site.
+- The published surface names only what the API answers, and says which of
+  two reasons holds a name out. A tool whose call has no route, a parameter
+  the receiving surface drops and a return field that never appears are
+  promises nothing can keep; a shape the API does answer and this release
+  does not steer agents at is an editorial decision, not a missing
+  capability. The two are enumerated apart, each with the reason true of it,
+  and a test fails when either reaches a tool description or the
+  instructions. A guard whose stated ground its own list falsifies is worse
+  than no guard: the next reader trusts the reason instead of the code.
+- A submission is checked for the params its type requires as well as the
+  format of the ones it carries. A submission that names one type and fills
+  another type's parameter set is well-formed in every value it holds, so
+  only the absence check sees it, and it is seen before the submission leaves
+  the client. `missing_required_params` is exported and names each absent key
+  in the same words the API uses on arrival.
+- `submit_assertions` states what a resubmission does: an assertion whose
+  check is unchanged is re-pointed in place, keeping its id and its verdicts,
+  and a resubmission that carries no `covers` leaves a stored declaration
+  standing. Evidence strength is composed per clause, so the submission
+  surface states the consequence rather than a grade — a control is proven
+  no more strongly than its weakest clause — and leaves the composed
+  `soundness_tier` to the read that answers for it (`get_sufficiency`).
+- A restored archive is published as arriving **unverified**.
+  `import_threat_model_archive`, `export_report (format="archive")` and the
+  server instructions say whose record the envelope's assertion verdicts and
+  run-attested flags are: the origin's, kept so a third party can check them
+  against the signatures, and not credit in the workspace that imports them —
+  a verdict belongs to the run that produced it and the judge that decided
+  it, and an importing workspace has neither. Verification is earned there by
+  running it against code that workspace can reach.
+- The credit path for a for-all clause is published as a read rather than a
+  fixed pair of names: the two sound classes are the rule,
+  `get_assertion_types` returns the types that carry them, and
+  `get_control_work_order`'s
+  `assertion_contract.sound_types` names the ones a platform takes. Where it
+  names none, the instructions name the acts that remain — scope the asset to
+  the component the attacker actually reaches, attest a `point` extent with
+  its reason, or record a risk acceptance or a not-applicable disposition —
+  so an obligation is never stated with nothing that discharges it.
+- The `scope` param of both sound witness types says what the scope has to be
+  for a clause that ranges over every entry of a surface: the region holding
+  the components the control defends. A scope over test sources, vendored
+  code or a sibling area witnesses those files and says nothing about the
+  surface the clause ranges over.
+- `get_sufficiency` publishes the composed `soundness_tier` a claim may carry
+  and the rule that bounds it — a control is proven no more strongly than its
+  weakest clause — so the grade is read as that bound and never as a
+  control-level pass.
+- The assertion type count is 30.
+
+### Removed
+
+- The optional `mechanism` param on `function_exists` and `class_exists`.
+  Both types report **presence** — a named definition is in the tree — and a
+  presence check runs no execution, so there is no execution whose mechanism
+  could be named. It existed to promote a test-file target to behavioral
+  evidence, which the class vocabulary now settles: a test file's definition
+  existing is presence, and a run that passed is `test_attested`. A caller
+  that still sends the key is unaffected — an undeclared param is ignored on
+  arrival — so nothing an agent submits today breaks.
+
+### Added
+
 - **`get_control_work_order`** — the ticket for implementing one control:
   scan brief, what counts as proof (the assertion contract), acceptance
   criteria, steps, reconcile rules, what the calling agent may decide on
