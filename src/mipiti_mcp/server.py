@@ -4036,11 +4036,12 @@ async def get_sufficiency(
 ) -> dict:
     """Sufficiency verdict for a single control: whether its submitted assertions collectively cover every aspect of the control. Read-only.
 
-    Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict may be reported as stale when the control description or assertion set changed since it was last computed, in which case a fresh evaluation is triggered automatically — call again shortly for the updated result.
+    Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict carries a ``freshness`` of ``fresh`` | ``stale`` | ``pending`` beside its status: ``stale`` means the control description, the assertion set or the rules the verdict was computed under have moved since. A stale read with no re-evaluation already queued queues one, so calling again shortly does converge; a stale read that is already waiting adds nothing. For the whole-model rollup, which also refreshes stale controls on read, use ``get_verification_report``.
 
     This is the surface that explains a control stuck at
     ``verification_status: "partially_verified"``. Returns ``status``
-    (``"sufficient" | "insufficient" | "pending" | "stale"``) and, when
+    (``"sufficient" | "insufficient" | "pending"``; staleness rides in
+    ``freshness``, not in the status) and, when
     insufficient, a ``details`` breakdown naming EACH uncovered clause of
     the control description and what evidence would close it — a concrete
     work list, not a score. A claim that carries a ``soundness_tier``
