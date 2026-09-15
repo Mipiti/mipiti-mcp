@@ -465,6 +465,24 @@ def _get_client() -> MipitiClient:
 # ------------------------------------------------------------------
 
 
+_JUSTIFICATION_MIN_CHARS = 10
+_JUSTIFICATION_MAX_CHARS = 2000
+
+
+def _check_justification_length(justification: str) -> None:
+    """Enforce the platform's bounds on an AI-gated justification before the
+    call, so an out-of-range value fails here with the limit named rather than
+    as a validation error from the server."""
+    length = len(justification.strip())
+    if length < _JUSTIFICATION_MIN_CHARS:
+        raise ToolError(f"justification must be at least {_JUSTIFICATION_MIN_CHARS} characters.")
+    if length > _JUSTIFICATION_MAX_CHARS:
+        raise ToolError(
+            f"justification must be at most {_JUSTIFICATION_MAX_CHARS} characters "
+            f"(got {length}). State the reasoning; evidence belongs in assertions."
+        )
+
+
 async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, timeout: float = 600) -> dict:
     """Poll a backend job until completion, reporting progress via MCP protocol.
 
@@ -1490,15 +1508,15 @@ async def refine_control(
         control_id: ID of the control to refine (e.g., "CTRL-03").
         description: Proposed new control description (optional if
             codebase_findings provided).
-        justification: Why this refinement is appropriate (min 10 chars).
+        justification: Why this refinement is appropriate (10 to 2000
+            characters).
         codebase_findings: Description of existing code that may already
             satisfy this control's objective (optional). When provided
             without description, the platform proposes a description.
     """
     if not description.strip() and not codebase_findings.strip():
         raise ToolError("Either description or codebase_findings is required.")
-    if len(justification.strip()) < 10:
-        raise ToolError("justification must be at least 10 characters.")
+    _check_justification_length(justification)
     try:
         client = _get_client()
         # Runs as a background job (strong-LLM CO sufficiency check); poll it so
@@ -2400,7 +2418,9 @@ async def set_mitigation_groups(
         defense_in_depth: Comma-separated control IDs tracked as
             defense-in-depth (not required for mitigation). Example:
             "CTRL-04,CTRL-05".
-        justification: Why this group structure is appropriate (min 10 chars).
+        justification: Why this group structure is appropriate (10 to 2000
+            characters). The gate weighs it alongside the objective and the
+            controls' own descriptions, so state the reasoning, not evidence.
     """
     import json as _json
     try:
@@ -2412,8 +2432,7 @@ async def set_mitigation_groups(
 
     did_list = [s.strip() for s in defense_in_depth.split(",") if s.strip()] if defense_in_depth else []
 
-    if len(justification.strip()) < 10:
-        raise ToolError("justification must be at least 10 characters.")
+    _check_justification_length(justification)
 
     try:
         client = _get_client()
@@ -4931,8 +4950,9 @@ async def set_control_assumption_groups(
         groups: JSON object mapping group numbers to assumption ID lists.
             Example: '{"1": ["AS1", "AS2"], "2": ["AS3"]}'
             Empty object `{}` clears all groups.
-        justification: Why this group structure is appropriate (min 10 chars
-            when groups is non-empty; optional when clearing).
+        justification: Why this group structure is appropriate (10 to 2000
+            characters when groups is non-empty; optional when clearing, at
+            most 2000 characters if given).
     """
     import json as _json
     try:
@@ -4942,8 +4962,10 @@ async def set_control_assumption_groups(
     if not isinstance(parsed_groups, dict):
         raise ToolError("groups must be a JSON object")
 
-    if parsed_groups and len(justification.strip()) < 10:
-        raise ToolError("justification must be at least 10 characters when setting groups.")
+    if parsed_groups:
+        _check_justification_length(justification)
+    elif len(justification.strip()) > _JUSTIFICATION_MAX_CHARS:
+        _check_justification_length(justification)
 
     try:
         client = _get_client()

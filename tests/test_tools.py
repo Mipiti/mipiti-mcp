@@ -34,6 +34,7 @@ from mipiti_mcp.server import (
     delete_threat_model,
     get_control_assumption_groups,
     set_control_assumption_groups,
+    set_mitigation_groups,
     edit_asset,
     edit_attacker,
     export_report,
@@ -5625,3 +5626,65 @@ class TestListDecisions:
             await list_decisions(server_version="0", model_id="tm-001")
         mock.list_decisions.assert_awaited_once_with(
             "tm-001", agent_only=False, outside_policy_only=False, decision="", limit=0)
+
+
+class TestJustificationLengthLimit:
+    """AI-gated justifications are bounded at 10 to 2000 characters, checked
+    before the call so an out-of-range value names the limit."""
+
+    @pytest.mark.asyncio
+    async def test_set_mitigation_groups_rejects_over_limit(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="at most 2000 characters"):
+                await set_mitigation_groups(
+                    server_version="0", model_id="tm-001", co_id="CO1",
+                    groups='{"1": ["CTRL-01"]}', ctx=_mock_ctx(),
+                    justification="x" * 2001,
+                )
+        mock.start_set_mitigation_groups.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_mitigation_groups_accepts_limit(self) -> None:
+        envelope = {"accepted": True, "co_id": "CO1"}
+        mock = _mock_client()
+        mock.start_set_mitigation_groups = AsyncMock(return_value={"job_id": "job-mg"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": envelope})
+        with _patch_client(mock):
+            result = await set_mitigation_groups(
+                server_version="0", model_id="tm-001", co_id="CO1",
+                groups='{"1": ["CTRL-01"]}', ctx=_mock_ctx(),
+                justification="x" * 2000,
+            )
+        assert result == envelope
+
+    @pytest.mark.asyncio
+    async def test_refine_control_rejects_over_limit(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="at most 2000 characters"):
+                await refine_control(
+                    server_version="0", model_id="tm-001", control_id="CTRL-01",
+                    ctx=_mock_ctx(), description="New desc.", justification="x" * 2001,
+                )
+
+    @pytest.mark.asyncio
+    async def test_set_control_assumption_groups_rejects_over_limit(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="at most 2000 characters"):
+                await set_control_assumption_groups(
+                    server_version="0", model_id="tm-001", control_id="CTRL-01",
+                    groups='{"1": ["AS1"]}', ctx=_mock_ctx(),
+                    justification="x" * 2001,
+                )
+
+    @pytest.mark.asyncio
+    async def test_set_control_assumption_groups_clear_rejects_over_limit(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="at most 2000 characters"):
+                await set_control_assumption_groups(
+                    server_version="0", model_id="tm-001", control_id="CTRL-01",
+                    groups="{}", ctx=_mock_ctx(), justification="x" * 2001,
+                )
