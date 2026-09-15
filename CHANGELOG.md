@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Justification length is checked before the call.** `set_mitigation_groups`,
+  `set_control_assumption_groups` and `refine_control` state their
+  justification bound (10 to 2000 characters) and reject a value outside it
+  with the limit named, instead of passing it to the platform.
+
 ### Added
 
 - **Soundness classes.** Every assertion type declares the class of the fact
