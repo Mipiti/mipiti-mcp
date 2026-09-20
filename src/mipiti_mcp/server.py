@@ -1351,17 +1351,23 @@ async def get_control_generation_status(
     ``controls_status`` other than ``complete``, controls are being authored in
     the background — poll this until a terminal state, then read the controls.
 
-    Return shape: ``{status, mode, target_cos, ready_cos, error_message,
-    elapsed_seconds}`` (or ``{status: "none"}`` when controls were built inline).
-    ``status`` is ``queued | generating | deferred | complete | failed |
-    skipped | none``:
+    Return shape: ``{status, mode, target_cos, ready_cos, error_message}``
+    plus exactly ONE timing field (or ``{status: "none"}`` when controls were
+    built inline). ``status`` is ``queued | generating | deferred | complete |
+    failed | skipped | none``:
     - ``deferred`` — today's background-analysis budget is used up; generation
       resumes automatically at the daily reset (relay this to the user).
     - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
     - ``ready_cos`` / ``target_cos`` — coverage progress.
-    - ``elapsed_seconds`` — time since queued; if it stays ``queued`` with a
-      large elapsed, generation may not be progressing — surface that instead of
-      polling forever.
+    - ``elapsed_seconds`` — WHILE RUNNING: time since the job last showed
+      progress, which the worker refreshes as it works. A SMALL value means it
+      is alive, so this does not grow with a healthy long run; a large one on
+      ``queued`` / ``generating`` means it may be stuck — surface that instead
+      of polling forever. Absent once terminal.
+    - ``duration_seconds`` — ONCE TERMINAL: how long the run actually took.
+      Absent while running. The two are never both present and are not
+      interchangeable: one measures silence, the other measures work. Do not
+      read ``elapsed_seconds`` as a runtime.
 
     Read-only; no side effects (polling does not trigger or alter generation).
 
