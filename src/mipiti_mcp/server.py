@@ -1353,10 +1353,18 @@ async def get_control_generation_status(
 
     Return shape: ``{status, mode, target_cos, ready_cos, error_message}``
     plus exactly ONE timing field (or ``{status: "none"}`` when controls were
-    built inline). ``status`` is ``queued | generating | deferred | complete |
-    failed | skipped | none``:
+    built inline). ``status`` is ``queued | generating | deferred | blocked |
+    complete | failed | skipped | none``:
     - ``deferred`` — today's background-analysis budget is used up; generation
       resumes automatically at the daily reset (relay this to the user).
+    - ``blocked`` — a service the platform depends on was unavailable, so the
+      run paused with the controls written so far saved (NOT final yet).
+      ``terminal`` is true: stop polling. ``blocked`` carries ``code``,
+      ``message``, ``resumable``, ``auto_resume`` (whether it resumes by itself
+      once the service is back) and ``retry_after_seconds``. Relay the message
+      to the user; do NOT call ``regenerate_controls`` (it re-authors and
+      re-bills everything and hits the same problem). Retry with
+      ``resume_control_generation`` once ``retry_after_seconds`` has passed.
     - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
     - ``ready_cos`` / ``target_cos`` — coverage progress.
     - ``elapsed_seconds`` — WHILE RUNNING: time since the job last showed
@@ -1377,6 +1385,41 @@ async def get_control_generation_status(
     try:
         return _dump(
             await _get_client().get_control_generation_status(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def resume_control_generation(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Retry control generation that a service outage paused. Mutating.
+
+    Use when ``get_control_generation_status`` returns ``status: "blocked"``.
+    The platform checks the service it depends on first, so a retry while it
+    is still down costs nothing and changes nothing.
+
+    Returns one of:
+    - ``{resumed: true, status: "queued", status_detail}`` — the run resumes
+      where it stopped (only the unfinished work, billed to the original
+      generation). Poll ``get_control_generation_status`` until ``complete``.
+    - ``{resumed: false, http_status: 503, code: "dependency_unavailable",
+      message, retry_after_seconds, ...}`` — still unavailable; relay the
+      message and try again after ``retry_after_seconds``.
+    - ``{resumed: false, http_status: 409, code: "retry_too_soon",
+      retry_after_seconds, ...}`` — a retry was just tried; wait.
+    - ``{resumed: false, http_status: 409, code: "not_blocked", status}`` —
+      nothing is paused; read ``status``.
+
+    Args:
+        model_id: ID of the threat model whose paused control generation to
+            resume.
+    """
+    try:
+        return _dump(
+            await _get_client().resume_control_generation(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
