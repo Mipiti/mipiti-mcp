@@ -5177,6 +5177,9 @@ class TestResumeControlGeneration:
             doc = getattr(fn, "__doc__", "") or ""
         assert "blocked" in doc and "resume_control_generation" in doc
         assert "regenerate_controls" in doc
+        # Both reasons a run pauses, so an agent does not tell a user a
+        # service was down when it was not.
+        assert "dependency_unavailable" in doc and "analysis_incomplete" in doc
 
 
 class TestControlGenerationStatus:

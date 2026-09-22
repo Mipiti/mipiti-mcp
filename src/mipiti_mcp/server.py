@@ -1357,13 +1357,15 @@ async def get_control_generation_status(
     complete | failed | skipped | none``:
     - ``deferred`` — today's background-analysis budget is used up; generation
       resumes automatically at the daily reset (relay this to the user).
-    - ``blocked`` — a service the platform depends on was unavailable, so the
-      run paused with the controls written so far saved (NOT final yet).
-      ``terminal`` is true: stop polling. ``blocked`` carries ``code``,
-      ``message``, ``resumable``, ``auto_resume`` (whether it resumes by itself
-      once the service is back) and ``retry_after_seconds``. Relay the message
-      to the user; do NOT call ``regenerate_controls`` (it re-authors and
-      re-bills everything and hits the same problem). Retry with
+    - ``blocked`` — the run paused before finishing, with the controls written
+      so far saved (NOT final yet). ``terminal`` is true: stop polling.
+      ``blocked`` carries ``code``, ``message``, ``resumable``, ``auto_resume``
+      (whether it resumes by itself) and ``retry_after_seconds``. ``code`` is
+      ``dependency_unavailable`` (a service the platform depends on was
+      unavailable) or ``analysis_incomplete`` (some new controls could not be
+      checked for duplicates, so they were held back). Relay ``message`` to
+      the user; do NOT call ``regenerate_controls`` (it re-authors and
+      re-bills everything already done). Retry with
       ``resume_control_generation`` once ``retry_after_seconds`` has passed.
     - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
     - ``ready_cos`` / ``target_cos`` — coverage progress.
@@ -1395,11 +1397,12 @@ async def resume_control_generation(
     model_id: str,
     ctx: Context,
 ) -> dict:
-    """Retry control generation that a service outage paused. Mutating.
+    """Retry control generation that paused before finishing. Mutating.
 
-    Use when ``get_control_generation_status`` returns ``status: "blocked"``.
-    The platform checks the service it depends on first, so a retry while it
-    is still down costs nothing and changes nothing.
+    Use when ``get_control_generation_status`` returns ``status: "blocked"``
+    (``blocked.code`` ``dependency_unavailable`` or ``analysis_incomplete``).
+    The platform checks the services it depends on first, so a retry while
+    one is still down costs nothing and changes nothing.
 
     Returns one of:
     - ``{resumed: true, status: "queued", status_detail}`` — the run resumes
