@@ -128,6 +128,7 @@ uvx mipiti-mcp
 | `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
 | `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. |
 | `regenerate_controls` | Regenerate controls. Supports `mode="per_co"` and `co_ids` to target specific COs. |
+| `resume_control_generation` | Retry control generation that paused because a service it depends on was unavailable (`get_control_generation_status` reports `blocked`). Checks the service first, so a retry during the outage costs nothing; on success only the unfinished work runs, billed to the original generation. |
 | `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. |
 | `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
 | `check_control_gaps` | AI-powered gap analysis across all controls. |

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`resume_control_generation`.** Control generation can now pause when a
+  service the platform depends on is unavailable: `get_control_generation_status`
+  reports `status: "blocked"`, with the controls written so far saved and a
+  `blocked` object saying whether it resumes by itself and when a retry is
+  worth trying. This tool retries it. The platform checks the service first, so
+  a retry while it is still down changes nothing and costs nothing; a refusal
+  comes back as data (`resumed: false` with the reason code and
+  `retry_after_seconds`), not as an error. The status tool's description now
+  explains `blocked` and tells agents not to regenerate controls in that state.
+
 ### Fixed
 
 - **Justification length is checked before the call.** `set_mitigation_groups`,

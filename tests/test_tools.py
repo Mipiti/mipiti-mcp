@@ -42,6 +42,7 @@ from mipiti_mcp.server import (
     import_threat_model_archive,
     get_compliance_report,
     get_control_generation_status,
+    resume_control_generation,
     get_control_objectives,
     get_controls,
     get_entity,
@@ -154,6 +155,7 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "get_control_generation_status": {
             "model_id": "tm-001", "status": "queued", "mode": "fresh",
             "ready_cos": 0, "target_cos": 2, "elapsed_seconds": 3},
+        "resume_control_generation": {"resumed": True, "status": "queued"},
         "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
@@ -5146,6 +5148,35 @@ class TestVersionCheckMiddleware:
         # same name reuses the pinned schemas — with a worked "-1" example.
         assert "new name" in _INSTRUCTIONS_UPDATE_MESSAGE.lower()
         assert "-1" in _INSTRUCTIONS_UPDATE_MESSAGE
+
+
+class TestResumeControlGeneration:
+    @pytest.mark.asyncio
+    async def test_resume_tool_passes_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await resume_control_generation(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result == {"resumed": True, "status": "queued"}
+        mock.resume_control_generation.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_is_returned_not_raised(self) -> None:
+        refusal = {"resumed": False, "http_status": 503,
+                   "code": "dependency_unavailable", "retry_after_seconds": 300}
+        mock = _mock_client(resume_control_generation=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await resume_control_generation(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result == refusal
+
+    def test_the_status_tool_explains_blocked(self) -> None:
+        doc = get_control_generation_status.__doc__ or ""
+        if not doc:
+            fn = getattr(get_control_generation_status, "fn", None)
+            doc = getattr(fn, "__doc__", "") or ""
+        assert "blocked" in doc and "resume_control_generation" in doc
+        assert "regenerate_controls" in doc
 
 
 class TestControlGenerationStatus:
