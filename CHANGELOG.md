@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`blocked` covers a second reason.** `get_control_generation_status` and
+  `resume_control_generation` now describe both reasons a run can pause before
+  finishing: `blocked.code` is `dependency_unavailable` (a service the platform
+  depends on was unavailable) or `analysis_incomplete` (some new controls could
+  not be checked for duplicates, so they were held back). Handling is the
+  same: relay `blocked.message`, do not regenerate, retry with
+  `resume_control_generation`.
+
 ### Added
 
 - **`resume_control_generation`.** Control generation can now pause when a
