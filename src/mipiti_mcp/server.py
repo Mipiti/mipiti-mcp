@@ -1369,6 +1369,20 @@ async def get_control_generation_status(
       ``resume_control_generation`` once ``retry_after_seconds`` has passed.
     - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
     - ``ready_cos`` / ``target_cos`` — coverage progress.
+    - ``selfheal_activity`` — WHILE RUNNING, once drafting is done: what the
+      strengthening round in flight is working on. Carries ``round``,
+      ``open_objectives`` / ``selected_objectives`` (still insufficient, and
+      how many this round took on), ``refining`` (controls being rewritten,
+      each with the ``co_ids`` it serves and the ``gap`` the rewrite must
+      close), ``authoring`` (objectives getting a new control, with the gap),
+      and ``set_aside`` (objectives the pass has nothing further to try on —
+      left as they stand for a person to decide, NOT a failure). The three
+      lists are a bounded SAMPLE: read ``refining_total`` /
+      ``authoring_total`` / ``set_aside_total`` for the counts, never the
+      array lengths, or a round working two hundred controls reports five.
+      Use it to say what the run is doing rather than that it is still going;
+      it says nothing about coverage, and the objectives named in it are still
+      being worked. Absent between rounds and once the run is terminal.
     - ``elapsed_seconds`` — WHILE RUNNING: time since the job last showed
       progress, which the worker refreshes as it works. A SMALL value means it
       is alive, so this does not grow with a healthy long run; a large one on

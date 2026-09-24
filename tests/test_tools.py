@@ -5183,6 +5183,39 @@ class TestResumeControlGeneration:
 
 
 class TestControlGenerationStatus:
+    def test_the_status_tool_says_the_round_account_is_a_sample(self) -> None:
+        """The account of what a strengthening round is working on carries
+        bounded lists beside their true totals. An agent told about the lists
+        and not about the totals reads the array lengths, and reports a round
+        working two hundred controls as working five — wrong exactly on the
+        models where the number decides whether to keep waiting."""
+        doc = get_control_generation_status.__doc__ or ""
+        if not doc:
+            fn = getattr(get_control_generation_status, "fn", None)
+            doc = getattr(fn, "__doc__", "") or ""
+        assert "selfheal_activity" in doc
+        for total in ("refining_total", "authoring_total", "set_aside_total"):
+            assert total in doc, f"{total} is not named, so it will not be read"
+        assert "SAMPLE" in doc
+        # ...and that an objective the pass gave up on is a decision waiting
+        # for a person, not a failure to report as one.
+        assert "set_aside" in doc and "NOT a failure" in doc
+
+    @pytest.mark.asyncio
+    async def test_the_round_account_reaches_the_caller(self) -> None:
+        activity = {"round": 3, "open_objectives": 40, "selected_objectives": 12,
+                    "refining": [{"control_id": "CTRL-07", "co_ids": ["CO-01"],
+                                  "gap": "does not bound retries"}],
+                    "refining_total": 9, "authoring": [], "authoring_total": 0,
+                    "set_aside": [], "set_aside_total": 0}
+        mock = _mock_client(get_control_generation_status=AsyncMock(
+            return_value={"model_id": "tm-001", "status": "generating",
+                          "phase": "refining", "selfheal_activity": activity}))
+        with _patch_client(mock):
+            result = await get_control_generation_status(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["selfheal_activity"] == activity
+
     @pytest.mark.asyncio
     async def test_status_tool_passes_through(self) -> None:
         mock = _mock_client()

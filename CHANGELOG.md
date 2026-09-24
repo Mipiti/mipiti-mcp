@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`get_control_generation_status` documents the round in flight.** While a
+  run is strengthening controls, the status carries `selfheal_activity`: the
+  round number, how many objectives are still insufficient and how many the
+  round took on, the controls being rewritten with the objectives each serves
+  and the gap the rewrite has to close, the objectives getting a new control,
+  and the objectives the pass has nothing further to try on. The tool already
+  returned the field; the description now says what it means, so an agent can
+  report what a long run is doing rather than only that it is still going.
+
+  Its three lists are a bounded **sample**. Read `refining_total`,
+  `authoring_total` and `set_aside_total` for the counts — an agent that reads
+  the array lengths will report a round working two hundred controls as
+  working five.
+
 ### Changed
 
 - **`blocked` covers a second reason.** `get_control_generation_status` and
