@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->140<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->141<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -206,6 +206,7 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 | `list_co_dispositions` | Every signed judgment on a model's objectives, both kinds. Expired and revoked entries are included: a lapsed decision is part of the audit trail. Optional `kind` filter. |
 | `recompute_verdicts` | Force-enqueue a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict, bypassing the quiet-period batching. Response carries an informational cost estimate and a spend status object — exhausted means the work is queued and resumes automatically, never dropped. |
 | `recompute_verdicts (dry_run=True)` | Pre-flight informational cost estimate for `recompute_verdicts` (carries `computed_at` + the pricing `rate_version`; nothing is charged from the estimate — actuals are metered as evaluation runs). |
+| `judge_objective` | Have ONE control objective's mitigation group judged — the remedy for an objective reading `awaiting_judgement`, where a group is built and nothing has decided whether it covers the objective. Prefer it over `recompute_verdicts`, which sweeps the whole model. Runs in the background and consumes credits. Not a repair: the judgement can come back insufficient, moving the objective to `coverage_gap` / `insufficient_by_design`. Refusals (`409` generation in progress, `503` unavailable, `402` balance) come back as data. |
 
 ### Functional Conformance
 

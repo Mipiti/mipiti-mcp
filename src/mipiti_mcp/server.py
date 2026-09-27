@@ -164,12 +164,14 @@ If the alternative drops a framework binding the original carried, the platform 
 - `assess_model` — deterministic assessment of all control objectives. Returns mitigated/at_risk/unassessed counts and progressive metrics (defined/implemented/verified COs). Use `summary_only=True` for a compact response with just the counts and a contextual `message` explaining the current state (e.g., "13 controls not implemented, blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` and `unassessed` COs require action.
 
 **Reachability and risk reason**: Reachability per CO is exposed by `get_reachability_verdicts` (deterministic-computation provenance — re-derived from structural primitives, never persisted). Each CO assessment also includes:
-- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` (implement controls), `pending_attestation` (submit an attestation for the linked boundary assumption), `expired_attestation` (renew an expired attestation), `unassessed` (generate controls or create an assumption), `coverage_gap` (controls are implemented but do not span the CO's full threat — add controls to close the gap, or dismiss/accept if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented — a design gap, not an implementation gap; redesign or add controls so the group can span the threat). `insufficient_by_design` is more binding than `missing_controls` and takes precedence over it.
+- `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` (implement controls), `pending_attestation` (submit an attestation for the linked boundary assumption), `expired_attestation` (renew an expired attestation), `unassessed` (generate controls or create an assumption), `coverage_gap` (controls are implemented but do not span the CO's full threat — add controls to close the gap, or dismiss/accept if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented — a design gap, not an implementation gap; redesign or add controls so the group can span the threat), `no_mitigation_group` (controls address the objective and none of them is grouped, so nothing states which are required together), `awaiting_judgement` (a group is built and nothing has judged whether it covers the objective). `insufficient_by_design` is more binding than `missing_controls` and takes precedence over it.
+
+**Two of those reasons are not evidence gaps and adding controls will not move them.** `no_mitigation_group` and `awaiting_judgement` both say the objective's controls may be complete and the missing thing is a statement about them: which of them are required together, and whether that set covers the objective. Read them as such before generating anything.
 - `pending_assumption_ids` / `expired_assumption_ids` — assumption IDs that need attestation action.
 
 **Before acting on any risk_reason, check whether a control is actually REQUIRED for the objective.** `get_mitigation_groups` splits a CO's controls into numbered groups (within=AND, across=OR) and `defense_in_depth`. Only the groups earn mitigation credit. If a CO has controls attached but ALL of them sit in `defense_in_depth`, or it has no groups at all, then nothing is required to mitigate it and the CO cannot leave at-risk no matter how many controls you generate or how much evidence you submit. That is a modelling gap, not an evidence gap: decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups` (AI-gated, so the structure has to actually satisfy the CO). Generating or proving controls in this state is wasted work.
 
-**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.)
+**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.) `no_mitigation_group` → decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups`; do NOT generate more controls, the ones that matter are already there. `awaiting_judgement` → call `judge_objective` on the CO. Nothing has decided whether its group covers it, so neither implementing nor adding controls changes the reason; the remedy is the judgement. It may come back insufficient, which moves the objective to `coverage_gap` / `insufficient_by_design` and names real work — that is the answer, not a failure.
 
 ## Gap discovery
 
@@ -187,6 +189,7 @@ For controls with status not_implemented, determine whether the code already imp
 - `create_co_disposition` — record that a control objective DOES NOT APPLY to this system (owner, justification, review deadline). The sibling of a risk acceptance, and the difference is the claim: an acceptance says the exposure is real and is being carried; a disposition says the objective does not apply here at all. The objective is NOT removed — it stays in the matrix and in every coverage count, reported in its own class with the owner and justification attached, so a reviewer can challenge the judgment. What it does suppress is work: no controls are generated for it and no coverage gap is raised against it.
 - `list_co_dispositions` — see every signed judgment on a model's objectives (both kinds, including expired and revoked ones, which are part of the audit trail). Read this before authoring a new one: an existing judgment may already cover the objective, or may have expired and need re-signing rather than duplicating.
 - `recompute_verdicts` — force a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale. Runs in the background; the response includes an informational cost estimate and a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped). Pass its quote-only param to get the cost estimate alone, pre-flight, without enqueuing the recompute.
+- `judge_objective` — have ONE control objective's mitigation group judged. The right tool for an objective reading `awaiting_judgement`; prefer it over `recompute_verdicts`, which sweeps the whole model and costs accordingly. Runs in the background and consumes credits. It is not a repair: the judgement can come back insufficient.
 
 ## Remediating findings (structural drift)
 
@@ -6197,6 +6200,71 @@ async def recompute_verdicts(
         if dry_run:
             return _dump(await _get_client().get_recompute_quote(model_id))
         return _dump(await _get_client().recompute_verdicts(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+@mcp.tool()
+async def judge_objective(
+    server_version: str,
+    model_id: str,
+    co_id: str,
+) -> dict:
+    """Have one control objective's mitigation group judged. Mutating —
+    queues background work and consumes credits.
+
+    Use this for an objective whose ``risk_reason`` is ``awaiting_judgement``:
+    it has a built mitigation group and nothing has decided whether that group
+    covers the objective — never evaluated, evaluated against inputs that have
+    since changed, or the answer parked. The objective is not short of
+    controls, so generating or implementing more will not move it; what is
+    missing is the judgement.
+
+    **This is not a repair.** The judgement can come back insufficient, which
+    moves the objective to ``coverage_gap`` / ``insufficient_by_design`` and
+    names real work. That is the tool doing its job: it replaces "nobody has
+    looked" with an answer, and the answer may be no.
+
+    Scoped to ONE objective, which is the difference that matters against
+    ``recompute_verdicts``: that tool force-enqueues every control's coverage
+    verdict AND every live objective's group-sufficiency verdict, which on a
+    large model runs to thousands of credits. This queues a single judgement.
+    It consumes credits, metered at actuals as the work runs, like every other
+    metered call — the account's usage is visible in its billing panel before
+    and after.
+
+    Judging runs in the BACKGROUND; the call returns as soon as the work is
+    queued. Re-read ``get_mitigation_groups`` (or ``assess_model`` /
+    ``get_risk_view``) shortly after to see the objective's new state. Calling
+    again while a judgement is already queued is harmless and does not queue a
+    second one.
+
+    A refusal comes back as data rather than an error, so it can be relayed:
+
+    - ``{queued: false, http_status: 409, ...}`` — controls are still being
+      generated for this model. Poll ``get_control_generation_status`` until
+      terminal, then call again.
+    - ``{queued: false, http_status: 503, ...}`` — judging is unavailable on
+      this deployment.
+    - ``{queued: false, http_status: 402, code, message}`` — the balance this
+      workspace bills to cannot cover the judgement.
+
+    Args:
+        model_id: ID of the threat model.
+        co_id: ID of the control objective to have judged (e.g. "CO5").
+
+    Returns ``{model_id, model_version, co_id, queued, state, hint,
+    governor, billing}``. ``state`` is ``queued`` (a judgement is now in
+    flight) or ``already_fresh`` (a current judgement already exists for this
+    objective's present inputs — nothing was queued and nothing is charged).
+    """
+    if not model_id or not model_id.strip():
+        raise ToolError("model_id is required and must be non-empty.")
+    if not co_id or not co_id.strip():
+        raise ToolError("co_id is required and must be non-empty.")
+    try:
+        return _dump(
+            await _get_client().judge_objective(model_id.strip(), co_id.strip()),
+        )
     except Exception as exc:
         raise _api_error(exc) from exc
 
