@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`judge_objective` — have one control objective's mitigation group judged.**
+  An objective whose `risk_reason` is `awaiting_judgement` has a built
+  mitigation group and nothing has decided whether that group covers it. It is
+  not short of controls, so generating or implementing more cannot move it;
+  what was missing was a way to ask for the judgement. The only surface that
+  queued one was `recompute_verdicts`, which sweeps every control and every
+  live objective on the model — on a large model, thousands of credits to move
+  one objective. This queues a single judgement.
+
+  It is not a repair. The judgement can come back insufficient, which moves the
+  objective to `coverage_gap` / `insufficient_by_design` and names real work.
+  That is the point: it replaces "nobody has looked" with an answer, and the
+  answer may be no.
+
+  Judging runs in the background and consumes credits, metered at actuals.
+  Refusals come back as data rather than errors so they can be relayed:
+  `409` (controls are still being generated — poll
+  `get_control_generation_status`, then call again), `503` (judging is
+  unavailable on this deployment), `402` (the billed balance cannot cover it).
+  `state` distinguishes `queued` from `already_fresh`, so a caller never waits
+  on a background run that was never started.
+
+- **Two risk reasons that are not evidence gaps now route to an act.**
+  `no_mitigation_group` and `awaiting_judgement` were returned by
+  `assess_model` and named nowhere in the instructions, so an agent meeting
+  either one fell through to generating controls — which cannot move either.
+  Both are now enumerated with the rest, together with the reading that
+  separates them from the evidence gaps: the controls may be complete, and the
+  missing thing is a statement about them. `no_mitigation_group` routes to
+  `set_mitigation_groups`, `awaiting_judgement` to `judge_objective`.
+
 - **`get_control_generation_status` documents the round in flight.** While a
   run is strengthening controls, the status carries `selfheal_activity`: the
   round number, how many objectives are still insufficient and how many the

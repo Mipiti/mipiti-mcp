@@ -1824,6 +1824,35 @@ class MipitiClient:
             f"/api/models/{model_id}/verdicts/retry", {},
         )
 
+    async def judge_objective(self, model_id: str, co_id: str) -> dict:
+        """POST /api/models/{model_id}/control-objectives/{co_id}/judge.
+
+        Queue the group-sufficiency judgement for ONE control objective. The
+        per-objective counterpart to ``recompute_verdicts``, which sweeps
+        every control and every live objective on the model.
+
+        A refusal is an answer, not an error: 409 (controls are still being
+        generated), 503 (judging is unavailable on this deployment) and 402
+        (the balance cannot cover the judgement) come back as
+        ``{"queued": False, "http_status": ..., **detail}`` so a caller can
+        relay them. Any other failure raises — including the 404 an older
+        backend returns for the route itself.
+        """
+        resp = await self._request_with_idempotency(
+            "POST",
+            f"/api/models/{model_id}/control-objectives/{co_id}/judge",
+        )
+        if resp.status_code in (402, 409, 503):
+            try:
+                detail = resp.json().get("detail", {})
+            except ValueError:
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {"message": str(detail)}
+            return {"queued": False, "http_status": resp.status_code, **detail}
+        resp.raise_for_status()
+        return resp.json()
+
     # ------------------------------------------------------------------
     # Assurance
     # ------------------------------------------------------------------
