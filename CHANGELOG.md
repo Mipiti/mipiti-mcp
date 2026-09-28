@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`pause_control_generation` — stop a background control generation.** A
+  generation started by mistake, or one no longer wanted, could not be stopped:
+  it ran to the end and billed throughout. Pausing stops it at its next step.
+  Everything done so far is kept, nothing new is started or billed, and it
+  stays paused until `resume_control_generation`, which continues where it
+  stopped without redoing or re-billing finished work. A paused model can be
+  deleted as usual. `get_control_generation_status` now reports `pausing`
+  (still stopping) and `paused` (terminal for polling, resumable), and
+  `resume_control_generation` resumes a paused run as well as a blocked one.
+
 - **`judge_objective` — have one control objective's mitigation group judged.**
   An objective whose `risk_reason` is `awaiting_judgement` has a built
   mitigation group and nothing has decided whether that group covers it. It is

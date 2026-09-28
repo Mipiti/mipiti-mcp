@@ -38,3 +38,34 @@ async def test_other_failures_raise(mock_env: None) -> None:
     respx.post(URL).mock(return_value=httpx.Response(500, json={"detail": "x"}))
     with pytest.raises(httpx.HTTPStatusError):
         await MipitiClient().resume_control_generation("tm-1")
+
+
+PAUSE_URL = "https://test.api.mipiti.io/api/models/tm-1/controls/pause"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_paused(mock_env: None) -> None:
+    respx.post(PAUSE_URL).mock(return_value=httpx.Response(
+        200, json={"model_id": "tm-1", "status": "pausing"}))
+    assert await MipitiClient().pause_control_generation("tm-1") == {
+        "paused": True, "model_id": "tm-1", "status": "pausing"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_nothing_to_pause_comes_back_as_data(mock_env: None) -> None:
+    respx.post(PAUSE_URL).mock(return_value=httpx.Response(
+        409, json={"detail": {"code": "not_running", "status": "complete",
+                              "message": "m"}}))
+    out = await MipitiClient().pause_control_generation("tm-1")
+    assert out["paused"] is False and out["http_status"] == 409
+    assert out["code"] == "not_running" and out["status"] == "complete"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pause_other_failures_raise(mock_env: None) -> None:
+    respx.post(PAUSE_URL).mock(return_value=httpx.Response(500, json={"detail": "x"}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await MipitiClient().pause_control_generation("tm-1")

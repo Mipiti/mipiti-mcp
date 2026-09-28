@@ -43,6 +43,7 @@ from mipiti_mcp.server import (
     get_compliance_report,
     get_control_generation_status,
     resume_control_generation,
+    pause_control_generation,
     get_control_objectives,
     get_controls,
     get_entity,
@@ -156,6 +157,7 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "model_id": "tm-001", "status": "queued", "mode": "fresh",
             "ready_cos": 0, "target_cos": 2, "elapsed_seconds": 3},
         "resume_control_generation": {"resumed": True, "status": "queued"},
+        "pause_control_generation": {"paused": True, "status": "pausing"},
         "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
@@ -5180,6 +5182,44 @@ class TestResumeControlGeneration:
         # Both reasons a run pauses, so an agent does not tell a user a
         # service was down when it was not.
         assert "dependency_unavailable" in doc and "analysis_incomplete" in doc
+
+
+class TestPauseControlGeneration:
+    @pytest.mark.asyncio
+    async def test_pause_tool_passes_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await pause_control_generation(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result == {"paused": True, "status": "pausing"}
+        mock.pause_control_generation.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_pause_is_returned_not_raised(self) -> None:
+        refusal = {"paused": False, "http_status": 409, "code": "not_running",
+                   "status": "complete"}
+        mock = _mock_client(pause_control_generation=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await pause_control_generation(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result == refusal
+
+    def test_the_status_tool_explains_paused(self) -> None:
+        """An agent told a run is paused must know it stays paused until a
+        resume, and must not restart it by regenerating."""
+        doc = get_control_generation_status.__doc__ or ""
+        if not doc:
+            fn = getattr(get_control_generation_status, "fn", None)
+            doc = getattr(fn, "__doc__", "") or ""
+        assert "pausing" in doc and "paused" in doc
+        assert "resume_control_generation" in doc
+
+    def test_resume_says_it_resumes_a_pause(self) -> None:
+        doc = resume_control_generation.__doc__ or ""
+        if not doc:
+            fn = getattr(resume_control_generation, "fn", None)
+            doc = getattr(fn, "__doc__", "") or ""
+        assert "paused" in doc and "pause_in_progress" in doc
 
 
 class TestControlGenerationStatus:
