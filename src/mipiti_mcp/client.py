@@ -608,8 +608,28 @@ class MipitiClient:
         generate/refine returns ``controls_status`` other than complete."""
         return await self._get(f"/api/models/{model_id}/controls/status")
 
+    async def pause_control_generation(self, model_id: str) -> dict:
+        """Pause the model's background control generation.
+
+        ``409 not_running`` (nothing to pause) is an answer, not an error: it
+        comes back as ``{"paused": False, "http_status": 409, **detail}`` so a
+        caller can relay it. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/pause")
+        if resp.status_code == 409:
+            try:
+                detail = resp.json().get("detail", {})
+            except ValueError:
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {"message": str(detail)}
+            return {"paused": False, "http_status": 409, **detail}
+        resp.raise_for_status()
+        return {"paused": True, **resp.json()}
+
     async def resume_control_generation(self, model_id: str) -> dict:
-        """Retry control generation that a service outage paused.
+        """Resume control generation that was paused, or retry one a service
+        outage stopped.
 
         A refusal is an answer, not an error: 503 (the service is still
         unavailable) and 409 (a retry was just tried, or nothing is paused)

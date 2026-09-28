@@ -377,7 +377,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 `generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, `regenerate_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
 
-**Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed.
+**Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: the controls so far are saved but not final, and only `resume_control_generation` continues it. To stop a generation the user did not want (for example one started by mistake), call `pause_control_generation`; a paused model can then be deleted as usual.
 """
 
 
@@ -1356,10 +1356,18 @@ async def get_control_generation_status(
 
     Return shape: ``{status, mode, target_cos, ready_cos, error_message}``
     plus exactly ONE timing field (or ``{status: "none"}`` when controls were
-    built inline). ``status`` is ``queued | generating | deferred | blocked |
-    complete | failed | skipped | none``:
+    built inline). ``status`` is ``queued | generating | deferred | pausing |
+    paused | blocked | complete | failed | skipped | none``:
     - ``deferred`` — today's background-analysis budget is used up; generation
       resumes automatically at the daily reset (relay this to the user).
+    - ``pausing`` — someone paused the run and it is stopping at its next
+      step (it starts nothing new). Not terminal: poll again shortly.
+    - ``paused`` — stopped by request, with the controls written so far saved
+      (NOT final). ``terminal`` is true: stop polling. Nothing resumes it but
+      ``resume_control_generation``, which continues where it stopped and
+      redoes and re-bills nothing. ``paused`` carries ``since``, ``by_self``
+      (whether the caller paused it) and ``resumable``. Do NOT call
+      ``regenerate_controls`` — it starts over and bills everything again.
     - ``blocked`` — the run paused before finishing, with the controls written
       so far saved (NOT final yet). ``terminal`` is true: stop polling.
       ``blocked`` carries ``code``, ``message``, ``resumable``, ``auto_resume``
@@ -1409,22 +1417,58 @@ async def get_control_generation_status(
 
 
 @mcp.tool()
+async def pause_control_generation(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Pause a model's background control generation. Mutating.
+
+    Use when the user asks to stop a generation — for example one started by
+    mistake — or before deleting a model whose controls are still being
+    generated. A running generation stops at its next step (``status``
+    ``pausing``, then ``paused``); a queued or waiting one is paused at once.
+    Everything already done is kept; nothing new is started or billed; nothing
+    resumes it except ``resume_control_generation``. Pausing is idempotent.
+
+    Returns one of:
+    - ``{paused: true, model_id, status, status_detail}`` — ``status`` is
+      ``pausing`` (still stopping) or ``paused``.
+    - ``{paused: false, http_status: 409, code: "not_running", status}`` —
+      there is no generation to pause; read ``status``.
+
+    Args:
+        model_id: ID of the threat model whose control generation to pause.
+    """
+    try:
+        return _dump(
+            await _get_client().pause_control_generation(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def resume_control_generation(
     server_version: str,
     model_id: str,
     ctx: Context,
 ) -> dict:
-    """Retry control generation that paused before finishing. Mutating.
+    """Resume control generation that was paused, or retry one that stopped
+    before finishing. Mutating.
 
-    Use when ``get_control_generation_status`` returns ``status: "blocked"``
-    (``blocked.code`` ``dependency_unavailable`` or ``analysis_incomplete``).
-    The platform checks the services it depends on first, so a retry while
-    one is still down costs nothing and changes nothing.
+    Use when ``get_control_generation_status`` returns ``status: "paused"``
+    (someone paused it) or ``status: "blocked"`` (``blocked.code``
+    ``dependency_unavailable`` or ``analysis_incomplete``). A paused run
+    resumes at once. For a blocked one the platform checks the services it
+    depends on first, so a retry while one is still down costs nothing and
+    changes nothing.
 
     Returns one of:
     - ``{resumed: true, status: "queued", status_detail}`` — the run resumes
       where it stopped (only the unfinished work, billed to the original
       generation). Poll ``get_control_generation_status`` until ``complete``.
+    - ``{resumed: false, http_status: 409, code: "pause_in_progress"}`` — the
+      run is still stopping after a pause; resume once it shows ``paused``.
     - ``{resumed: false, http_status: 503, code: "dependency_unavailable",
       message, retry_after_seconds, ...}`` — still unavailable; relay the
       message and try again after ``retry_after_seconds``.

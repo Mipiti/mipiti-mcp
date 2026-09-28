@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->141<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->142<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -128,7 +128,8 @@ uvx mipiti-mcp
 | `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
 | `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. |
 | `regenerate_controls` | Regenerate controls. Supports `mode="per_co"` and `co_ids` to target specific COs. |
-| `resume_control_generation` | Retry control generation that paused before finishing (`get_control_generation_status` reports `blocked`): a service it depends on was unavailable, or some new controls could not be checked for duplicates and were held back. Checks the services first, so a retry during an outage costs nothing; on success only the unfinished work runs, billed to the original generation. |
+| `pause_control_generation` | Pause a model's background control generation (for example one started by mistake). A running generation stops at its next step; everything done so far is kept, nothing new is started or billed, and nothing resumes it except `resume_control_generation`. A paused model can then be deleted as usual. |
+| `resume_control_generation` | Resume control generation that was paused (`get_control_generation_status` reports `paused`), or retry one that stopped before finishing (`blocked`): a service it depends on was unavailable, or some new controls could not be checked for duplicates and were held back. A paused run resumes at once; for a blocked one the services are checked first, so a retry during an outage costs nothing. Either way only the unfinished work runs, billed to the original generation. |
 | `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. |
 | `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
 | `check_control_gaps` | AI-powered gap analysis across all controls. |
