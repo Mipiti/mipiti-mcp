@@ -45,6 +45,7 @@ from mipiti_mcp.server import (
     resume_control_generation,
     pause_control_generation,
     strengthen_controls,
+    judge_objectives,
     get_control_objectives,
     get_controls,
     get_entity,
@@ -167,6 +168,17 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "scope": ["CO2", "CO5", "CO7"],
             "estimate": {"credits": 15.0, "per_objective": 5.0,
                          "basis": "bootstrap", "objectives": 3}},
+        "judge_objectives": {
+            "confirmed": False, "queued": 0, "model_id": "tm-001",
+            "model_version": 4,
+            "diagnosis": {"covered": 3, "uncovered": 0, "undecided": 0,
+                          "judging": 1, "not_judged": 2,
+                          "awaiting_assumption": 0, "dispositioned": 0},
+            "scope": ["CO2", "CO5"], "ungrouped": ["CO9"],
+            "estimate": {"credits": 6.0, "objectives": 2,
+                         "computed_at": "2026-09-29T00:00:00+00:00",
+                         "rate_version": "v1"},
+            "message": "Estimate only; nothing queued."},
         "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
@@ -5347,6 +5359,80 @@ class TestStrengthenControls:
             getattr(strengthen_controls, "fn", None), "__doc__", "") or ""
         assert "confirm_estimate" in doc and "estimate" in doc
         assert "review queue" in doc
+
+
+class TestJudgeObjectives:
+    @pytest.mark.asyncio
+    async def test_estimate_is_the_default(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await judge_objectives(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["confirmed"] is False and result["queued"] == 0
+        assert result["estimate"]["credits"] == 6.0
+        assert result["ungrouped"] == ["CO9"]
+        mock.judge_objectives.assert_awaited_once_with(
+            "tm-001", co_ids=None, confirm_estimate=False)
+
+    @pytest.mark.asyncio
+    async def test_confirm_and_scope_reach_the_client(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await judge_objectives(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                co_ids="CO2, CO5", confirm_estimate=True)
+        mock.judge_objectives.assert_awaited_once_with(
+            "tm-001", co_ids=["CO2", "CO5"], confirm_estimate=True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("refusal", [
+        {"confirmed": False, "queued": 0, "http_status": 409,
+         "code": "control_generation_in_progress", "message": "m"},
+        {"confirmed": False, "queued": 0, "http_status": 402,
+         "code": "insufficient_credits", "message": "m",
+         "estimated_credits": 6.0},
+    ])
+    async def test_a_refusal_is_returned_not_raised(self, refusal: dict) -> None:
+        mock = _mock_client(judge_objectives=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await judge_objectives(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                confirm_estimate=True)
+        assert result == refusal
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_objective_raises(self) -> None:
+        import httpx
+        request = httpx.Request(
+            "POST", "http://x/api/models/tm-001/control-objectives/judge")
+        err = httpx.HTTPStatusError(
+            "bad", request=request,
+            response=httpx.Response(400, json={"detail": "Unknown objective CO99"},
+                                    request=request))
+        mock = _mock_client(judge_objectives=AsyncMock(side_effect=err))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="400"):
+                await judge_objectives(
+                    server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                    co_ids="CO99")
+
+    def test_the_tool_says_estimate_first_and_names_ungrouped(self) -> None:
+        doc = judge_objectives.__doc__ or getattr(
+            getattr(judge_objectives, "fn", None), "__doc__", "") or ""
+        assert "confirm_estimate" in doc and "estimate" in doc
+        assert "not_judged" in doc and "ungrouped" in doc
+        assert "not a repair" in doc
+
+    def test_the_status_tool_sends_not_judged_here(self) -> None:
+        """``not_judged`` means nothing is queued and nothing will judge it;
+        ``judging`` means wait. An agent that cannot tell them apart either
+        waits for ever or pays twice."""
+        doc = get_control_generation_status.__doc__ or getattr(
+            getattr(get_control_generation_status, "fn", None), "__doc__", "") or ""
+        assert "judging" in doc and "judge_objectives" in doc
+        assert "still being judged" not in doc
+        text = server.build_instructions("pro", "user")
+        assert "judge_objectives" in text and "`judging`" in text
 
 
 class TestApplyControlChangeset:

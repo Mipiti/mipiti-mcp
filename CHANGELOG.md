@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`judge_objectives` — judge every objective nothing else will.** An
+  objective whose mitigation group has no judgement for its current controls,
+  and none queued, stayed unjudged until someone asked for it one objective at
+  a time. `judge_objectives` returns an estimate first and queues nothing;
+  called again with `confirm_estimate=True` it queues the judgement of each
+  objective in its `scope`, billed to the caller as each runs. Objectives with
+  no mitigation group are listed under `ungrouped` and not judged. Refusals
+  (`409` generation in progress, `402` balance, `503` unavailable) come back
+  as data.
+
 - **`strengthen_controls` — strengthening runs when asked, after an estimate.**
   Generation now drafts controls, forms their mitigation groups and has them
   judged, then stops unless the workspace strengthens automatically.
@@ -86,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   working five.
 
 ### Changed
+
+- **The control-generation `diagnosis` separates `judging` from
+  `not_judged`.** `judging` counts objectives whose judgement is queued: wait
+  for it. `not_judged` now counts only objectives with no judgement for their
+  current controls and none queued, which nothing will judge until
+  `judge_objectives` (or `judge_objective`) is called.
 
 - **`blocked` covers a second reason.** `get_control_generation_status` and
   `resume_control_generation` now describe both reasons a run can pause before
