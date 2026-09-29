@@ -114,7 +114,7 @@ A threat model produces control objectives. Controls are derived from these and 
 - **Bind evidence to what it proves.** Each submitted assertion may carry `covers`: the objective id (`CO-NN`) or, on a multi-clause control, the clause ids (`cls_…`) that `get_control_work_order` names in `required_evidence`. The form of the declaration is refused on arrival when it is malformed. A declared binding survives review; an undeclared one is inferred by review and capped below sound credit. Resubmit the assertion with `covers` to change the declaration.
 - `list_assertions` / `delete_assertion` — list active assertions for a control; delete stale or incorrect ones before resubmitting.
 - `update_control_status` — mark implemented or not_implemented. Requires at least one assertion BEFORE marking implemented. Always submit assertions first, then update status.
-- `get_verification_report` — shows which controls are verified, which have sufficiency gaps, and which lack assertions entirely. Read `sufficiency_details` for the specific aspects that still need proof. Each `sufficiency` block also carries `misaligned_assertion_ids` (off-topic assertions that should be rebound, superseded, or rewritten — do not treat them as evidence) and `stale: true` (cached verdict no longer matches current inputs; a background re-eval was triggered on read — call again shortly for a refreshed verdict).
+- `get_verification_report` — shows which controls are verified, which have sufficiency gaps, and which lack assertions entirely. Read `sufficiency_details` for the specific aspects that still need proof. Each `sufficiency` block also carries `misaligned_assertion_ids` (off-topic assertions that should be rebound, superseded, or rewritten — do not treat them as evidence) and `stale: true` (the stored verdict no longer matches the control's current inputs). Reading does not queue a re-evaluation: the write that changed a control queues its own, so re-read later for the refreshed verdict.
 - `get_sufficiency` — quick check: do assertions for a single control collectively cover all aspects? Evaluated server-side at submission. For the per-clause work list read `get_control_work_order`: where the order names a required class for a clause, `required_evidence` carries the class, the clause id to bind evidence to, and a submission skeleton to fill in.
 - `get_mitigation_groups` — get the current group structure for a CO with control details (id, description, status) for each entry. Shows numbered groups (AND within, OR across), defense-in-depth controls, and unmapped controls available for assignment. Use before `set_mitigation_groups`, when reviewing why a CO is at_risk, or to find unmapped controls.
 - `set_mitigation_groups` — set which controls are required vs defense-in-depth for a CO. Use when a control is blocking a CO but is redundant with existing mitigations (e.g., HMAC signing redundant with TLS + content hash), or when restructuring alternative mitigation paths. Groups define: within group AND (all required), across groups OR (any complete group mitigates). AI-gated: rejected if the new structure doesn't satisfy the CO.
@@ -189,8 +189,8 @@ For controls with status not_implemented, determine whether the code already imp
 - `create_co_disposition` — record that a control objective DOES NOT APPLY to this system (owner, justification, review deadline). The sibling of a risk acceptance, and the difference is the claim: an acceptance says the exposure is real and is being carried; a disposition says the objective does not apply here at all. The objective is NOT removed — it stays in the matrix and in every coverage count, reported in its own class with the owner and justification attached, so a reviewer can challenge the judgment. What it does suppress is work: no controls are generated for it and no coverage gap is raised against it.
 - `list_co_dispositions` — see every signed judgment on a model's objectives (both kinds, including expired and revoked ones, which are part of the audit trail). Read this before authoring a new one: an existing judgment may already cover the objective, or may have expired and need re-signing rather than duplicating.
 - `recompute_verdicts` — force a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale. Runs in the background; the response includes an informational cost estimate and a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped). Pass its quote-only param to get the cost estimate alone, pre-flight, without enqueuing the recompute.
-- `judge_objective` — have ONE control objective's mitigation group judged. The right tool for an objective reading `awaiting_judgement`; prefer it over `recompute_verdicts`, which sweeps the whole model and costs accordingly. Runs in the background and consumes credits. It is not a repair: the judgement can come back insufficient.
-- `judge_objectives` — the same for every objective that has no judgement for its current controls and none queued (the diagnosis's `not_judged` count). Call once for the estimate and show the user, then again with `confirm_estimate=True` to queue; billed to the caller as each judgement runs. Objectives with no mitigation group come back in `ungrouped` and are not judged.
+- `judge_objective` — have ONE control objective's mitigation group judged. The right tool for an objective reading `awaiting_judgement`; prefer it over `recompute_verdicts`, which sweeps the whole model and costs accordingly. Runs in the background and may consume credits. It is not a repair: the judgement can come back insufficient.
+- `judge_objectives` — the same for every objective that has no judgement for its current controls and none queued (the diagnosis's `not_judged` count). Call once for the estimate and show the user, then again with `confirm_estimate=True` to queue; any credits it consumes are metered as each judgement runs. Objectives with no mitigation group come back in `ungrouped` and are not judged.
 
 ## Remediating findings (structural drift)
 
@@ -380,7 +380,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 **Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: the controls so far are saved but not final, and only `resume_control_generation` continues it. To stop a generation the user did not want (for example one started by mistake), call `pause_control_generation`; a paused model can then be deleted as usual.
 
-**Strengthening runs when asked.** A completed generation reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: nothing will judge them until someone asks, so call `judge_objectives` (estimate first, then `confirm_estimate=True`, billed to the caller). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
+**Strengthening runs when asked.** A completed generation reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: to have them judged now, call `judge_objectives` (estimate first, then `confirm_estimate=True`). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
 """
 
 
@@ -1414,8 +1414,8 @@ async def get_control_generation_status(
       background judge found — ``covered``, ``uncovered``, ``undecided``,
       ``judging`` (no judgement for its current controls yet, and one is
       queued: wait for it), ``not_judged`` (no judgement for its current
-      controls and none queued: nothing will judge it until someone asks,
-      so call ``judge_objectives``), ``awaiting_assumption`` (waiting on a
+      controls and none queued: call ``judge_objectives`` to have it judged
+      now), ``awaiting_assumption`` (waiting on a
       person to accept or reject a proposed assumption, in the review
       queue) and ``dispositioned`` (risk accepted or declared not
       applicable). ``uncovered`` and ``undecided`` are what
@@ -1574,15 +1574,14 @@ async def judge_objectives(
     co_ids: Optional[str] = None,
     confirm_estimate: bool = False,
 ) -> dict:
-    """Have every objective that nothing will judge get judged: the objectives
-    whose mitigation group has no judgement for its current controls and none
-    queued. Mutating only with ``confirm_estimate=True``; consumes credits
-    then.
+    """Have judged every objective whose mitigation group has no judgement for
+    its current controls and none queued. Mutating only with
+    ``confirm_estimate=True``; may consume credits then.
 
     Use it when ``get_control_generation_status``'s ``diagnosis`` reports
-    ``not_judged`` above zero, or objectives read ``awaiting_judgement``. Such
-    an objective stays unjudged until someone asks; adding or implementing
-    controls does not move it. Objectives counted under ``judging`` already
+    ``not_judged`` above zero, or objectives read ``awaiting_judgement``.
+    Adding or implementing controls does not move such an objective; a
+    judgement does. Objectives counted under ``judging`` already
     have a judgement queued: wait for them instead.
 
     1. Call with ``confirm_estimate=False`` (the default). Nothing is queued
@@ -1592,10 +1591,11 @@ async def judge_objectives(
        Show the user the estimate.
     2. Call again with ``confirm_estimate=True`` once they agree. The
        judgement of each objective in ``scope`` is queued (``confirmed:
-       true``, ``queued`` counts them) and billed to the caller at actuals as
-       each runs. ``status_detail`` is the model's fresh control-generation
-       status; re-read ``get_control_generation_status`` shortly after to see
-       the diagnosis move from ``not_judged`` through ``judging``.
+       true``, ``queued`` counts them); any credits it consumes are metered
+       at actuals as each runs. ``status_detail`` is the model's fresh
+       control-generation status; re-read ``get_control_generation_status``
+       shortly after to see the diagnosis move from ``not_judged`` through
+       ``judging``.
 
     ``ungrouped`` lists objectives with no mitigation group. They are never
     judged, because there is nothing to judge: group their controls first
@@ -1621,7 +1621,8 @@ async def judge_objectives(
     Args:
         model_id: ID of the threat model.
         co_ids: Optional comma-separated objective IDs to restrict the call
-            to. Omit for every objective nothing will judge.
+            to. Omit for every objective with no judgement for its current
+            controls and none queued.
         confirm_estimate: False (default) returns the estimate and queues
             nothing; True queues the judgements.
     """
@@ -4236,7 +4237,7 @@ async def delete_assertion(
     control_id: Optional[str] = None,
     assumption_id: Optional[str] = None,
 ) -> dict:
-    """Permanently delete a single assertion from a control or assumption. Mutating and destructive: the assertion record is removed, not soft-deleted, and its contribution to sufficiency/verification is dropped. It does NOT itself re-run verification; sufficiency is re-evaluated on subsequent reads.
+    """Permanently delete a single assertion from a control or assumption. Mutating and destructive: the assertion record is removed, not soft-deleted, and its contribution to sufficiency/verification is dropped. It does NOT itself re-run verification; the deletion queues a background re-evaluation of the control's sufficiency, which a later ``get_sufficiency`` read reports once it lands.
 
     Use to retract a claim that was submitted in error or that ``get_verification_report`` flagged as misaligned (off-topic for the control's current description). To add assertions use ``submit_assertions``; to inspect them first use ``list_assertions``. Only "own" assertions can be removed here — inherited assertions come from composed models and must be managed on their source model.
 
@@ -4274,10 +4275,11 @@ async def get_verification_report(
     Each per-control ``sufficiency`` block carries:
 
     - ``status``: ``"sufficient" | "insufficient" | "pending" | "stale"``.
-      ``"stale"`` means the cached verdict no longer reflects the current
-      control description or active assertion set; a background
-      re-evaluation has been triggered automatically on this read — call
-      this tool again shortly for a refreshed verdict.
+      ``"stale"`` means the stored verdict no longer reflects the current
+      control description, active assertion set or the rules it was
+      computed under. Reading does not queue a re-evaluation: the write that
+      changed a control queues its own. Call this tool again later for the
+      refreshed verdict.
     - ``details``: human-readable LLM reasoning.
     - ``misaligned_assertion_ids``: assertions whose stated subject is
       off-topic for the control's current description (common after a
@@ -4322,7 +4324,7 @@ async def get_sufficiency(
 ) -> dict:
     """Sufficiency verdict for a single control: whether its submitted assertions collectively cover every aspect of the control. Read-only.
 
-    Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict carries a ``freshness`` of ``fresh`` | ``stale`` | ``pending`` beside its status: ``stale`` means the control description, the assertion set or the rules the verdict was computed under have moved since. A stale read with no re-evaluation already queued queues one, so calling again shortly does converge; a stale read that is already waiting adds nothing. For the whole-model rollup, which also refreshes stale controls on read, use ``get_verification_report``.
+    Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict carries a ``freshness`` of ``fresh`` | ``stale`` | ``pending`` beside its status: ``stale`` means the control description, the assertion set or the rules the verdict was computed under have moved since. Reading does not queue a re-evaluation: the write that changed a control queues its own, so calling again later returns the refreshed verdict. For the whole-model rollup use ``get_verification_report``.
 
     This is the surface that explains a control stuck at
     ``verification_status: "partially_verified"``. Returns ``status``
@@ -6418,7 +6420,7 @@ async def judge_objective(
     co_id: str,
 ) -> dict:
     """Have one control objective's mitigation group judged. Mutating —
-    queues background work and consumes credits.
+    queues background work and may consume credits.
 
     Use this for an objective whose ``risk_reason`` is ``awaiting_judgement``:
     it has a built mitigation group and nothing has decided whether that group
@@ -6436,9 +6438,9 @@ async def judge_objective(
     ``recompute_verdicts``: that tool force-enqueues every control's coverage
     verdict AND every live objective's group-sufficiency verdict, which on a
     large model runs to thousands of credits. This queues a single judgement.
-    It consumes credits, metered at actuals as the work runs, like every other
-    metered call — the account's usage is visible in its billing panel before
-    and after.
+    Any credits it consumes are metered at actuals as the work runs, like
+    every other metered call — the account's usage is visible in its billing
+    panel before and after.
 
     Judging runs in the BACKGROUND; the call returns as soon as the work is
     queued. Re-read ``get_mitigation_groups`` (or ``assess_model`` /

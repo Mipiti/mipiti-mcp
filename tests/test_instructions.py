@@ -358,3 +358,16 @@ def test_entity_reads_expose_the_attacker_extent() -> None:
     for name in ("add_asset", "edit_asset", "add_attacker", "edit_attacker"):
         d = _tool_doc(name)
         assert "`status`" not in d, name
+
+
+def test_reading_a_verdict_is_not_described_as_queueing_one() -> None:
+    """A read returns the stored verdict and queues nothing; the write that
+    changed a control queues its re-evaluation. Text that says a read
+    triggers one has an agent poll a read expecting it to converge."""
+    for name in ("get_verification_report", "get_sufficiency"):
+        doc = _flat_doc(name)
+        assert "does not queue a re-evaluation" in doc, name
+        assert "triggered" not in doc, name
+    text = build_instructions("pro", "user")
+    assert "triggered on read" not in text
+    assert "queues a background re-evaluation" in _flat_doc("delete_assertion")

@@ -66,4 +66,5 @@ constraint-dependencies = [
     "pydantic-settings>=2.14.2", # GHSA-4xgf-cpjx-pc3j
     "python-multipart>=0.0.31",  # CVE-2026-53540
     "mcp>=1.28.1",               # CVE-2026-52870, CVE-2026-59950
+    "pyjwt>=2.14.0",             # CVE-2026-102274
 ]
