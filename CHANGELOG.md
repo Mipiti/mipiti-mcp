@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Reading a verdict does not queue its re-evaluation.** The
+  `get_verification_report` and `get_sufficiency` descriptions no longer say a
+  stale read triggers one: the write that changed a control queues its own, so
+  a later read returns the refreshed verdict. `delete_assertion` states that a
+  deletion queues the control's re-evaluation. `judge_objective` and
+  `judge_objectives` say a judgement may consume credits, metered as it runs,
+  and the control-generation diagnosis points `not_judged` objectives at
+  `judge_objectives`.
+
+### Security
+
+- Floored `pyjwt>=2.14.0` via `[tool.uv] constraint-dependencies` (CVE-2026-102274)
+  and recompiled the lockfiles.
+
 ### Added
 
 - **`judge_objectives` — judge every objective nothing else will.** An
