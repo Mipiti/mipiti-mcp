@@ -44,6 +44,7 @@ from mipiti_mcp.server import (
     get_control_generation_status,
     resume_control_generation,
     pause_control_generation,
+    strengthen_controls,
     get_control_objectives,
     get_controls,
     get_entity,
@@ -158,6 +159,14 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "ready_cos": 0, "target_cos": 2, "elapsed_seconds": 3},
         "resume_control_generation": {"resumed": True, "status": "queued"},
         "pause_control_generation": {"paused": True, "status": "pausing"},
+        "strengthen_controls": {
+            "started": False, "confirmed": False, "model_id": "tm-001",
+            "diagnosis": {"covered": 3, "uncovered": 2, "undecided": 1,
+                          "not_judged": 0, "awaiting_assumption": 1,
+                          "dispositioned": 0},
+            "scope": ["CO2", "CO5", "CO7"],
+            "estimate": {"credits": 15.0, "per_objective": 5.0,
+                         "basis": "bootstrap", "objectives": 3}},
         "regenerate_controls": {"job_id": "job_regen"},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
@@ -5291,6 +5300,55 @@ class TestControlGenerationStatus:
         assert "controls_status" not in out
 
 
+class TestStrengthenControls:
+    @pytest.mark.asyncio
+    async def test_estimate_is_the_default(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await strengthen_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["started"] is False
+        assert result["estimate"]["credits"] == 15.0
+        mock.strengthen_controls.assert_awaited_once_with(
+            "tm-001", co_ids=None, confirm_estimate=False)
+
+    @pytest.mark.asyncio
+    async def test_confirm_and_scope_reach_the_client(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await strengthen_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                co_ids="CO2, CO5", confirm_estimate=True)
+        mock.strengthen_controls.assert_awaited_once_with(
+            "tm-001", co_ids=["CO2", "CO5"], confirm_estimate=True)
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_is_returned_not_raised(self) -> None:
+        refusal = {"started": False, "http_status": 409,
+                   "code": "generation_active", "status": "generating"}
+        mock = _mock_client(strengthen_controls=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await strengthen_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                confirm_estimate=True)
+        assert result == refusal
+
+    def test_the_status_tool_names_the_diagnosis(self) -> None:
+        """A completed generation that has not strengthened reads complete;
+        an agent must learn from the status tool that strengthening is a
+        separate, asked-for step and where its diagnosis is."""
+        doc = get_control_generation_status.__doc__ or getattr(
+            getattr(get_control_generation_status, "fn", None), "__doc__", "") or ""
+        assert "strengthening" in doc and "diagnosis" in doc
+        assert "strengthen_controls" in doc and "awaiting_assumption" in doc
+
+    def test_the_tool_says_estimate_first(self) -> None:
+        doc = strengthen_controls.__doc__ or getattr(
+            getattr(strengthen_controls, "fn", None), "__doc__", "") or ""
+        assert "confirm_estimate" in doc and "estimate" in doc
+        assert "review queue" in doc
+
+
 class TestApplyControlChangeset:
     @pytest.mark.asyncio
     async def test_forwards_parsed_ops_to_client(self) -> None:
@@ -5598,6 +5656,24 @@ class TestCreateProposal:
         mock.create_proposal.assert_not_awaited()
 
 
+class TestAssumptionProposals:
+    @pytest.mark.asyncio
+    async def test_assumption_kind_is_accepted(self) -> None:
+        mock = _mock_client()
+        payload = {"co_id": "CO3", "group_id": 1,
+                   "precondition": "Traffic to the API is carried over TLS."}
+        with _patch_client(mock):
+            await create_proposal(
+                server_version="0", model_id="tm-001", kind="assumption",
+                payload=json.dumps(payload),
+                rationale="Only the hosting environment can guarantee this.")
+        assert mock.create_proposal.await_args.args[1] == "assumption"
+        assert mock.create_proposal.await_args.args[2] == payload
+
+    def test_decisions_filter_names_assumption_acceptance(self) -> None:
+        assert "assumption_accepted" in server._DECISION_KINDS
+
+
 class TestListProposals:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
@@ -5618,7 +5694,25 @@ class TestDecideProposal:
                 server_version="0", model_id="tm-001", proposal_id="P-1",
                 decision="accept", note="ok")
         assert result["effect"] == "applied"
-        mock.decide_proposal.assert_awaited_once_with("tm-001", "P-1", "accept", note="ok")
+        mock.decide_proposal.assert_awaited_once_with(
+            "tm-001", "P-1", "accept", note="ok", expires_at="")
+
+    @pytest.mark.asyncio
+    async def test_expiry_reaches_the_client(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await decide_proposal(
+                server_version="0", model_id="tm-001", proposal_id="P-2",
+                decision="accept", expires_at="2027-03-29T00:00:00Z")
+        mock.decide_proposal.assert_awaited_once_with(
+            "tm-001", "P-2", "accept", note="", expires_at="2027-03-29T00:00:00Z")
+
+    def test_accepting_an_assumption_is_its_own_decision(self) -> None:
+        """An agent holding a rule for proposal acceptance must not read it as
+        covering an assumption proposal, which accepts the assumption."""
+        doc = decide_proposal.__doc__ or getattr(
+            getattr(decide_proposal, "fn", None), "__doc__", "") or ""
+        assert "assumption_accepted" in doc and "expires_at" in doc
 
     @pytest.mark.asyncio
     async def test_bad_decision_raises(self) -> None:

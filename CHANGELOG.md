@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`strengthen_controls` — strengthening runs when asked, after an estimate.**
+  Generation now drafts controls, forms their mitigation groups and has them
+  judged, then stops unless the workspace strengthens automatically.
+  `get_control_generation_status` reports `strengthening` and, once complete,
+  a `diagnosis`: how many objectives are covered, uncovered, undecided, not yet
+  judged, or waiting on an assumption decision. `strengthen_controls` returns
+  the estimate first and starts nothing; called again with
+  `confirm_estimate=True` it starts a background run that pauses, resumes and
+  stops like any other. A gap only the environment can close is answered with
+  an assumption rather than a control: an accepted one is bound into the
+  group, and otherwise an `assumption` proposal waits in the review queue.
+
+- **Assumption acceptance is a judgment.** `submit_attestation` accepts an
+  assumption, so a program is refused with 403 and an `escalation_id` unless
+  the workspace delegates `assumption_accepted` to it. An attestation holds
+  for the text it was given for; editing the description retires it.
+  `decide_proposal` takes `expires_at` for an accepted assumption proposal,
+  `create_proposal` takes the `assumption` kind, `get_review_queue` lists
+  `unaccepted_assumption` rows, and `list_decisions` filters on
+  `assumption_accepted`.
+
 - **`pause_control_generation` — stop a background control generation.** A
   generation started by mistake, or one no longer wanted, could not be stopped:
   it ran to the end and billed throughout. Pausing stops it at its next step.
