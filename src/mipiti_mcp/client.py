@@ -648,6 +648,36 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def strengthen_controls(
+        self,
+        model_id: str,
+        co_ids: list[str] | None = None,
+        confirm_estimate: bool = False,
+    ) -> dict:
+        """Estimate, and with ``confirm_estimate`` start, a strengthening of
+        the model's controls.
+
+        A refusal is an answer, not an error: 409 (a generation for the model
+        is still running) and 402 (the balance cannot cover the estimate) come
+        back as ``{"started": False, "http_status": ..., **detail}`` so a
+        caller can relay them. Any other failure raises."""
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if co_ids:
+            body["co_ids"] = list(co_ids)
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/strengthen", json=body)
+        if resp.status_code in (402, 409):
+            try:
+                detail = resp.json().get("detail", {})
+            except ValueError:
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {"message": str(detail)}
+            return {"started": False, "http_status": resp.status_code, **detail}
+        resp.raise_for_status()
+        data = resp.json()
+        return {"started": bool(data.get("confirmed")), **data}
+
     async def regenerate_controls(
         self,
         model_id: str,
@@ -2705,7 +2735,7 @@ class MipitiClient:
         """POST /api/models/{model_id}/proposals.
 
         Raises a proposal of the given kind (``add_component``,
-        ``remove_component``, ``design_change``). Returns
+        ``remove_component``, ``design_change``, ``assumption``). Returns
         ``{proposal, created}``.
         """
         return await self._post(
@@ -2728,16 +2758,20 @@ class MipitiClient:
 
     async def decide_proposal(
         self, model_id: str, proposal_id: str, decision: str, note: str = "",
+        expires_at: str = "",
     ) -> dict:
         """POST /api/models/{model_id}/proposals/{proposal_id}/decide.
 
-        Accept or reject a proposal. Returns ``{proposal, effect}``; a
-        refusal surfaces as an HTTP 403 whose detail carries
-        ``escalation_id``.
+        Accept or reject a proposal. ``expires_at`` (ISO 8601) is when an
+        accepted assumption lapses; it is sent only when given. Returns
+        ``{proposal, effect}``; a refusal surfaces as an HTTP 403 whose detail
+        carries ``escalation_id``.
         """
+        body: dict[str, Any] = {"decision": decision, "note": note}
+        if expires_at:
+            body["expires_at"] = expires_at
         return await self._post(
-            f"/api/models/{model_id}/proposals/{proposal_id}/decide",
-            {"decision": decision, "note": note},
+            f"/api/models/{model_id}/proposals/{proposal_id}/decide", body,
         )
 
     async def get_design_leverage(

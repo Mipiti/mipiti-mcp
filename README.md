@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->142<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->143<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -130,6 +130,7 @@ uvx mipiti-mcp
 | `regenerate_controls` | Regenerate controls. Supports `mode="per_co"` and `co_ids` to target specific COs. |
 | `pause_control_generation` | Pause a model's background control generation (for example one started by mistake). A running generation stops at its next step; everything done so far is kept, nothing new is started or billed, and nothing resumes it except `resume_control_generation`. A paused model can then be deleted as usual. |
 | `resume_control_generation` | Resume control generation that was paused (`get_control_generation_status` reports `paused`), or retry one that stopped before finishing (`blocked`): a service it depends on was unavailable, or some new controls could not be checked for duplicates and were held back. A paused run resumes at once; for a blocked one the services are checked first, so a retry during an outage costs nothing. Either way only the unfinished work runs, billed to the original generation. |
+| `strengthen_controls` | Work on the objectives whose mitigation groups the background judge found do not cover them. Generation stops after drafting and judging unless the workspace strengthens automatically; `get_control_generation_status` reports the `diagnosis`. Call once for the estimate (nothing starts, nothing is charged), then with `confirm_estimate=True` to start a background run. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person. |
 | `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. |
 | `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
 | `check_control_gaps` | AI-powered gap analysis across all controls. |
@@ -145,7 +146,7 @@ uvx mipiti-mcp
 | `edit_assumption` | Update description and/or linked COs. |
 | `remove_entity (entity_type="assumption")` | Soft-delete (preserved for audit). Linked COs are no longer mitigated by it. |
 | `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
-| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. A claim, never a proof over every site: it can cover an existential clause and never a for-all one. |
+| `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. A claim, never a proof over every site: it can cover an existential clause and never a for-all one. Attesting accepts the assumption, a judgment: a program is refused with 403 and an `escalation_id` unless the workspace delegates `assumption_accepted` to it. Editing the assumption's description retires the attestation. |
 | `list_attestations` | Attestation history for an assumption. |
 | `set_control_assumption_groups` | Declaratively set a control's assumption group structure: mark it externally handled by a single assumption (shorthand), clear that status (control reverts to not_implemented), or express compound cases with multiple groups (within a group = AND, across groups = OR; e.g. "AWS KMS + quarterly review"). Attested groups count as active for mitigation group completeness. |
 | `get_control_assumption_groups` | Inspect the current assumption group structure on a control. Groups express alternative sets of external claims (within = AND, across = OR). |
@@ -162,7 +163,7 @@ uvx mipiti-mcp
 | `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |
 | `get_sufficiency` | Quick check: do assertions for a single control collectively cover all aspects? For the per-clause work list read `get_control_work_order`: where the order names a required class for a clause, `required_evidence` carries the class, the clause id to bind evidence to, and a submission skeleton to fill in. A claim that carries a `soundness_tier` reports its weakest clause's tier. |
 | `get_scan_prompt` | Returns targeted prompts for scanning the codebase against not_implemented controls. |
-| `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal`, `open_assumption`, `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`. Start here for periodic maintenance. |
+| `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal` (including `assumption` proposals a strengthening run raised), `unaccepted_assumption` (an assumption something depends on that is not accepted), `open_assumption`, `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`; an unaccepted assumption is accepted with `submit_attestation`. Start here for periodic maintenance. |
 | `submit_findings` / `list_findings` / `update_finding` | Report and track negative findings (gap discovery). |
 | `preview_finding_remediation` | Read-only. Returns a structured diff describing the changes a subsequent `apply_finding_remediation` call would make. Diff shape depends on the finding's kind (e.g. for `structural_duplicate_controls`: which controls would be kept, which dropped, the union of CO mappings + framework refs that would land on the survivor). Call before `apply_finding_remediation` so the operator can confirm. |
 | `apply_finding_remediation` | Mutates state: commits the changes `preview_finding_remediation` showed. Requires a non-empty `justification` (one-line operator rationale) recorded on the audit trail. The agent is responsible for the preview-then-apply norm — surface the diff and get explicit confirmation before calling. |
@@ -187,11 +188,11 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 |------|-------------|
 | `get_control_work_order` | The ticket for implementing one control: scan brief, what counts as proof (assertion contract), acceptance criteria, steps, reconcile rules, what this agent may decide on its own, open proposals, and the model's provenance. Call before implementing a control. Read-only. |
 | `reconcile_model` | Reconcile the model with the code: pass the paths changed since the recorded commit and your observations (`mechanism_named`, `component_present`, `component_absent`, `forbidden_behavior`). The platform decides the consequence of each; proposals are never applied on the agent's word, except a component change on a code-derived model, which is applied and queued for a person's review. |
-| `create_proposal` | Raise a change of scope or design (`add_component`, `remove_component`, `design_change`). Raising is not deciding: a person (or an agent under a delegation rule) decides it with `decide_proposal`; design changes are never applied automatically. |
+| `create_proposal` | Raise a change of scope or design (`add_component`, `remove_component`, `design_change`), or an `assumption` a gap needs that only the environment can meet. Raising is not deciding: a person (or an agent under a delegation rule) decides it with `decide_proposal`; design changes are never applied automatically. |
 | `list_proposals` | Proposals and escalations on a model with their status (`proposed` / `applied_pending_review` open; `accepted` / `rejected` / `reverted` / `superseded` closed). A refused judgment (403 with `escalation_id`) appears as a `decision_request`; poll here until a person resolves it. Read-only. |
-| `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. |
+| `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. Accepting an `assumption` proposal accepts the assumption (its own decision, `assumption_accepted`), attested until `expires_at`; rejecting one keeps the precondition from being proposed again. |
 | `get_design_leverage` | What eliminating each attacker position or asset by design would remove from the matrix, ranked by critical then high at-risk objectives removed. `include_design_moves=True` authors a concrete `design_move` per row; turn one into a `design_change` proposal with `create_proposal`. Read-only. |
-| `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, escalation resolved), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
+| `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, assumption accepted, escalation resolved), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
 
 ### Assurance
 

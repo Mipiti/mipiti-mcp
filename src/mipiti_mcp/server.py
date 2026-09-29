@@ -224,7 +224,7 @@ Trust boundaries and assumptions are versioned (CRUD creates new model versions 
 - `edit_assumption` — update description and/or linked COs.
 - `remove_entity(entity_type="assumption")` — soft-delete an assumption (preserved for audit). Linked COs are no longer mitigated by it; controls with `assumed_by` pointing to it become inert (pointer preserved to enable restore).
 - `restore_entity(entity_type="assumption")` — restore a soft-deleted assumption. Controls with `assumed_by` pointing to it automatically reconnect. Re-attestation required before the assumption mitigates COs again.
-- `submit_attestation` — record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, and `expires_at` (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation. An attestation is a claim: it can cover an existential clause and never a for-all one, and a CI-minted attestation is no stronger than the weakest assertion behind it.
+- `submit_attestation` — record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, and `expires_at` (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation. Attesting accepts the assumption: a program is refused (403 with `escalation_id`) unless the workspace delegates `assumption_accepted` to it. Editing an assumption's description retires its attestation. An attestation is a claim: it can cover an existential clause and never a for-all one, and a CI-minted attestation is no stronger than the weakest assertion behind it.
 - `list_attestations` — attestation history for an assumption.
 
 **Assumption types**: Two types, set via `assumption_type` in `add_assumption`:
@@ -378,6 +378,8 @@ _INSTRUCTIONS_ASYNC = """\
 `generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, `regenerate_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
 
 **Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: the controls so far are saved but not final, and only `resume_control_generation` continues it. To stop a generation the user did not want (for example one started by mistake), call `pause_control_generation`; a paused model can then be deleted as usual.
+
+**Strengthening runs when asked.** A completed generation reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, not yet judged, or waiting on an assumption decision). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
 """
 
 
@@ -1403,6 +1405,17 @@ async def get_control_generation_status(
       Absent while running. The two are never both present and are not
       interchangeable: one measures silence, the other measures work. Do not
       read ``elapsed_seconds`` as a runtime.
+    - ``strengthening`` — whether the strengthening pass has run for this
+      model: ``not_run`` (generation stopped after drafting and judging; a
+      person starts strengthening with ``strengthen_controls``), ``running``,
+      ``done``, or ``automatic`` (the workspace strengthens every generation).
+    - ``diagnosis`` — ONCE ``complete``: objective counts by what the
+      background judge found — ``covered``, ``uncovered``, ``undecided``,
+      ``not_judged`` (still being judged), ``awaiting_assumption`` (waiting
+      on a person to accept or reject a proposed assumption, in the review
+      queue) and ``dispositioned`` (risk accepted or declared not
+      applicable). ``uncovered`` and ``undecided`` are what
+      ``strengthen_controls`` works on.
 
     Read-only; no side effects (polling does not trigger or alter generation).
 
@@ -1484,6 +1497,64 @@ async def resume_control_generation(
     try:
         return _dump(
             await _get_client().resume_control_generation(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def strengthen_controls(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    co_ids: Optional[str] = None,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Strengthen a model's controls: work on the objectives whose mitigation
+    groups the background judge found do not cover them. Mutating only with
+    ``confirm_estimate=True``; consumes credits then.
+
+    Generation drafts controls, forms groups and has them judged, and stops
+    there unless the workspace strengthens automatically. What is left is in
+    ``get_control_generation_status``'s ``diagnosis``. Strengthening is the
+    expensive part, so it runs when asked:
+
+    1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
+       nothing is charged; the answer carries ``diagnosis``, ``scope`` (the
+       objectives it would work on) and ``estimate`` (``credits``,
+       ``per_objective``, ``basis``). Show the user the estimate.
+    2. Call again with ``confirm_estimate=True`` once they agree. A
+       background run starts (``started: true``, ``status: "queued"``);
+       poll ``get_control_generation_status`` until terminal. It can be
+       paused, resumed and stopped by deleting the model like any other run.
+
+    A gap only the environment can close — how the system is deployed or
+    hosted, a third party it relies on — is never answered with a control.
+    If an accepted assumption states the precondition, it is bound into the
+    group. Otherwise the run raises an assumption proposal and the objective
+    waits (``diagnosis.awaiting_assumption``) until a person accepts it or
+    rejects it from the review queue (``get_review_queue`` /
+    ``decide_proposal``). A rejected precondition is not proposed again.
+
+    Refusals come back as data:
+    - ``{started: false, http_status: 409, code: "generation_active"}`` — a
+      generation for the model is still running; wait for it to finish.
+    - ``{started: false, http_status: 402, ...}`` — the balance this
+      workspace bills to cannot cover the estimate.
+
+    Args:
+        model_id: ID of the threat model.
+        co_ids: Optional comma-separated objective IDs to restrict the run
+            to, of those the diagnosis lists as uncovered or undecided. Omit
+            for all of them.
+        confirm_estimate: False (default) returns the estimate and starts
+            nothing; True starts the run.
+    """
+    parsed: list[str] | None = None
+    if co_ids:
+        parsed = [c.strip() for c in co_ids.split(",") if c.strip()]
+    try:
+        return _dump(await _get_client().strengthen_controls(
+            model_id, co_ids=parsed, confirm_estimate=confirm_estimate))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2781,11 +2852,18 @@ async def get_review_queue(server_version: str) -> dict:
 
     Each row carries an ``item_type``, one of ``escalation`` (a judgment an
     agent was refused and parked for a person), ``proposal`` (an open change
-    of scope or design), ``open_assumption``, or ``stale_control`` (an
-    implemented/verified control whose assertions have not been checked in
-    90+ days). Rows are ranked in that order. Escalations and proposals are
-    decided with ``decide_proposal``; for each stale control, verify its
-    assertions against the codebase. Start here for periodic maintenance.
+    of scope or design, or an ``assumption`` proposal: a precondition a
+    strengthening run found only the environment can meet),
+    ``unaccepted_assumption`` (an assumption something depends on that is
+    not accepted — never attested, lapsed, or its text changed since it was
+    attested — with the controls and objectives that wait on it),
+    ``open_assumption``, or ``stale_control`` (an implemented/verified
+    control whose assertions have not been checked in 90+ days). Rows are
+    ranked in that order. Escalations and proposals are decided with
+    ``decide_proposal``; an unaccepted assumption is accepted with
+    ``submit_attestation``; for each stale control, verify its assertions
+    against the codebase. Accepting an assumption is a person's judgment
+    unless the workspace delegates it. Start here for periodic maintenance.
     """
     try:
         return _dump(await _get_client().get_review_queue())
@@ -4925,6 +5003,16 @@ async def submit_attestation(
     An assumption with a current attestation can mitigate linked COs.
     When the attestation expires, those COs become at-risk until
     re-attested or covered by controls.
+
+    Attesting accepts the assumption, which is a judgment about the world
+    the platform cannot check: a program may do it only under a workspace
+    delegation rule for ``assumption_accepted``; otherwise the call is
+    refused with HTTP 403 and an ``escalation_id`` and the attestation is
+    parked for a person. An attestation holds for the text it was given
+    for: editing the assumption's description retires it, and the
+    assumption must be accepted again. An assumption need not be linked to
+    an objective to be accepted — one bound into a control's group (see
+    ``strengthen_controls``) counts only while it is accepted.
 
     An attestation is a responsible party's claim, never a proof over every
     site: it can cover an existential clause of a control (its tier reads
@@ -7198,7 +7286,7 @@ async def reconcile_model(
         raise _api_error(exc) from exc
 
 
-_PROPOSAL_KINDS = ("add_component", "remove_component", "design_change")
+_PROPOSAL_KINDS = ("add_component", "remove_component", "design_change", "assumption")
 
 
 def _parse_json_object(raw: str, name: str, required: bool) -> dict:
@@ -7242,7 +7330,12 @@ async def create_proposal(
             trust_boundary_ids?}``), ``remove_component`` (payload
             ``{component_id}``), ``design_change`` (payload ``{target_kind:
             "attacker"|"asset", target_id, design_move}``; take ``design_move``
-            from ``get_design_leverage``).
+            from ``get_design_leverage``), ``assumption`` (payload ``{co_id,
+            group_id, precondition, assumption_id?, gap?}``: a precondition
+            about the environment that only something outside this system
+            can meet, one declarative sentence; ``assumption_id`` names an
+            existing assumption that states it). A precondition a person
+            already rejected for that objective is refused.
         payload: JSON object string with the fields for ``kind``.
         rationale: Why this change is right (what in the code or design
             supports it).
@@ -7279,9 +7372,10 @@ async def list_proposals(
     Statuses: ``proposed`` and ``applied_pending_review`` are open;
     ``accepted``, ``rejected``, ``reverted``, ``superseded`` are closed.
     Kinds include ``add_component``, ``remove_component``,
-    ``design_change``, and ``decision_request``: an escalation of a
-    judgment this agent was refused. A 403 from ``update_finding``,
-    ``create_risk_acceptance``, or ``decide_proposal`` carries an
+    ``design_change``, ``assumption``, and ``decision_request``: an
+    escalation of a judgment this agent was refused. A 403 from
+    ``update_finding``, ``create_risk_acceptance``, ``submit_attestation``
+    or ``decide_proposal`` carries an
     ``escalation_id``; that escalation appears here as a
     ``decision_request``. Poll it here until a person resolves it; do not
     retry the refused call.
@@ -7306,6 +7400,7 @@ async def decide_proposal(
     proposal_id: str,
     decision: str,
     note: str = "",
+    expires_at: str = "",
 ) -> dict:
     """Accept or reject a proposal. Call this only when the workspace's
     delegation policy names this decision for this agent at the proposal's
@@ -7319,11 +7414,21 @@ async def decide_proposal(
     a refusal: report the ``escalation_id``, poll ``list_proposals`` for the
     outcome, and continue other work.
 
+    Accepting an ``assumption`` proposal accepts the assumption: it is
+    created if new, attested until ``expires_at`` and bound into the group
+    that waited on it, which is then judged again. That is its own decision
+    (``assumption_accepted``); a rule delegating proposal acceptance does not
+    cover it. Rejecting one records the precondition as rejected for that
+    objective, so it is not proposed again, and the objective keeps its gap.
+
     Args:
         model_id: ID of the threat model.
         proposal_id: ID of the proposal to decide.
         decision: ``accept`` or ``reject``.
         note: Optional note recorded with the decision.
+        expires_at: ISO 8601 date an accepted assumption lapses (e.g.
+            "2027-03-29T00:00:00Z"). Applies to accepting an ``assumption``
+            proposal; omitted, the acceptance lasts a year.
 
     Returns ``{proposal, effect}``.
     """
@@ -7331,7 +7436,7 @@ async def decide_proposal(
         raise ToolError("decision must be 'accept' or 'reject'.")
     try:
         return await _get_client().decide_proposal(
-            model_id, proposal_id, decision, note=note,
+            model_id, proposal_id, decision, note=note, expires_at=expires_at,
         )
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -7437,6 +7542,7 @@ _DECISION_KINDS = (
     "proposal_accepted",
     "proposal_rejected",
     "proposal_reverted",
+    "assumption_accepted",
     "escalation_resolved",
 )
 
@@ -7452,8 +7558,8 @@ async def list_decisions(
 ) -> dict:
     """List the decision ledger of a model: every judgment recorded on it
     (finding dismissed or remediated, risk accepted, not-applicable
-    declared, proposal accepted / rejected / reverted, escalation
-    resolved), newest first, with who made it and whether it was within
+    declared, proposal accepted / rejected / reverted, assumption accepted,
+    escalation resolved), newest first, with who made it and whether it was within
     the workspace's delegation policy. Read-only; no side effects.
 
     Call this BEFORE raising a proposal or asking for a judgment, so you
@@ -7477,7 +7583,8 @@ async def list_decisions(
             ``finding_remediated``, ``risk_accepted``,
             ``not_applicable_declared``, ``proposal_accepted``,
             ``proposal_rejected``, ``proposal_reverted``,
-            ``escalation_resolved``. Empty (default) returns every kind.
+            ``assumption_accepted``, ``escalation_resolved``. Empty
+            (default) returns every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,
