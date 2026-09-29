@@ -1903,6 +1903,42 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def judge_objectives(
+        self,
+        model_id: str,
+        co_ids: list[str] | None = None,
+        confirm_estimate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/control-objectives/judge.
+
+        Estimate, and with ``confirm_estimate`` queue, the group-sufficiency
+        judgement of every objective that has no judgement for its current
+        controls and none queued. Without ``confirm_estimate`` nothing is
+        queued or charged.
+
+        A refusal is an answer, not an error: 409 (controls are still being
+        generated), 503 (judging is unavailable on this deployment) and 402
+        (the balance cannot cover the estimate) come back as
+        ``{"confirmed": False, "queued": 0, "http_status": ..., **detail}`` so
+        a caller can relay them. Any other failure raises, including the 400
+        for an unknown objective."""
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if co_ids:
+            body["co_ids"] = list(co_ids)
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/control-objectives/judge", json=body)
+        if resp.status_code in (402, 409, 503):
+            try:
+                detail = resp.json().get("detail", {})
+            except ValueError:
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {"message": str(detail)}
+            return {"confirmed": False, "queued": 0,
+                    "http_status": resp.status_code, **detail}
+        resp.raise_for_status()
+        return resp.json()
+
     # ------------------------------------------------------------------
     # Assurance
     # ------------------------------------------------------------------

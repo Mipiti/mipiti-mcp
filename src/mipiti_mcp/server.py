@@ -171,7 +171,7 @@ If the alternative drops a framework binding the original carried, the platform 
 
 **Before acting on any risk_reason, check whether a control is actually REQUIRED for the objective.** `get_mitigation_groups` splits a CO's controls into numbered groups (within=AND, across=OR) and `defense_in_depth`. Only the groups earn mitigation credit. If a CO has controls attached but ALL of them sit in `defense_in_depth`, or it has no groups at all, then nothing is required to mitigate it and the CO cannot leave at-risk no matter how many controls you generate or how much evidence you submit. That is a modelling gap, not an evidence gap: decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups` (AI-gated, so the structure has to actually satisfy the CO). Generating or proving controls in this state is wasted work.
 
-**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.) `no_mitigation_group` → decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups`; do NOT generate more controls, the ones that matter are already there. `awaiting_judgement` → call `judge_objective` on the CO. Nothing has decided whether its group covers it, so neither implementing nor adding controls changes the reason; the remedy is the judgement. It may come back insufficient, which moves the objective to `coverage_gap` / `insufficient_by_design` and names real work — that is the answer, not a failure.
+**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.) `no_mitigation_group` → decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups`; do NOT generate more controls, the ones that matter are already there. `awaiting_judgement` → call `judge_objective` on the CO, or `judge_objectives` for all of them at once. Nothing has decided whether its group covers it, so neither implementing nor adding controls changes the reason; the remedy is the judgement. It may come back insufficient, which moves the objective to `coverage_gap` / `insufficient_by_design` and names real work — that is the answer, not a failure.
 
 ## Gap discovery
 
@@ -190,6 +190,7 @@ For controls with status not_implemented, determine whether the code already imp
 - `list_co_dispositions` — see every signed judgment on a model's objectives (both kinds, including expired and revoked ones, which are part of the audit trail). Read this before authoring a new one: an existing judgment may already cover the objective, or may have expired and need re-signing rather than duplicating.
 - `recompute_verdicts` — force a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale. Runs in the background; the response includes an informational cost estimate and a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped). Pass its quote-only param to get the cost estimate alone, pre-flight, without enqueuing the recompute.
 - `judge_objective` — have ONE control objective's mitigation group judged. The right tool for an objective reading `awaiting_judgement`; prefer it over `recompute_verdicts`, which sweeps the whole model and costs accordingly. Runs in the background and consumes credits. It is not a repair: the judgement can come back insufficient.
+- `judge_objectives` — the same for every objective that has no judgement for its current controls and none queued (the diagnosis's `not_judged` count). Call once for the estimate and show the user, then again with `confirm_estimate=True` to queue; billed to the caller as each judgement runs. Objectives with no mitigation group come back in `ungrouped` and are not judged.
 
 ## Remediating findings (structural drift)
 
@@ -379,7 +380,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 **Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: the controls so far are saved but not final, and only `resume_control_generation` continues it. To stop a generation the user did not want (for example one started by mistake), call `pause_control_generation`; a paused model can then be deleted as usual.
 
-**Strengthening runs when asked.** A completed generation reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, not yet judged, or waiting on an assumption decision). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
+**Strengthening runs when asked.** A completed generation reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: nothing will judge them until someone asks, so call `judge_objectives` (estimate first, then `confirm_estimate=True`, billed to the caller). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
 """
 
 
@@ -1411,8 +1412,11 @@ async def get_control_generation_status(
       ``done``, or ``automatic`` (the workspace strengthens every generation).
     - ``diagnosis`` — ONCE ``complete``: objective counts by what the
       background judge found — ``covered``, ``uncovered``, ``undecided``,
-      ``not_judged`` (still being judged), ``awaiting_assumption`` (waiting
-      on a person to accept or reject a proposed assumption, in the review
+      ``judging`` (no judgement for its current controls yet, and one is
+      queued: wait for it), ``not_judged`` (no judgement for its current
+      controls and none queued: nothing will judge it until someone asks,
+      so call ``judge_objectives``), ``awaiting_assumption`` (waiting on a
+      person to accept or reject a proposed assumption, in the review
       queue) and ``dispositioned`` (risk accepted or declared not
       applicable). ``uncovered`` and ``undecided`` are what
       ``strengthen_controls`` works on.
@@ -1515,8 +1519,11 @@ async def strengthen_controls(
 
     Generation drafts controls, forms groups and has them judged, and stops
     there unless the workspace strengthens automatically. What is left is in
-    ``get_control_generation_status``'s ``diagnosis``. Strengthening is the
-    expensive part, so it runs when asked:
+    ``get_control_generation_status``'s ``diagnosis``. Objectives it counts
+    as ``not_judged`` have no judgement to strengthen from and nothing queued
+    to produce one, so they are outside this tool's scope until judged: call
+    ``judge_objectives`` for them first. Strengthening is the expensive part,
+    so it runs when asked:
 
     1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
        nothing is charged; the answer carries ``diagnosis``, ``scope`` (the
@@ -1554,6 +1561,75 @@ async def strengthen_controls(
         parsed = [c.strip() for c in co_ids.split(",") if c.strip()]
     try:
         return _dump(await _get_client().strengthen_controls(
+            model_id, co_ids=parsed, confirm_estimate=confirm_estimate))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def judge_objectives(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    co_ids: Optional[str] = None,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Have every objective that nothing will judge get judged: the objectives
+    whose mitigation group has no judgement for its current controls and none
+    queued. Mutating only with ``confirm_estimate=True``; consumes credits
+    then.
+
+    Use it when ``get_control_generation_status``'s ``diagnosis`` reports
+    ``not_judged`` above zero, or objectives read ``awaiting_judgement``. Such
+    an objective stays unjudged until someone asks; adding or implementing
+    controls does not move it. Objectives counted under ``judging`` already
+    have a judgement queued: wait for them instead.
+
+    1. Call with ``confirm_estimate=False`` (the default). Nothing is queued
+       and nothing is charged; the answer carries ``diagnosis``, ``scope``
+       (the objectives it would judge), ``ungrouped`` and ``estimate``
+       (``credits``, ``objectives``, ``computed_at``, ``rate_version``).
+       Show the user the estimate.
+    2. Call again with ``confirm_estimate=True`` once they agree. The
+       judgement of each objective in ``scope`` is queued (``confirmed:
+       true``, ``queued`` counts them) and billed to the caller at actuals as
+       each runs. ``status_detail`` is the model's fresh control-generation
+       status; re-read ``get_control_generation_status`` shortly after to see
+       the diagnosis move from ``not_judged`` through ``judging``.
+
+    ``ungrouped`` lists objectives with no mitigation group. They are never
+    judged, because there is nothing to judge: group their controls first
+    with ``set_mitigation_groups``.
+
+    A judgement is not a repair. It can come back insufficient or undecided,
+    which counts the objective as ``uncovered`` or ``undecided`` and makes it
+    work for ``strengthen_controls``.
+    For a single objective, ``judge_objective`` does the same for one.
+
+    Refusals come back as data:
+    - ``{confirmed: false, queued: 0, http_status: 409, code:
+      "control_generation_in_progress", message}`` — controls are still being
+      generated; poll ``get_control_generation_status`` until terminal.
+    - ``{confirmed: false, queued: 0, http_status: 402, code, message,
+      estimated_credits}`` — the balance this workspace bills to cannot
+      cover the estimate (``code`` is ``insufficient_credits`` or
+      ``quota_exceeded``).
+    - ``{confirmed: false, queued: 0, http_status: 503, ...}`` — judging is
+      unavailable on this deployment.
+    An unknown objective id in ``co_ids`` fails with a 400 error.
+
+    Args:
+        model_id: ID of the threat model.
+        co_ids: Optional comma-separated objective IDs to restrict the call
+            to. Omit for every objective nothing will judge.
+        confirm_estimate: False (default) returns the estimate and queues
+            nothing; True queues the judgements.
+    """
+    parsed: list[str] | None = None
+    if co_ids:
+        parsed = [c.strip() for c in co_ids.split(",") if c.strip()]
+    try:
+        return _dump(await _get_client().judge_objectives(
             model_id, co_ids=parsed, confirm_estimate=confirm_estimate))
     except Exception as exc:
         raise _api_error(exc) from exc
