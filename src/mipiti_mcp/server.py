@@ -242,7 +242,7 @@ Trust boundaries and assumptions are versioned (CRUD creates new model versions 
 **Violation workflow**: When an assumption is violated or attestation expires, affected COs become at-risk. Four remediation paths:
 1. Re-attest — `submit_attestation` with new expiry (assumption still valid)
 2. Restore — `restore_entity(entity_type="assumption")` if assumption was soft-deleted and is still valid; re-attest after restoring
-3. Convert to controls — `convert_assumption_to_controls` generates controls for affected COs and retires the assumption linkage
+3. Convert to controls — `convert_assumption_to_controls` retires the assumption linkage and proposes the control build its COs owe; `start_control_build` starts it
 4. Accept risk — `create_risk_acceptance` (the exposure is real and is being carried), or `create_co_disposition` (the objective does not apply to this system at all). Both are signed, owned, justified and expiring; `list_co_dispositions` shows what is already recorded.
 
 ## Composition (recursive-tree multi-model)
@@ -5576,12 +5576,14 @@ async def set_control_assumption_groups(
 async def convert_assumption_to_controls(
     server_version: str, model_id: str, assumption_id: str,
 ) -> dict:
-    """Convert a violated or retired assumption to controls.
+    """Convert a violated or retired assumption to controls. Mutating.
 
-    Generates controls for the COs that were covered by this assumption,
-    then retires the assumption's CO linkage. Use when an assumption is
-    no longer valid and the system owner needs to implement controls
-    instead.
+    Retires the assumption's CO linkage and, when any CO it covered is left
+    with no control, proposes a control build for those COs: the result's
+    ``proposal`` (null when nothing is owed) is started with
+    ``start_control_build`` after review, and authors the controls then.
+    Nothing is authored by this call. Use when an assumption is no longer
+    valid and the system owner needs to implement controls instead.
 
     Side effect on control-level linkage: this assumption is also removed
     from every assumption_groups entry on every control that referenced it.

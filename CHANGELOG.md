@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result carries the judgement estimate.
 - The README and client docstrings describe composition and reliance as
   deployment settings rather than naming them.
+- `convert_assumption_to_controls` retires the assumption linkage and
+  returns the control build its COs owe (`proposal`); it authors no controls
+  itself.
 
 - **Reading a verdict does not queue its re-evaluation.** The
   `get_verification_report` and `get_sufficiency` descriptions no longer say a

@@ -157,7 +157,7 @@ uvx mipiti-mcp
 | `list_attestations` | Attestation history for an assumption. |
 | `set_control_assumption_groups` | Declaratively set a control's assumption group structure: mark it externally handled by a single assumption (shorthand), clear that status (control reverts to not_implemented), or express compound cases with multiple groups (within a group = AND, across groups = OR; e.g. "AWS KMS + quarterly review"). Attested groups count as active for mitigation group completeness. |
 | `get_control_assumption_groups` | Inspect the current assumption group structure on a control. Groups express alternative sets of external claims (within = AND, across = OR). |
-| `convert_assumption_to_controls` | Generate controls for assumption-covered COs and retire the assumption linkage. |
+| `convert_assumption_to_controls` | Retire the assumption linkage and propose the control build its COs owe; `start_control_build` starts it. |
 
 ### Assertions and Evidence
 
