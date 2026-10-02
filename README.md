@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->144<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->150<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -101,8 +101,8 @@ uvx mipiti-mcp
 | `rename_threat_model` | Rename a model (metadata only, no new version). Titles must be unique within a workspace (case-insensitive). |
 | `delete_threat_model` | Permanently delete a model and all its data. |
 | `export_report (scope="model")` | Export as PDF, HTML, or CSV. |
-| `export_report (scope="model", format="archive")` | Export the self-contained JSON audit archive (every version, controls, assertions with CI verdicts, findings, attestations, sufficiency signatures). Independently verifiable: the verdicts in it are the origin's record of what it claimed, which is what a third party checks against the signatures. |
-| `import_threat_model_archive` | Restore an audit archive into a target workspace. Fresh `model_id` per import; title collisions auto-suffix. The restored model arrives unverified — the origin's assertion verdicts and run-attested flags are not credited in the importing workspace, which earns them by running verification against code it can reach. |
+| `export_report (scope="model", format="archive")` | Export the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures). Independently verifiable: the verdicts in it are the origin's record of what it claimed, which is what a third party checks against the signatures. |
+| `import_threat_model_archive` | Restore an audit archive into a target workspace as version 1 of a new model. Fresh `model_id` per import; title collisions auto-suffix. It queues no judgement: the result carries the estimate, and `judge_objectives` queues it on request. The restored model arrives unverified — the origin's assertion verdicts and run-attested flags are not credited in the importing workspace, which earns them by running verification against code it can reach. |
 
 ### Entity CRUD
 
@@ -127,12 +127,18 @@ uvx mipiti-mcp
 | `get_control_objectives` | List COs with which controls cover each one. Pair with `get_reachability_verdicts` for per-CO composer reachability state. |
 | `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
 | `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. |
-| `regenerate_controls` | Regenerate controls. Supports `mode="per_co"` and `co_ids` to target specific COs. |
-| `pause_control_generation` | Pause a model's background control generation (for example one started by mistake). A running generation stops at its next step; everything done so far is kept, nothing new is started or billed, and nothing resumes it except `resume_control_generation`. A paused model can then be deleted as usual. |
+| `regenerate_controls` | Propose a regeneration of the controls; it starts nothing. Supports `mode="per_co"` and `co_ids` to target specific COs. |
+| `get_control_generation_status` | The model's proposed control build (`proposal`, with its estimate and the `model_version` and `set_revision` a start must name) and the last build started: its status, progress, and the next action (`hint`). |
+| `start_control_build` | Start the proposed build. Generating or refining a model, editing an entity and `regenerate_controls` each propose one and start nothing. Call once for the proposal and a fresh estimate, then with `confirm_estimate=True` and the `model_version` and `set_revision` reviewed. A started build holds the model until it publishes its result in one step; meanwhile other writers of its controls are refused and reads show the last published controls. |
+| `discard_control_build` | Drop a held build (queued, deferred, paused or blocked): what it staged is discarded, the published controls are untouched, and the build is proposed again. A running build is paused first. |
+| `list_control_revisions` / `undo_control_change` | Every change to a version's controls, with its author; undo the latest one (latest first, no redo). |
+| `revert_model_version` | Replace the latest model version with a copy of the one before it, keeping the replaced version in the history as discarded. |
+| `pause_control_generation` | Pause a model's control build (for example one started by mistake). A running build stops at its next step; everything done so far is kept unpublished, nothing new is started or billed, and nothing resumes it except `resume_control_generation`; `discard_control_build` drops it instead. A paused model can then be deleted as usual. |
 | `resume_control_generation` | Resume control generation that was paused (`get_control_generation_status` reports `paused`), or retry one that stopped before finishing (`blocked`): a service it depends on was unavailable, or some new controls could not be checked for duplicates and were held back. A paused run resumes at once; for a blocked one the services are checked first, so a retry during an outage costs nothing. Either way only the unfinished work runs, billed to the original generation. |
-| `strengthen_controls` | Work on the objectives whose mitigation groups the background judge found do not cover them. Generation stops after drafting and judging unless the workspace strengthens automatically; `get_control_generation_status` reports the `diagnosis`. Call once for the estimate (nothing starts, nothing is charged), then with `confirm_estimate=True` to start a background run. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person. |
+| `strengthen_controls` | Work on the objectives whose mitigation groups the background judge found do not cover them. Generation stops after drafting and judging unless the workspace strengthens automatically; `get_control_generation_status` reports the `diagnosis`. Call once for the estimate (nothing starts, nothing is charged), then with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned to start a background run. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person. |
 | `judge_objectives` | Judge every objective that has no judgement for its current controls and none queued: the diagnosis's `not_judged` count (`judging` counts the ones already queued; wait for those). Call once for the estimate (nothing is queued, nothing is charged), then with `confirm_estimate=True` to queue; any credits it consumes are metered as each judgement runs. Objectives with no mitigation group come back in `ungrouped` and are not judged. Not a repair: a judgement can come back insufficient. Refusals (`409` generation in progress, `402` balance, `503` unavailable) come back as data. |
-| `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. |
+| `import_controls` | Import controls from JSON or free text, auto-mapped to COs and deduplicated. The imported controls await their judgement: the groups they join credit nothing until it is asked for. |
+| `judge_imported_controls` | Estimate, and with `confirm_estimate=True` queue, the judgement of the imported controls awaiting one. |
 | `delete_control` | Soft-delete with justification. Blocked if it's the only control covering a CO. |
 | `check_control_gaps` | AI-powered gap analysis across all controls. |
 | `get_mitigation_groups` / `set_mitigation_groups` | Inspect and modify how controls are grouped into mitigation paths for a CO (AND within groups, OR across groups). Platform AI-evaluates whether proposed changes preserve CO coverage. |
@@ -228,7 +234,7 @@ Proves a feature *does what it was specified to do* (Capability × Condition), v
 
 ### Composition (recursive-tree effective model)
 
-Views over the *effective* model — own entities composed with everything inherited from ancestor threat models on the recursive tree. Backend-gated by `TREE_COMPOSITION_ENABLED`; when off, read tools return a stable empty body with `flag_enabled: false` and the write tool returns 503.
+Views over the *effective* model — own entities composed with everything inherited from ancestor threat models on the recursive tree. Available where the deployment enables composition; where it does not, read tools return a stable empty body with `flag_enabled: false` and the write tool returns 503.
 
 | Tool | Description |
 |------|-------------|
@@ -252,7 +258,7 @@ Views over the *effective* model — own entities composed with everything inher
 
 ### Cross-model dependencies (delegation)
 
-Declared reliance edges (distinct from the parent/composition tree, which is containment): a model depends on a control implemented in *another* model — for systems built on shared services (auth, logging, shared data) rather than sub-parts. The target is always a provider *control* (credit terminates at a proven mechanism). Reliance is workspace-scoped: a consumer can only delegate to provider models in the same workspace (these tools don't see models across workspace boundaries). Backend-gated by `RECURSIVE_TREE_ENABLED`; credit effects further gated by `FOUNDATION_DELEGATION_ENABLED`.
+Declared reliance edges (distinct from the parent/composition tree, which is containment): a model depends on a control implemented in *another* model — for systems built on shared services (auth, logging, shared data) rather than sub-parts. The target is always a provider *control* (credit terminates at a proven mechanism). Reliance is workspace-scoped: a consumer can only delegate to provider models in the same workspace (these tools don't see models across workspace boundaries). Available where the deployment enables the model tree; whether reliance carries credit is also a deployment setting.
 
 | Tool | Description |
 |------|-------------|

@@ -562,8 +562,10 @@ class MipitiClient:
     async def import_model_full(self, envelope: dict, workspace_id: str) -> dict:
         """Import an audit archive envelope into the target workspace.
 
-        Returns {"model_id": "<new id>"}. The caller must have write access
-        to the target workspace; title collisions auto-suffix on the server.
+        Returns ``{"model_id": "<new id>", "judgement": {...}}``: the
+        estimate of judging the imported model, which the import does not
+        queue. The caller must have write access to the target workspace;
+        title collisions auto-suffix on the server.
         """
         return await self._post(
             "/api/models/import",
@@ -648,35 +650,144 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _refusal(resp: httpx.Response) -> dict:
+        """The ``detail`` of a refusal, as a dict a caller can relay."""
+        try:
+            detail = resp.json().get("detail", {})
+        except ValueError:
+            detail = {}
+        if not isinstance(detail, dict):
+            detail = {"message": str(detail)}
+        return detail
+
     async def strengthen_controls(
         self,
         model_id: str,
         co_ids: list[str] | None = None,
         confirm_estimate: bool = False,
+        model_version: int | None = None,
+        set_revision: int | None = None,
     ) -> dict:
         """Estimate, and with ``confirm_estimate`` start, a strengthening of
-        the model's controls.
+        the model's controls. A confirmation names the ``model_version`` and
+        ``set_revision`` the estimate answer reported; each is sent only when
+        given.
 
-        A refusal is an answer, not an error: 409 (a generation for the model
-        is still running) and 402 (the balance cannot cover the estimate) come
-        back as ``{"started": False, "http_status": ..., **detail}`` so a
-        caller can relay them. Any other failure raises."""
+        A refusal is an answer, not an error: 409 (a build holds the model, or
+        the model changed since the estimate) and 402 (the balance cannot
+        cover the estimate) come back as ``{"started": False, "http_status":
+        ..., **detail}`` so a caller can relay them. Any other failure
+        raises."""
         body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
         if co_ids:
             body["co_ids"] = list(co_ids)
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        if set_revision is not None:
+            body["set_revision"] = int(set_revision)
         resp = await self._request_with_idempotency(
             "POST", f"/api/models/{model_id}/controls/strengthen", json=body)
         if resp.status_code in (402, 409):
-            try:
-                detail = resp.json().get("detail", {})
-            except ValueError:
-                detail = {}
-            if not isinstance(detail, dict):
-                detail = {"message": str(detail)}
-            return {"started": False, "http_status": resp.status_code, **detail}
+            return {"started": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
         resp.raise_for_status()
         data = resp.json()
         return {"started": bool(data.get("confirmed")), **data}
+
+    async def start_control_build(
+        self,
+        model_id: str,
+        model_version: int | None = None,
+        set_revision: int | None = None,
+        confirm_estimate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/controls/build.
+
+        Without ``confirm_estimate`` the proposed build and a fresh estimate
+        come back and nothing starts. With it the build starts when
+        ``model_version`` and ``set_revision`` name the model as it stands.
+
+        A refusal is an answer, not an error: 404 (nothing proposed), 409
+        (the model changed since the review, or a build holds it) and 402 (the
+        balance cannot cover the estimate) come back as ``{"started": False,
+        "http_status": ..., **detail}``. Any other failure raises."""
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        if set_revision is not None:
+            body["set_revision"] = int(set_revision)
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/build", json=body)
+        if resp.status_code in (402, 404, 409):
+            return {"started": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
+    async def discard_control_build(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/controls/discard.
+
+        A refusal is an answer, not an error: 409 (the build is running, or
+        nothing is held) comes back as ``{"discarded": False, "http_status":
+        409, **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/discard")
+        if resp.status_code == 409:
+            return {"discarded": False, "http_status": 409, **self._refusal(resp)}
+        resp.raise_for_status()
+        return {"discarded": True, **resp.json()}
+
+    async def list_control_revisions(self, model_id: str, version: int = 0) -> dict:
+        """GET /api/models/{model_id}/controls/revisions[?version=]."""
+        params = {"version": version} if version else None
+        return await self._get(
+            f"/api/models/{model_id}/controls/revisions", params=params)
+
+    async def undo_control_change(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/controls/undo.
+
+        A refusal is an answer, not an error: 409 (a build holds the model,
+        nothing is left to undo, or a control the change touched has changed
+        since) comes back as ``{"applied": False, "http_status": 409,
+        **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/undo")
+        if resp.status_code == 409:
+            return {"applied": False, "http_status": 409, **self._refusal(resp)}
+        resp.raise_for_status()
+        return {"applied": True, **resp.json()}
+
+    async def revert_model_version(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/revert.
+
+        A refusal is an answer, not an error: 409 (a build holds the model,
+        or there is no earlier version) comes back as ``{"applied": False,
+        "http_status": 409, **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/revert")
+        if resp.status_code == 409:
+            return {"applied": False, "http_status": 409, **self._refusal(resp)}
+        resp.raise_for_status()
+        return {"applied": True, **resp.json()}
+
+    async def judge_imported_controls(
+        self, model_id: str, confirm_estimate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/controls/imported/judge.
+
+        Estimate, and with ``confirm_estimate`` queue, the judgement of the
+        imported controls awaiting one. A refusal is an answer, not an error:
+        402, 409 and 503 come back as ``{"confirmed": False, "queued": 0,
+        "http_status": ..., **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/imported/judge",
+            json={"confirm_estimate": bool(confirm_estimate)})
+        if resp.status_code in (402, 409, 503):
+            return {"confirmed": False, "queued": 0,
+                    "http_status": resp.status_code, **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
 
     async def regenerate_controls(
         self,
@@ -685,6 +796,11 @@ class MipitiClient:
         batch_size: int = 0,
         co_ids: list[str] | None = None,
     ) -> dict:
+        """POST /api/models/{model_id}/controls/regenerate.
+
+        Proposes a regeneration and starts nothing: the answer carries the
+        proposal (``status: "proposed"``). A 409 while a build holds the model
+        raises."""
         body: dict = {"mode": mode}
         if batch_size > 0:
             body["batch_size"] = batch_size
@@ -892,8 +1008,8 @@ class MipitiClient:
 
     # ------------------------------------------------------------------
     # Composition (recursive-tree effective model) — read-only.
-    # Gated by ``TREE_COMPOSITION_ENABLED`` on the backend. When the flag
-    # is off, each endpoint returns a stable empty body with
+    # Available only where the deployment enables composition. Where it
+    # does not, each endpoint returns a stable empty body with
     # ``flag_enabled: false`` so callers can render a disabled state
     # without a separate code path.
     # ------------------------------------------------------------------
@@ -1144,7 +1260,7 @@ class MipitiClient:
 
         Returns ``{"model_id": str, "flag_enabled": bool, "rejections":
         [<rejection>, ...]}``. ``flag_enabled: false`` (with an empty
-        list) when ``TREE_COMPOSITION_ENABLED`` is off; the same empty
+        list) where composition is not enabled; the same empty
         shape is returned with ``flag_enabled: true`` when the
         rejection store is not configured.
         """
@@ -1195,7 +1311,7 @@ class MipitiClient:
         ``{assets, attackers, components}``, no LCA exists, conflict
         resolutions are stale, or the lift itself is structurally
         refused; 404 if the route model or either source descendant is
-        missing; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+        missing; 503 where composition is not enabled.
         """
         body: dict = {
             "kind": kind,
@@ -1249,8 +1365,8 @@ class MipitiClient:
         Errors: 400 if required fields are missing, the kind isn't in
         ``{assets, attackers, components}``, or the split itself is
         structurally refused; 404 if the ancestor or any target
-        descendant is missing; 503 if ``TREE_COMPOSITION_ENABLED`` is
-        off.
+        descendant is missing; 503 where composition is not
+        enabled.
         """
         return await self._post(
             f"/api/models/{model_id}/composition/split",
@@ -1277,7 +1393,7 @@ class MipitiClient:
         state has materially evolved.
 
         Errors: 404 if the cited event doesn't exist or belongs to a
-        different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+        different model; 503 where composition is not enabled.
         """
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/lift/{lift_id}/undo/preview",
@@ -1302,8 +1418,8 @@ class MipitiClient:
         Errors: 409 with ``detail = {message, refusal: {reasons:
         [...]}}`` when the divergence detector refuses; 404 if the
         cited event doesn't exist or belongs to a different model;
-        400 on payload / event-type mismatch; 503 if
-        ``TREE_COMPOSITION_ENABLED`` is off.
+        400 on payload / event-type mismatch; 503 where
+        composition is not enabled.
         """
         return await self._post(
             f"/api/models/{model_id}/composition/lift/{lift_id}/undo",

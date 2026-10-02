@@ -68,6 +68,12 @@ from mipiti_mcp.server import (
     query_threat_model,
     refine_threat_model,
     regenerate_controls,
+    start_control_build,
+    discard_control_build,
+    list_control_revisions,
+    undo_control_change,
+    revert_model_version,
+    judge_imported_controls,
     remove_entity,
     remove_evidence,
     remove_model_from_group,
@@ -167,7 +173,8 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                           "dispositioned": 0},
             "scope": ["CO2", "CO5", "CO7"],
             "estimate": {"credits": 15.0, "per_objective": 5.0,
-                         "basis": "bootstrap", "objectives": 3}},
+                         "basis": "bootstrap", "objectives": 3},
+            "model_version": 4, "set_revision": 7},
         "judge_objectives": {
             "confirmed": False, "queued": 0, "model_id": "tm-001",
             "model_version": 4,
@@ -179,7 +186,47 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                          "computed_at": "2026-09-29T00:00:00+00:00",
                          "rate_version": "v1"},
             "message": "Estimate only; nothing queued."},
-        "regenerate_controls": {"job_id": "job_regen"},
+        "regenerate_controls": {
+            "model_id": "tm-001", "model_version": 4, "status": "proposed",
+            "proposal": {"mode": "fresh", "objective_ids": ["CO1", "CO2"],
+                     "objective_count": 2, "estimated_credits": 12.0,
+                     "model_version": 4, "set_revision": 7,
+                     "proposed_by": "u-1", "proposed_at": "2026-10-02T00:00:00+00:00",
+                     "reason": "regeneration requested", "options": {}},
+            "message": "A regeneration is proposed."},
+        "start_control_build": {
+            "model_id": "tm-001", "started": False,
+            "proposal": {"mode": "fresh", "objective_ids": ["CO1", "CO2"],
+                     "objective_count": 2, "estimated_credits": 12.0,
+                     "model_version": 4, "set_revision": 7,
+                     "proposed_by": "u-1", "proposed_at": "2026-10-02T00:00:00+00:00",
+                     "reason": "regeneration requested", "options": {}},
+            "message": "Review the model, then start it."},
+        "discard_control_build": {
+            "discarded": True, "model_id": "tm-001", "status": "discarded",
+            "proposal": {"mode": "fresh", "objective_ids": ["CO1", "CO2"],
+                     "objective_count": 2, "estimated_credits": 12.0,
+                     "model_version": 4, "set_revision": 7,
+                     "proposed_by": "u-1", "proposed_at": "2026-10-02T00:00:00+00:00",
+                     "reason": "regeneration requested", "options": {}}},
+        "list_control_revisions": {
+            "model_id": "tm-001", "model_version": 4, "latest_version": 4,
+            "discarded": False, "undo_target": 7,
+            "revisions": [{"revision": 7, "job_id": "", "started_by": "u-1",
+                           "started_at": "2026-10-02T00:00:00+00:00",
+                           "controls": ["CTRL-01"], "undo_of": None,
+                           "undone_by": "", "undone_at": ""}]},
+        "undo_control_change": {
+            "applied": True, "model_id": "tm-001", "model_version": 4,
+            "undone": 7, "revision": 8, "controls": ["CTRL-01"]},
+        "revert_model_version": {
+            "applied": True, "model_id": "tm-001", "model_version": 5,
+            "copied_from": 3, "discarded": 4},
+        "judge_imported_controls": {
+            "confirmed": False, "queued": 0, "model_id": "tm-001",
+            "awaiting_judgement": ["CTRL-09"], "co_ids": ["CO2"],
+            "scope": ["CO2"], "ungrouped": [],
+            "estimate": {"credits": 3.0, "objectives": 1}},
         "update_control_status": {"id": "CTRL-01", "status": "implemented"},
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
         "remove_evidence": {"control_id": "CTRL-01", "evidence_count": 0},
@@ -1601,17 +1648,183 @@ class TestGetControls:
 
 class TestRegenerateControls:
     @pytest.mark.asyncio
-    async def test_with_backend_job(self) -> None:
+    async def test_returns_the_proposal_and_starts_nothing(self) -> None:
         mock = _mock_client()
-        mock.get_operation = AsyncMock(return_value={
-            "status": "completed",
-            "result": {"controls": [{"id": "CTRL-01"}], "total": 1},
-        })
-        ctx = _mock_ctx()
+        mock.get_operation = AsyncMock()
         with _patch_client(mock):
-            result = await regenerate_controls(server_version="0", model_id="tm-001", ctx=ctx)
-        assert result["total"] == 1
-        mock.get_operation.assert_awaited_once_with("job_regen")
+            result = await regenerate_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                co_ids="CO1, CO2")
+        assert result["status"] == "proposed"
+        assert result["proposal"]["model_version"] == 4
+        assert result["proposal"]["set_revision"] == 7
+        mock.regenerate_controls.assert_awaited_once_with(
+            "tm-001", mode="batch", batch_size=0, co_ids=["CO1", "CO2"])
+        mock.get_operation.assert_not_awaited()
+        mock.start_control_build.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_held_model_raises(self) -> None:
+        mock = _mock_client(regenerate_controls=AsyncMock(side_effect=_http_error(
+            409, "A control build for this model is generating.")))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="409"):
+                await regenerate_controls(
+                    server_version="0", model_id="tm-001", ctx=_mock_ctx())
+
+    def test_the_tool_says_it_starts_nothing(self) -> None:
+        doc = regenerate_controls.__doc__ or getattr(
+            getattr(regenerate_controls, "fn", None), "__doc__", "") or ""
+        assert "Starts nothing" in doc and "start_control_build" in doc
+        assert "generation_active" in doc
+
+
+class TestStartControlBuild:
+    @pytest.mark.asyncio
+    async def test_the_estimate_is_the_default(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await start_control_build(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["started"] is False
+        assert result["proposal"]["estimated_credits"] == 12.0
+        mock.start_control_build.assert_awaited_once_with(
+            "tm-001", model_version=None, set_revision=None,
+            confirm_estimate=False)
+
+    @pytest.mark.asyncio
+    async def test_the_reviewed_values_reach_the_client(self) -> None:
+        mock = _mock_client(start_control_build=AsyncMock(return_value={
+            "model_id": "tm-001", "started": True, "job_id": "j-1",
+            "model_version": 4, "status": "queued"}))
+        with _patch_client(mock):
+            result = await start_control_build(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                model_version=4, set_revision=7, confirm_estimate=True)
+        assert result["started"] is True and result["status"] == "queued"
+        mock.start_control_build.assert_awaited_once_with(
+            "tm-001", model_version=4, set_revision=7, confirm_estimate=True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("refusal", [
+        {"started": False, "http_status": 409, "code": "review_stale",
+         "model_version": 5, "set_revision": 1, "estimated_credits": 12.0},
+        {"started": False, "http_status": 409, "code": "generation_active",
+         "status": "generating"},
+        {"started": False, "http_status": 404, "code": "no_proposal"},
+        {"started": False, "http_status": 402, "code": "insufficient_credits"},
+    ])
+    async def test_a_refusal_is_returned_not_raised(self, refusal: dict) -> None:
+        mock = _mock_client(start_control_build=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await start_control_build(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                model_version=4, set_revision=7, confirm_estimate=True)
+        assert result == refusal
+
+    def test_the_tool_names_the_review_values(self) -> None:
+        doc = start_control_build.__doc__ or getattr(
+            getattr(start_control_build, "fn", None), "__doc__", "") or ""
+        for term in ("model_version", "set_revision", "confirm_estimate",
+                     "review_stale", "generation_active", "no_proposal"):
+            assert term in doc, term
+
+
+class TestDiscardControlBuild:
+    @pytest.mark.asyncio
+    async def test_discard_passes_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await discard_control_build(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["discarded"] is True and result["status"] == "discarded"
+        assert result["proposal"]["mode"] == "fresh"
+        mock.discard_control_build.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_a_running_build_is_returned_not_raised(self) -> None:
+        refusal = {"discarded": False, "http_status": 409, "code": "pause_first",
+                   "status": "generating"}
+        mock = _mock_client(discard_control_build=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await discard_control_build(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result == refusal
+
+    def test_pause_names_discard(self) -> None:
+        doc = pause_control_generation.__doc__ or getattr(
+            getattr(pause_control_generation, "fn", None), "__doc__", "") or ""
+        assert "discard_control_build" in doc
+
+
+class TestControlSetHistory:
+    @pytest.mark.asyncio
+    async def test_revisions_pass_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await list_control_revisions(
+                server_version="0", model_id="tm-001", version=4)
+        assert result["undo_target"] == 7
+        assert result["revisions"][0]["controls"] == ["CTRL-01"]
+        mock.list_control_revisions.assert_awaited_once_with("tm-001", version=4)
+
+    @pytest.mark.asyncio
+    async def test_undo_passes_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await undo_control_change(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["applied"] is True and result["undone"] == 7
+        mock.undo_control_change.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    async def test_revert_passes_through(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await revert_model_version(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["model_version"] == 5 and result["discarded"] == 4
+        mock.revert_model_version.assert_awaited_once_with("tm-001")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("code", ["nothing_to_undo", "set_diverged",
+                                      "generation_active"])
+    async def test_an_undo_refusal_is_returned_not_raised(self, code: str) -> None:
+        refusal = {"applied": False, "http_status": 409, "code": code,
+                   "message": "m"}
+        mock = _mock_client(undo_control_change=AsyncMock(return_value=refusal))
+        with _patch_client(mock):
+            result = await undo_control_change(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result == refusal
+
+
+class TestJudgeImportedControls:
+    @pytest.mark.asyncio
+    async def test_the_estimate_is_the_default(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await judge_imported_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+        assert result["confirmed"] is False
+        assert result["awaiting_judgement"] == ["CTRL-09"]
+        mock.judge_imported_controls.assert_awaited_once_with(
+            "tm-001", confirm_estimate=False)
+
+    @pytest.mark.asyncio
+    async def test_confirm_reaches_the_client(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await judge_imported_controls(
+                server_version="0", model_id="tm-001", ctx=_mock_ctx(),
+                confirm_estimate=True)
+        mock.judge_imported_controls.assert_awaited_once_with(
+            "tm-001", confirm_estimate=True)
+
+    def test_import_controls_says_its_controls_await_judgement(self) -> None:
+        doc = import_controls.__doc__ or getattr(
+            getattr(import_controls, "fn", None), "__doc__", "") or ""
+        assert "awaiting_judgement" in doc and "judge_imported_controls" in doc
 
 
 class TestUpdateControlStatus:
@@ -5292,15 +5505,20 @@ class TestControlGenerationStatus:
     async def test_generate_surfaces_controls_status(self) -> None:
         from mipiti_mcp.types import GenerateResult, ThreatModel
         _tm = ThreatModel.model_validate(SAMPLE_THREAT_MODEL)
+        proposal = {"mode": "fresh", "objective_ids": ["CO1"],
+                    "objective_count": 4, "estimated_credits": 9.0,
+                    "model_version": 1, "set_revision": 0}
         res = GenerateResult(threat_model=_tm, model_id="tm-001", version=1,
-                             controls_status="queued", controls_expected=4)
+                             controls_status="proposed", controls_expected=4,
+                             proposal=proposal)
         mock = _mock_client(generate_threat_model=AsyncMock(return_value=res))
         ctx = _mock_ctx()
         with _patch_client(mock):
             out = await generate_threat_model(
                 server_version="0", feature_description="x", ctx=ctx)
-        assert out["controls_status"] == "queued"
+        assert out["controls_status"] == "proposed"
         assert out["controls_expected"] == 4
+        assert out["proposal"] == proposal
 
     @pytest.mark.asyncio
     async def test_generate_omits_controls_status_when_inline(self) -> None:
@@ -5322,7 +5540,8 @@ class TestStrengthenControls:
         assert result["started"] is False
         assert result["estimate"]["credits"] == 15.0
         mock.strengthen_controls.assert_awaited_once_with(
-            "tm-001", co_ids=None, confirm_estimate=False)
+            "tm-001", co_ids=None, confirm_estimate=False,
+            model_version=None, set_revision=None)
 
     @pytest.mark.asyncio
     async def test_confirm_and_scope_reach_the_client(self) -> None:
@@ -5330,9 +5549,11 @@ class TestStrengthenControls:
         with _patch_client(mock):
             await strengthen_controls(
                 server_version="0", model_id="tm-001", ctx=_mock_ctx(),
-                co_ids="CO2, CO5", confirm_estimate=True)
+                co_ids="CO2, CO5", confirm_estimate=True,
+                model_version=4, set_revision=7)
         mock.strengthen_controls.assert_awaited_once_with(
-            "tm-001", co_ids=["CO2", "CO5"], confirm_estimate=True)
+            "tm-001", co_ids=["CO2", "CO5"], confirm_estimate=True,
+            model_version=4, set_revision=7)
 
     @pytest.mark.asyncio
     async def test_a_refusal_is_returned_not_raised(self) -> None:

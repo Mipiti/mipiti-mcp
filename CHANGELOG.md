@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Control builds are proposed, then started.** `regenerate_controls` returns
+  the proposed build (`status: "proposed"`, `proposal`) and starts nothing;
+  `generate_threat_model` and `refine_threat_model` return `controls_status:
+  "proposed"` with the same `proposal`. `get_control_generation_status`
+  describes the proposal, the `discarded` status, and a held build's staging
+  copy. `strengthen_controls` takes the `model_version` and `set_revision` its
+  estimate reported, and a confirmation without them is refused as
+  `review_stale`. `import_controls` says its controls await their judgement.
+  `import_threat_model_archive` and the archive export describe the model's
+  current state, imported as version 1 with no judgement queued; the import
+  result carries the judgement estimate.
+- The README and client docstrings describe composition and reliance as
+  deployment settings rather than naming them.
+
 - **Reading a verdict does not queue its re-evaluation.** The
   `get_verification_report` and `get_sufficiency` descriptions no longer say a
   stale read triggers one: the write that changed a control queues its own, so
@@ -24,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and recompiled the lockfiles.
 
 ### Added
+
+- **`start_control_build` and `discard_control_build`.** Start the model's
+  proposed control build, naming the model version and set revision reviewed
+  (estimate first, then `confirm_estimate=True`), or drop a held build,
+  whose staged work is discarded while the published controls stay as they
+  were. Refusals (`no_proposal`, `review_stale`, `generation_active`,
+  `pause_first`, `not_held`, `402`) come back as data.
+- **`list_control_revisions`, `undo_control_change`, `revert_model_version`.**
+  Every change to a version's controls with its author; undo the latest
+  change; revert the latest model version to a copy of the one before it.
+- **`judge_imported_controls`.** Estimate, and on confirmation queue, the
+  judgement of the imported controls awaiting one.
 
 - **`judge_objectives` — judge every objective nothing else will.** An
   objective whose mitigation group has no judgement for its current controls,

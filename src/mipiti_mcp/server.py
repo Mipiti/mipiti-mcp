@@ -97,8 +97,8 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `rename_threat_model` — rename a model (metadata only, no new version). Model titles must be unique within a workspace (case-insensitive); pick a distinct name on the first try to avoid a 409 retry.
 - `set_threat_model_parent` — wire a model under (or detach it from) a parent on the recursive composition tree. Pass `parent_id=None` to clear. Server rejects cycles and over-deep chains; bumps version on success.
 - `delete_threat_model` — permanently delete a model and all its data.
-- `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive (every version, controls, assertions with CI verdicts, findings, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces the group/tag auditor report (see Tags).
-- `import_threat_model_archive` — restore an audit archive into a workspace. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach.
+- `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces the group/tag auditor report (see Tags).
+- `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
 
 ## Controls and assertions
 
@@ -120,9 +120,11 @@ A threat model produces control objectives. Controls are derived from these and 
 - `set_mitigation_groups` — set which controls are required vs defense-in-depth for a CO. Use when a control is blocking a CO but is redundant with existing mitigations (e.g., HMAC signing redundant with TLS + content hash), or when restructuring alternative mitigation paths. Groups define: within group AND (all required), across groups OR (any complete group mitigates). AI-gated: rejected if the new structure doesn't satisfy the CO.
 - `refine_control` — modify a control's description if it doesn't match the actual security requirement. **Side effect on accepted refinements**: every assertion attached to the control is superseded — their claims were authored against the prior description and may not be on-topic for the new one. Response carries `superseded_assertions: <count>`. Re-submit any assertion that still applies; superseded rows remain in history.
 - `delete_control` — soft-delete a control with justification. Blocked if it is the only control covering a CO — add a replacement first.
-- `import_controls` — import existing controls from JSON or free text, auto-mapped to COs and deduplicated against existing controls.
+- `import_controls` — import existing controls from JSON or free text, auto-mapped to COs and deduplicated against existing controls. They await their judgement: the groups they join credit nothing until `judge_imported_controls` is asked for.
 - `add_evidence` / `remove_evidence` — attach auxiliary metadata (docs, links, artifacts) to a control. Evidence is contextual only — it does NOT prove a control is implemented. Only assertions do that.
-- `regenerate_controls` — regenerate controls. Supports `mode="per_co"` for thorough single-responsibility generation, and `co_ids="CO1,CO5"` to regenerate only specific COs (preserving other controls). Controls whose descriptions survive unchanged keep their implementation status, assertions, and mappings.
+- `regenerate_controls` — propose a regeneration of the controls (it starts nothing; `start_control_build` starts it). Supports `mode="per_co"` for thorough single-responsibility generation, and `co_ids="CO1,CO5"` to regenerate only specific COs (preserving other controls). Controls whose descriptions survive unchanged keep their implementation status, assertions, and mappings.
+- `start_control_build` / `discard_control_build` — start the model's proposed control build after reviewing it, or drop a held one. See **Control builds** below.
+- `list_control_revisions` / `undo_control_change` / `revert_model_version` — every change to a version's controls with its author; undo the latest change (latest first, no redo); revert the latest model version to a copy of the one before it.
 
 **Workflow — handle in this order:**
 
@@ -171,7 +173,7 @@ If the alternative drops a framework binding the original carried, the platform 
 
 **Before acting on any risk_reason, check whether a control is actually REQUIRED for the objective.** `get_mitigation_groups` splits a CO's controls into numbered groups (within=AND, across=OR) and `defense_in_depth`. Only the groups earn mitigation credit. If a CO has controls attached but ALL of them sit in `defense_in_depth`, or it has no groups at all, then nothing is required to mitigate it and the CO cannot leave at-risk no matter how many controls you generate or how much evidence you submit. That is a modelling gap, not an evidence gap: decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups` (AI-gated, so the structure has to actually satisfy the CO). Generating or proving controls in this state is wasted work.
 
-**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → generate controls with `regenerate_controls`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.) `no_mitigation_group` → decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups`; do NOT generate more controls, the ones that matter are already there. `awaiting_judgement` → call `judge_objective` on the CO, or `judge_objectives` for all of them at once. Nothing has decided whether its group covers it, so neither implementing nor adding controls changes the reason; the remedy is the judgement. It may come back insufficient, which moves the objective to `coverage_gap` / `insufficient_by_design` and names real work — that is the answer, not a failure.
+**Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → the CO has no controls: read the model's `proposal` in `get_control_generation_status` (or propose one with `regenerate_controls`) and, once the user agrees to its estimate, start it with `start_control_build`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.) `no_mitigation_group` → decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups`; do NOT generate more controls, the ones that matter are already there. `awaiting_judgement` → call `judge_objective` on the CO, or `judge_objectives` for all of them at once. Nothing has decided whether its group covers it, so neither implementing nor adding controls changes the reason; the remedy is the judgement. It may come back insufficient, which moves the objective to `coverage_gap` / `insufficient_by_design` and names real work — that is the answer, not a failure.
 
 ## Gap discovery
 
@@ -376,11 +378,13 @@ _INSTRUCTIONS_ASYNC = """\
 
 ## Long-running operations
 
-`generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, `regenerate_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
+`generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
 
-**Controls may be generated asynchronously.** `generate_threat_model` and `refine_threat_model` return the model as soon as it is built, but the implementation controls can then be authored in the background. If the result carries a `controls_status` other than `complete` (e.g. `queued`, `generating`, `deferred`), the controls are NOT ready yet — do not report them as done. Poll `get_control_generation_status(model_id)` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; generation resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: the controls so far are saved but not final, and only `resume_control_generation` continues it. To stop a generation the user did not want (for example one started by mistake), call `pause_control_generation`; a paused model can then be deleted as usual.
+**Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits`, and the `model_version` and `set_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, confirm_estimate=True)`. A `review_stale` refusal means the model or its controls changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
-**Strengthening runs when asked.** A completed generation reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: to have them judged now, call `judge_objectives` (estimate first, then `confirm_estimate=True`). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
+**Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_control_change` undoes the latest change (latest first, no redo); `revert_model_version` replaces the latest model version with a copy of the one before it, keeping the replaced one in the history as discarded.
+
+**Strengthening runs when asked.** A completed build reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: to have them judged now, call `judge_objectives` (estimate first, then `confirm_estimate=True`). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
 """
 
 
@@ -670,6 +674,21 @@ def _api_error(exc: Exception) -> ToolError:
     return ToolError(str(exc))
 
 
+def _controls_build_fields(result: Any) -> dict:
+    """What a generate/refine result says about the model's controls: the
+    ``controls_status``, the proposed build (``proposal``) and its objective
+    count (``controls_expected``), each only when the backend sent it."""
+    out: dict = {}
+    for key in ("controls_status", "proposal"):
+        value = getattr(result, key, None)
+        if value:
+            out[key] = value
+    expected = getattr(result, "controls_expected", None)
+    if expected is not None:
+        out["controls_expected"] = expected
+    return out
+
+
 # ------------------------------------------------------------------
 # Tool implementations
 # ------------------------------------------------------------------
@@ -757,11 +776,16 @@ async def generate_threat_model(
         queued background work resumes at ``governor.resets_at`` — it is never
         dropped. Absent when no budget applies.
 
-        May also carry ``controls_status`` (+ ``controls_expected``) when
-        controls are authored asynchronously: if it is anything other than
-        ``complete``, the controls aren't ready yet — poll
-        ``get_control_generation_status(model_id)`` until terminal, then read
-        the controls. Absent when controls were built inline.
+        Also carries ``controls_status``. A saved model's controls are built
+        only by a build someone starts, so generation builds none itself:
+        ``proposed`` means a control build is proposed, and ``proposal``
+        (with ``controls_expected``, its objective count) says what it would
+        build, its ``estimated_credits``, and the ``model_version`` and
+        ``set_revision`` a start must name. Review the model with the user,
+        then call ``start_control_build`` with those values and
+        ``confirm_estimate=True``. ``none_owed`` means nothing is owed;
+        ``unavailable`` / ``error`` mean the proposal could not be recorded
+        (read ``get_control_generation_status``, which carries any proposal).
 
     Return shape (similar-model short-circuit):
         ``{"similar_models": [{"id", "title", "reason"}, ...],
@@ -832,8 +856,6 @@ async def generate_threat_model(
                 "retry generate_threat_model."
             )
         gov = getattr(result, "governor", None)
-        cs = getattr(result, "controls_status", None)
-        ce = getattr(result, "controls_expected", None)
         return {
             "model_id": model_id,
             "version": tm.version,
@@ -842,11 +864,7 @@ async def generate_threat_model(
             "attacker_count": len(tm.attackers),
             "control_objective_count": len(tm.control_objectives),
             **({"governor": gov} if gov else {}),
-            # Async control generation: when present, controls are being authored
-            # in the background — poll get_control_generation_status until the
-            # status is terminal, then read the controls.
-            **({"controls_status": cs} if cs else {}),
-            **({"controls_expected": ce} if ce is not None else {}),
+            **_controls_build_fields(result),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -908,6 +926,10 @@ async def refine_threat_model(
     analysis spend; when ``governor.status`` is ``warning`` or ``exhausted``,
     relay it — queued background work resumes at ``governor.resets_at`` and is
     never dropped.
+
+    ``controls_status`` / ``proposal`` / ``controls_expected`` say what the
+    refined model owes in controls, as for ``generate_threat_model``: a
+    proposed build that runs only when ``start_control_build`` starts it.
     """
     # See generate_threat_model for rationale on the last-total tracker.
     last_progress_total: list[float] = [0.0, 0.0]
@@ -952,10 +974,7 @@ async def refine_threat_model(
                 getattr(result, "semantic_rejections", []) or []
             ),
             **({"governor": _gov} if (_gov := getattr(result, "governor", None)) else {}),
-            **({"controls_status": _cs}
-               if (_cs := getattr(result, "controls_status", None)) else {}),
-            **({"controls_expected": _ce}
-               if (_ce := getattr(result, "controls_expected", None)) is not None else {}),
+            **_controls_build_fields(result),
         }
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -1315,6 +1334,11 @@ async def import_threat_model_archive(
     the envelope round-trips through ``export_report (scope="model", format="archive")``
     first.
 
+    The archive carries the model's current state, and the import creates it
+    as version 1 of a new model: its controls, live assertions, decisions in
+    force and open findings. Earlier versions, activity and chat are not
+    carried.
+
     The restored model arrives UNVERIFIED. The tier verdicts on its
     assertions, the attested flag on a verification result, and the facts a
     verification run reported are the origin's record of what it claimed —
@@ -1322,7 +1346,9 @@ async def import_threat_model_archive(
     belongs to the run that produced it and the judge that decided it, and
     this workspace has neither. Verification is earned here by running it
     against code this workspace can reach, so plan for a restored model to
-    read unverified until it has.
+    read unverified until it has. The same holds for the judgements of its
+    mitigation groups: the import queues none, and its objectives read
+    awaiting judgement until someone asks for them.
 
     Args:
         envelope: The full archive dict returned by
@@ -1330,7 +1356,13 @@ async def import_threat_model_archive(
         workspace_id: Target workspace to import into.
 
     Returns:
-        ``{"model_id": "<new id>"}`` — the id of the newly created model.
+        ``{"model_id": "<new id>", "judgement": {...}}``. ``judgement`` is
+        what judging the imported model would cost (the answer
+        ``judge_objectives`` gives without ``confirm_estimate``: ``scope``,
+        ``estimate``, ``ungrouped``), with ``available: false`` when no
+        estimate could be made. Show it to the user; call
+        ``judge_objectives(model_id, confirm_estimate=True)`` to queue the
+        judgements once they agree.
     """
     if not isinstance(envelope, dict):
         raise ToolError("envelope must be a dict returned by export_threat_model_archive.")
@@ -1351,37 +1383,57 @@ async def get_control_generation_status(
     model_id: str,
     ctx: Context,
 ) -> dict:
-    """Poll the async control-generation status for a threat model.
+    """Read a threat model's control build: the one proposed, and the last
+    one started.
 
-    When ``generate_threat_model`` / ``refine_threat_model`` return a
-    ``controls_status`` other than ``complete``, controls are being authored in
-    the background — poll this until a terminal state, then read the controls.
+    A model's controls are built only by a build someone starts. A write that
+    owes controls — generating or refining the model, editing an entity,
+    ``regenerate_controls`` — PROPOSES a build and starts nothing. While a
+    started build runs it holds the model: it works on a staging copy that no
+    read sees, other writers of the model's controls are refused, and reads
+    show the last published controls until the build publishes its result in
+    one step.
 
-    Return shape: ``{status, mode, target_cos, ready_cos, error_message}``
-    plus exactly ONE timing field (or ``{status: "none"}`` when controls were
-    built inline). ``status`` is ``queued | generating | deferred | pausing |
-    paused | blocked | complete | failed | skipped | none``:
-    - ``deferred`` — today's background-analysis budget is used up; generation
+    ``proposal`` is the proposed build, or null: ``mode``, ``objective_ids``,
+    ``objective_count``, ``estimated_credits``, ``proposed_by``,
+    ``proposed_at``, ``reason``, and the ``model_version`` and
+    ``set_revision`` a start must name. Review the model with the user, then
+    call ``start_control_build`` with those two values and
+    ``confirm_estimate=True``. Nothing runs until then, so a proposal is not
+    something to wait for.
+
+    Return shape: ``{status, mode, target_cos, ready_cos, error_message,
+    terminal, hint, proposal}`` plus exactly ONE timing field
+    (``{status: "none", proposal}`` when no build has run). ``hint`` names
+    the next action. ``status`` is ``queued | generating | deferred |
+    pausing | paused | blocked | complete | failed | skipped | discarded |
+    none``; the first six hold the model:
+    - ``deferred`` — today's background-analysis budget is used up; the build
       resumes automatically at the daily reset (relay this to the user).
     - ``pausing`` — someone paused the run and it is stopping at its next
       step (it starts nothing new). Not terminal: poll again shortly.
-    - ``paused`` — stopped by request, with the controls written so far saved
-      (NOT final). ``terminal`` is true: stop polling. Nothing resumes it but
-      ``resume_control_generation``, which continues where it stopped and
-      redoes and re-bills nothing. ``paused`` carries ``since``, ``by_self``
-      (whether the caller paused it) and ``resumable``. Do NOT call
-      ``regenerate_controls`` — it starts over and bills everything again.
-    - ``blocked`` — the run paused before finishing, with the controls written
-      so far saved (NOT final yet). ``terminal`` is true: stop polling.
+    - ``paused`` — stopped by request, with its work so far kept in staging
+      (NOT published). ``terminal`` is true: stop polling. Nothing resumes it
+      but ``resume_control_generation``, which continues where it stopped and
+      redoes and re-bills nothing; ``discard_control_build`` drops it instead.
+      ``paused`` carries ``since``, ``by_self`` (whether the caller paused
+      it) and ``resumable``. Do NOT call ``regenerate_controls`` to restart
+      it: it is refused while the build holds the model, and a discarded
+      build's work is thrown away.
+    - ``blocked`` — the run paused before finishing, with its work so far kept
+      in staging (NOT published). ``terminal`` is true: stop polling.
       ``blocked`` carries ``code``, ``message``, ``resumable``, ``auto_resume``
       (whether it resumes by itself) and ``retry_after_seconds``. ``code`` is
       ``dependency_unavailable`` (a service the platform depends on was
       unavailable) or ``analysis_incomplete`` (some new controls could not be
       checked for duplicates, so they were held back). Relay ``message`` to
-      the user; do NOT call ``regenerate_controls`` (it re-authors and
-      re-bills everything already done). Retry with
+      the user; do NOT discard it to start again with ``regenerate_controls``
+      (that re-authors and re-bills everything already done). Retry with
       ``resume_control_generation`` once ``retry_after_seconds`` has passed.
     - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
+      Nothing was published.
+    - ``discarded`` — someone discarded the held build; nothing it did was
+      published, and it is proposed again (``proposal``).
     - ``ready_cos`` / ``target_cos`` — coverage progress.
     - ``selfheal_activity`` — WHILE RUNNING, once drafting is done: what the
       strengthening round in flight is working on. Carries ``round``,
@@ -1421,10 +1473,10 @@ async def get_control_generation_status(
       applicable). ``uncovered`` and ``undecided`` are what
       ``strengthen_controls`` works on.
 
-    Read-only; no side effects (polling does not trigger or alter generation).
+    Read-only; no side effects (polling neither starts nor alters a build).
 
     Args:
-        model_id: ID of the threat model whose control-generation status to poll.
+        model_id: ID of the threat model whose control build to read.
     """
     try:
         return _dump(
@@ -1441,12 +1493,15 @@ async def pause_control_generation(
 ) -> dict:
     """Pause a model's background control generation. Mutating.
 
-    Use when the user asks to stop a generation — for example one started by
+    Use when the user asks to stop a build — for example one started by
     mistake — or before deleting a model whose controls are still being
-    generated. A running generation stops at its next step (``status``
-    ``pausing``, then ``paused``); a queued or waiting one is paused at once.
-    Everything already done is kept; nothing new is started or billed; nothing
-    resumes it except ``resume_control_generation``. Pausing is idempotent.
+    built. A running build stops at its next step (``status`` ``pausing``,
+    then ``paused``); a queued or waiting one is paused at once. Everything
+    already done is kept in the build's staging copy; nothing is published,
+    nothing new is started or billed, and nothing resumes it except
+    ``resume_control_generation``. A paused build still holds the model: to
+    drop it instead, call ``discard_control_build`` once it shows ``paused``.
+    Pausing is idempotent.
 
     Returns one of:
     - ``{paused: true, model_id, status, status_detail}`` — ``status`` is
@@ -1512,6 +1567,8 @@ async def strengthen_controls(
     ctx: Context,
     co_ids: Optional[str] = None,
     confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
+    set_revision: Optional[int] = None,
 ) -> dict:
     """Strengthen a model's controls: work on the objectives whose mitigation
     groups the background judge found do not cover them. Mutating only with
@@ -1527,12 +1584,16 @@ async def strengthen_controls(
 
     1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
        nothing is charged; the answer carries ``diagnosis``, ``scope`` (the
-       objectives it would work on) and ``estimate`` (``credits``,
-       ``per_objective``, ``basis``). Show the user the estimate.
-    2. Call again with ``confirm_estimate=True`` once they agree. A
-       background run starts (``started: true``, ``status: "queued"``);
-       poll ``get_control_generation_status`` until terminal. It can be
-       paused, resumed and stopped by deleting the model like any other run.
+       objectives it would work on), ``estimate`` (``credits``,
+       ``per_objective``, ``basis``) and the ``model_version`` and
+       ``set_revision`` the model stands at. Show the user the estimate.
+    2. Call again with ``confirm_estimate=True`` and the ``model_version``
+       and ``set_revision`` from step 1 once they agree: the confirmation is
+       their review of the model as it stood. A background run starts
+       (``started: true``, ``status: "queued"``); poll
+       ``get_control_generation_status`` until terminal. It holds the model
+       like any build, and can be paused, resumed, discarded and stopped by
+       deleting the model.
 
     A gap only the environment can close — how the system is deployed or
     hosted, a third party it relies on — is never answered with a control.
@@ -1543,8 +1604,12 @@ async def strengthen_controls(
     ``decide_proposal``). A rejected precondition is not proposed again.
 
     Refusals come back as data:
+    - ``{started: false, http_status: 409, code: "review_stale",
+      model_version, set_revision, estimate}`` — the model or its controls
+      changed since the estimate (or the confirmation named no values).
+      Review again and confirm with the values returned.
     - ``{started: false, http_status: 409, code: "generation_active"}`` — a
-      generation for the model is still running; wait for it to finish.
+      build holds the model; wait for it to finish, or resume or discard it.
     - ``{started: false, http_status: 402, ...}`` — the balance this
       workspace bills to cannot cover the estimate.
 
@@ -1555,13 +1620,18 @@ async def strengthen_controls(
             for all of them.
         confirm_estimate: False (default) returns the estimate and starts
             nothing; True starts the run.
+        model_version: With ``confirm_estimate=True``: the ``model_version``
+            the estimate reported.
+        set_revision: With ``confirm_estimate=True``: the ``set_revision``
+            the estimate reported.
     """
     parsed: list[str] | None = None
     if co_ids:
         parsed = [c.strip() for c in co_ids.split(",") if c.strip()]
     try:
         return _dump(await _get_client().strengthen_controls(
-            model_id, co_ids=parsed, confirm_estimate=confirm_estimate))
+            model_id, co_ids=parsed, confirm_estimate=confirm_estimate,
+            model_version=model_version, set_revision=set_revision))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1645,20 +1715,30 @@ async def regenerate_controls(
     batch_size: int = 0,
     co_ids: Optional[str] = None,
 ) -> dict:
-    """Regenerate controls from the model's control objectives. Mutating.
+    """Propose a regeneration of the model's controls. Starts nothing.
 
-    Re-authors controls from the current COs. Controls whose descriptions
-    survive regeneration unchanged KEEP their implementation status,
-    evidence, notes, assertions, and Jira / compliance mappings. Controls
-    whose descriptions change or disappear are soft-deleted (still
-    queryable via ``get_controls(include_deleted=True)``). When ``co_ids``
-    is given, only those COs' controls are regenerated — all other controls
-    are left as-is.
+    A regeneration re-authors controls from the current COs; its publish
+    creates the next model version. Controls whose descriptions survive
+    unchanged KEEP their implementation status, evidence, notes, assertions,
+    and Jira / compliance mappings. Controls whose descriptions change or
+    disappear are soft-deleted (still queryable via
+    ``get_controls(include_deleted=True)``). When ``co_ids`` is given, only
+    those COs' controls are regenerated — all other controls are left as-is.
 
-    May run as a background job; this tool waits for completion and returns
-    the final result. To rebuild everything, omit ``co_ids``. To fix only
-    stale/orphaned CO mappings without re-authoring control text, prefer
-    ``remap_control`` (mechanical, no LLM).
+    This tool records the regeneration as the model's PROPOSED build and
+    returns at once with ``status: "proposed"`` and ``proposal`` (``mode``,
+    ``objective_ids``, ``objective_count``, ``estimated_credits``, and the
+    ``model_version`` and ``set_revision`` a start must name). A proposal
+    merges with any already proposed for the model, the broader one winning.
+    Show the user what it would build and cost; once they agree, call
+    ``start_control_build`` with those values and ``confirm_estimate=True``.
+    A build someone started holds the model, so this is refused (409
+    ``generation_active``) until it finishes, or is resumed and finishes, or
+    is discarded.
+
+    To rebuild everything, omit ``co_ids``. To fix only stale/orphaned CO
+    mappings without re-authoring control text, prefer ``remap_control``
+    (mechanical, no LLM).
 
     Args:
         model_id: ID of the threat model.
@@ -1668,11 +1748,6 @@ async def regenerate_controls(
             more accurate and more granular progress, but more LLM calls.
         co_ids: Optional comma-separated CO IDs to regenerate (e.g.
             "CO1,CO5"). Omit to regenerate all controls.
-
-    The result includes a ``governor`` object when the workspace bounds
-    background-analysis spend; when ``governor.status`` is ``warning`` or
-    ``exhausted``, relay it — queued background re-evaluation resumes at
-    ``governor.resets_at`` and is never dropped.
     """
     # Workaround for Claude Code MCP array serialization bug
     # (anthropics/claude-code#18260) — accept comma-separated string
@@ -1680,13 +1755,195 @@ async def regenerate_controls(
     if co_ids:
         parsed_co_ids = [c.strip() for c in co_ids.split(",") if c.strip()]
     try:
-        client = _get_client()
-        result = await client.regenerate_controls(
+        return _dump(await _get_client().regenerate_controls(
             model_id, mode=mode, batch_size=batch_size, co_ids=parsed_co_ids,
-        )
-        if isinstance(result, dict) and "job_id" in result:
-            return await _await_backend_job(client, result["job_id"], ctx)
-        return _dump(result)
+        ))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def start_control_build(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    model_version: Optional[int] = None,
+    set_revision: Optional[int] = None,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Start the model's proposed control build. Mutating only with
+    ``confirm_estimate=True``; consumes credits then.
+
+    A model's controls are built only by a build someone starts. Generating
+    or refining the model, editing an entity and ``regenerate_controls``
+    each PROPOSE one; ``get_control_generation_status`` shows it as
+    ``proposal``.
+
+    1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
+       nothing is charged; the answer is ``{started: false, proposal,
+       message}``, the proposal carrying a fresh ``estimated_credits`` and
+       the ``model_version`` and ``set_revision`` the model stands at. Show
+       the user what it would build and cost.
+    2. Call again with ``confirm_estimate=True`` and those two values once
+       they have reviewed the model. The build starts (``{started: true,
+       job_id, model_version, status: "queued", status_detail}``) and holds
+       the model until it publishes, fails or is discarded: other writers of
+       the model's controls are refused meanwhile, and reads show the last
+       published controls. Poll ``get_control_generation_status`` until
+       ``terminal``; the publish is one step, after which ``get_controls``
+       shows the result.
+
+    Refusals come back as data:
+    - ``{started: false, http_status: 404, code: "no_proposal"}`` — nothing
+      is proposed for the model.
+    - ``{started: false, http_status: 409, code: "review_stale", proposal,
+      model_version, set_revision, estimated_credits}`` — the model or its
+      controls changed since the values were read (or none were named).
+      Review again and start with the values returned.
+    - ``{started: false, http_status: 409, code: "generation_active",
+      status}`` — a build already holds the model.
+    - ``{started: false, http_status: 402, ...}`` — the balance this
+      workspace bills to cannot cover the estimate.
+
+    Args:
+        model_id: ID of the threat model.
+        model_version: With ``confirm_estimate=True``: the proposal's
+            ``model_version``.
+        set_revision: With ``confirm_estimate=True``: the proposal's
+            ``set_revision``.
+        confirm_estimate: False (default) returns the proposal and its
+            estimate and starts nothing; True starts the build.
+    """
+    try:
+        return _dump(await _get_client().start_control_build(
+            model_id, model_version=model_version, set_revision=set_revision,
+            confirm_estimate=confirm_estimate))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def discard_control_build(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Discard a model's held control build. Mutating.
+
+    A build that is ``queued``, ``deferred``, ``paused`` or ``blocked`` holds
+    the model without running. Discarding it drops everything it staged — the
+    model keeps its published controls exactly as they were — releases the
+    model, and proposes the build again so it can be started later. The
+    credits it already consumed are not returned. A running build must be
+    paused first (``pause_control_generation``, then wait for ``paused``).
+
+    Returns one of:
+    - ``{discarded: true, model_id, status: "discarded", proposal,
+      status_detail}``.
+    - ``{discarded: false, http_status: 409, code: "pause_first", status}`` —
+      the build is running; pause it first.
+    - ``{discarded: false, http_status: 409, code: "not_held", status}`` —
+      no build holds the model.
+
+    Args:
+        model_id: ID of the threat model whose held build to discard.
+    """
+    try:
+        return _dump(await _get_client().discard_control_build(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def list_control_revisions(
+    server_version: str,
+    model_id: str,
+    version: int = 0,
+) -> dict:
+    """List every change to a model version's set of controls. Read-only.
+
+    Each write to a version's published controls — a build's publish, an
+    import, an edit, a deletion, an undo — is a set revision with its author.
+    Returns ``{model_id, model_version, latest_version, discarded, revisions,
+    undo_target}``; each revision carries ``revision``, ``job_id`` (the
+    build that wrote it, if any), ``started_by``, ``started_at``,
+    ``controls`` (the ids it touched), ``undo_of`` (the revision it undid,
+    for an undo) and ``undone_by`` / ``undone_at``. ``undo_target`` is the
+    revision ``undo_control_change`` would undo (null when none, and for any
+    version but the latest). ``discarded`` is true for a version a revert
+    replaced.
+
+    Args:
+        model_id: ID of the threat model.
+        version: Model version to read (0 = the latest live version).
+    """
+    try:
+        return _dump(await _get_client().list_control_revisions(
+            model_id, version=version))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def undo_control_change(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Undo the latest change to the model's controls. Mutating.
+
+    Restores exactly what the latest set revision of the latest version
+    replaced (``list_control_revisions``' ``undo_target``). Changes are undone
+    latest first, one per call; the undo is itself recorded, and the next
+    undo goes to the change before it. There is no redo. Verdicts the undo
+    returns to are served again rather than re-judged.
+
+    Returns one of:
+    - ``{applied: true, model_id, model_version, undone, revision,
+      controls}`` — ``undone`` is the revision undone, ``revision`` the one
+      the undo recorded, ``controls`` the ids it restored.
+    - ``{applied: false, http_status: 409, code, message}`` — ``code`` is
+      ``generation_active`` (a build holds the model), ``nothing_to_undo``,
+      or ``set_diverged`` (a control the change touched has changed since,
+      so undoing it would discard that later change; undo the later change
+      first).
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().undo_control_change(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def revert_model_version(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Revert the model's latest version. Mutating.
+
+    Creates a new version that copies the latest earlier version not already
+    discarded — the model, its controls and their objective metadata — and
+    marks the replaced version discarded. Version numbers are never reused,
+    and the discarded version stays readable in the history. Findings on
+    controls the revert removes are resolved.
+
+    Returns one of:
+    - ``{applied: true, model_id, model_version, copied_from, discarded}`` —
+      ``model_version`` is the new version, ``copied_from`` the version it
+      copies, ``discarded`` the version it replaced.
+    - ``{applied: false, http_status: 409, code, message}`` — ``code`` is
+      ``generation_active`` (a build holds the model) or
+      ``no_earlier_version``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().revert_model_version(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2781,6 +3038,14 @@ async def import_controls(
     job (polled for progress), then — because this mutates the model — you are
     asked to confirm before the controls are saved.
 
+    The saved controls are added to the model's current controls as one
+    change (undoable with ``undo_control_change``); no model version is
+    created, and it is refused while a control build holds the model. Nothing
+    runs for them unprompted: the result's ``awaiting_judgement`` lists them,
+    and the mitigation groups they join credit nothing and read awaiting
+    judgement until ``judge_imported_controls`` is called (estimate first,
+    then ``confirm_estimate=True``).
+
     Args:
         model_id: ID of the threat model.
         controls_json: JSON array of {description, co_ids?, framework_refs?}.
@@ -2788,10 +3053,7 @@ async def import_controls(
         source_label: Origin label (e.g., "ISO 27001").
         auto_map: Auto-map controls to COs using LLM (default: True).
 
-    The confirm result includes a ``governor`` object when the workspace bounds
-    background analysis spend; when ``governor.status`` is ``warning`` or
-    ``exhausted``, relay it — queued background re-evaluation resumes at
-    ``governor.resets_at`` and is never dropped.
+    Returns ``{imported, controls, awaiting_judgement, hint}`` once saved.
     """
     try:
         client = _get_client()
@@ -2825,6 +3087,51 @@ async def import_controls(
             model_id, controls, source_label or preview.get("source_label", ""),
         )
         return _dump(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def judge_imported_controls(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Have the imported controls awaiting their judgement judged. Mutating
+    only with ``confirm_estimate=True``; may consume credits then.
+
+    Controls saved by ``import_controls`` are not judged unprompted: the
+    mitigation groups they join credit nothing until this runs. It judges
+    every objective those controls join, priced and charged as
+    ``judge_objectives`` prices and charges them.
+
+    1. Call with ``confirm_estimate=False`` (the default). Nothing is queued
+       and nothing is charged; the answer carries ``awaiting_judgement`` (the
+       control ids), ``co_ids`` (the objectives they join), ``scope``,
+       ``ungrouped`` and ``estimate``. Show the user the estimate.
+    2. Call again with ``confirm_estimate=True`` once they agree. The
+       judgements are queued (``confirmed: true``, ``queued``) and the
+       controls stop awaiting (``awaiting_judgement`` comes back empty).
+
+    ``ungrouped`` lists objectives with no mitigation group: nothing can be
+    judged there until their controls are grouped with
+    ``set_mitigation_groups``. When nothing awaits, the answer says so and
+    does nothing.
+
+    Refusals come back as data, ``{confirmed: false, queued: 0,
+    http_status, ...}``: 409 while a control build is running, 402 when the
+    balance this workspace bills to cannot cover the estimate, 503 when
+    judging is unavailable on this deployment.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: False (default) returns the estimate and queues
+            nothing; True queues the judgements.
+    """
+    try:
+        return _dump(await _get_client().judge_imported_controls(
+            model_id, confirm_estimate=confirm_estimate))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5961,7 +6268,7 @@ async def export_report(
     - ``scope="model"`` (``scope_id`` = model id) supports ``format`` ∈ {``csv``, ``pdf``, ``html``, ``archive``}:
         - ``csv`` — the model's current state rendered as CSV; returned inline as UTF-8 text in ``content``.
         - ``pdf`` / ``html`` — rendered document returned base64-encoded in ``content_b64`` (with ``content_type``). Runs as a server-side job; progress is reported automatically while it completes, which may take time for large models.
-        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle: every version, controls, assertions (with Tier 1 / Tier 2 verdicts and attested flags), findings, risk acceptances, assumption overrides, attestations, and instance sufficiency signatures; each control's per-clause evidence basis travels with it. Those verdicts are the origin's record of what it claimed, which is what a third party checks against the signatures; an importing workspace credits what its own verification establishes (see ``import_threat_model_archive``). Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
+        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle of the model's current state: its latest version and controls, live assertions (with Tier 1 / Tier 2 verdicts and attested flags) and the runs behind them, open findings and those a person closed, risk acceptances and other decisions in force, assumption overrides, attestations, and instance sufficiency signatures; each control's per-clause evidence basis travels with it. Earlier versions, activity and chat are not in it. Those verdicts are the origin's record of what it claimed, which is what a third party checks against the signatures; an importing workspace credits what its own verification establishes (see ``import_threat_model_archive``). Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
     - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, aggregating every member model's report plus the cross-model dependency graph and attestation status into one HTML document, returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
 
     Args:
