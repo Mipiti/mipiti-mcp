@@ -1,4 +1,4 @@
-"""Unit tests for preview_finding_remediation and apply_finding_remediation tools."""
+"""Unit tests for the remediate_finding tool: preview by default, apply on request."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -9,15 +9,21 @@ from fastmcp.exceptions import ToolError
 
 from mipiti_mcp.client import MipitiClient
 from mipiti_mcp.server import (
-    apply_finding_remediation,
     build_instructions,
-    preview_finding_remediation,
+    remediate_finding,
 )
 
 
 # ------------------------------------------------------------------
 # Tool-level tests (mock the MipitiClient)
 # ------------------------------------------------------------------
+
+
+def _mock_ctx() -> AsyncMock:
+    ctx = AsyncMock()
+    ctx.report_progress = AsyncMock()
+    ctx.info = AsyncMock()
+    return ctx
 
 
 class TestPreviewFindingRemediation:
@@ -38,10 +44,11 @@ class TestPreviewFindingRemediation:
         client = AsyncMock()
         client.preview_finding_remediation = AsyncMock(return_value=diff)
         with patch("mipiti_mcp.server._get_client", return_value=client):
-            result = await preview_finding_remediation(
-                server_version="0", finding_id="F-1",
+            result = await remediate_finding(
+                server_version="0", finding_id="F-1", ctx=_mock_ctx(),
             )
         client.preview_finding_remediation.assert_awaited_once_with("F-1")
+        client.start_apply_finding_remediation.assert_not_awaited()
         assert result == diff
 
     @pytest.mark.asyncio
@@ -56,16 +63,9 @@ class TestPreviewFindingRemediation:
         )
         with patch("mipiti_mcp.server._get_client", return_value=client):
             with pytest.raises(ToolError, match="404"):
-                await preview_finding_remediation(
-                    server_version="0", finding_id="F-X",
+                await remediate_finding(
+                    server_version="0", finding_id="F-X", ctx=_mock_ctx(),
                 )
-
-
-def _mock_ctx() -> AsyncMock:
-    ctx = AsyncMock()
-    ctx.report_progress = AsyncMock()
-    ctx.info = AsyncMock()
-    return ctx
 
 
 class TestApplyFindingRemediation:
@@ -86,15 +86,17 @@ class TestApplyFindingRemediation:
         )
         ctx = _mock_ctx()
         with patch("mipiti_mcp.server._get_client", return_value=client):
-            result = await apply_finding_remediation(
+            result = await remediate_finding(
                 server_version="0",
                 finding_id="F-1",
+                apply=True,
                 justification="cleaning up pre-fix trigger duplicates",
                 ctx=ctx,
             )
         client.start_apply_finding_remediation.assert_awaited_once_with(
             "F-1", "cleaning up pre-fix trigger duplicates",
         )
+        client.preview_finding_remediation.assert_not_awaited()
         assert result == result_envelope
 
     @pytest.mark.asyncio
@@ -106,12 +108,14 @@ class TestApplyFindingRemediation:
         client = AsyncMock()
         with patch("mipiti_mcp.server._get_client", return_value=client):
             with pytest.raises(ToolError, match="justification is required"):
-                await apply_finding_remediation(
-                    server_version="0", finding_id="F-1", justification="", ctx=_mock_ctx(),
+                await remediate_finding(
+                    server_version="0", finding_id="F-1", apply=True,
+                    justification="", ctx=_mock_ctx(),
                 )
             with pytest.raises(ToolError, match="justification is required"):
-                await apply_finding_remediation(
-                    server_version="0", finding_id="F-1", justification="   ", ctx=_mock_ctx(),
+                await remediate_finding(
+                    server_version="0", finding_id="F-1", apply=True,
+                    justification="   ", ctx=_mock_ctx(),
                 )
         client.start_apply_finding_remediation.assert_not_awaited()
 
@@ -130,9 +134,10 @@ class TestApplyFindingRemediation:
         )
         with patch("mipiti_mcp.server._get_client", return_value=client):
             with pytest.raises(ToolError, match="409"):
-                await apply_finding_remediation(
+                await remediate_finding(
                     server_version="0",
                     finding_id="F-1",
+                    apply=True,
                     justification="retry after race",
                     ctx=_mock_ctx(),
                 )
@@ -205,8 +210,7 @@ def test_remediation_section_present_for_every_tier(tier: str, role: str) -> Non
     preview-then-apply norm must travel with the tools."""
     text = build_instructions(tier=tier, role=role)
     assert "## Remediating findings (structural drift)" in text
-    assert "preview_finding_remediation" in text
-    assert "apply_finding_remediation" in text
+    assert "remediate_finding" in text
     assert "Never apply remediation without preview" in text
 
 
@@ -219,7 +223,7 @@ def test_remediation_section_describes_preview_then_apply_flow() -> None:
     section_end = text.index("## Project setup", section_start)
     section = text[section_start:section_end]
 
-    assert "preview_finding_remediation(finding_id)" in section
+    assert "remediate_finding(finding_id)" in section
     assert "SHOW THE OPERATOR THE DIFF" in section
     assert "one-line rationale" in section
-    assert "apply_finding_remediation(finding_id, justification=" in section
+    assert "remediate_finding(finding_id, apply=True, justification=" in section

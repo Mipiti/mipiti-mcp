@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — the tool surface is 129 tools, down from 150.** Tools that
+  act on one subject with a choice of mode fold behind a parameter naming
+  it, and only tools of the same class fold together (a read never joins a
+  paid or destructive call); where a preview folded into its action, the
+  preview is the default. No capability is removed:
+  - `update_threat_model` replaces `rename_threat_model`,
+    `set_threat_model_parent` and `set_model_provenance` (`name`,
+    `parent_id` or `clear_parent`, `provenance_*`; applied in that order, and
+    a failure names what was already applied).
+  - `manage_reliance(action="create"|"confirm"|"delete")` replaces
+    `create_reliance`, `confirm_reliance` and `delete_reliance`;
+    `attach_foundation` without `selections` returns what
+    `propose_attach_foundation` did.
+  - `undo_model_change(target="controls"|"version")` replaces
+    `undo_control_change` and `revert_model_version`.
+  - `get_composition(view="overview"|"entities"|"objectives"|"coverage"|"attack_paths")`
+    replaces `get_composition_overview`, `list_effective_entities`,
+    `list_effective_control_objectives`, `get_effective_coverage` and
+    `list_effective_attack_paths`.
+  - `decide_reconciliation_candidate(decision="apply"|"reject"|"unreject")`
+    replaces `apply_certain_reconciliation_match`,
+    `reject_reconciliation_candidate` and `unreject_reconciliation_candidate`.
+  - `undo_composition_event(dry_run=True)` (the default) returns what
+    `preview_undo_composition` did; `dry_run=False` applies the undo.
+  - `edit_evidence(action="add"|"remove")` replaces `add_evidence` and
+    `remove_evidence`.
+  - `resolve_verdict_divergences(action="accept"|"dismiss")` replaces
+    `accept_coverage_divergences` and `dismiss_verdict_divergences`; both
+    take `reason`.
+  - `recompute_verdicts(mode="quote"|"recompute"|"retry_parked")` replaces
+    its `dry_run` flag and `retry_verdicts`. The default is the estimate,
+    which enqueues nothing.
+  - `remediate_finding` replaces `preview_finding_remediation` (the default)
+    and `apply_finding_remediation` (`apply=True` with `justification`).
+  - `get_capabilities` replaces `list_capabilities` and `get_capability`
+    (`capability_id`); `get_functional_coverage(gaps_only=True)` replaces
+    `check_functional_gaps`; `submit_assertions(functional_test_id=…)`
+    replaces `submit_functional_test_assertions`, and
+    `get_sufficiency(functional_test_id=…)` replaces
+    `get_functional_test_sufficiency`. Each names exactly one subject.
+
+  Every tool description fits in 2048 characters, the length some clients
+  render, and a test fails when one does not. Because tool schemas are
+  pinned per session, upgrading requires a teardown and re-add under a new
+  server name.
+
+- **Control builds are proposed, then started.** `regenerate_controls` returns
+  the proposed build (`status: "proposed"`, `proposal`) and starts nothing;
+  `generate_threat_model` and `refine_threat_model` return `controls_status:
+  "proposed"` with the same `proposal`. `get_control_generation_status`
+  describes the proposal, the `discarded` status, and a held build's staging
+  copy. `strengthen_controls` takes the `model_version` and `set_revision` its
+  estimate reported, and a confirmation without them is refused as
+  `review_stale`. `import_controls` says its controls await their judgement.
+  `import_threat_model_archive` and the archive export describe the model's
+  current state, imported as version 1 with no judgement queued; the import
+  result carries the judgement estimate.
+- The README and client docstrings describe composition and reliance as
+  deployment settings rather than naming them.
+- `convert_assumption_to_controls` retires the assumption linkage and
+  returns the control build its COs owe (`proposal`); it authors no controls
+  itself.
+
 - **Reading a verdict does not queue its re-evaluation.** The
   `get_verification_report` and `get_sufficiency` descriptions no longer say a
   stale read triggers one: the write that changed a control queues its own, so
@@ -22,8 +85,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Floored `pyjwt>=2.14.0` via `[tool.uv] constraint-dependencies` (CVE-2026-102274)
   and recompiled the lockfiles.
+- Floored `urllib3>=2.8.0` the same way (PYSEC-2026-4175, PYSEC-2026-4176,
+  PYSEC-2026-4177), pulled in by the build and audit toolchains, and `pip>=26.2.0`
+  (PYSEC-2026-3721) and `msgpack>=1.2.1` (PYSEC-2026-3625), pulled in by the
+  audit toolchain. `pip-audit` reports no known vulnerabilities in any lockfile.
 
 ### Added
+
+- **`start_control_build` and `discard_control_build`.** Start the model's
+  proposed control build, naming the model version and set revision reviewed
+  (estimate first, then `confirm_estimate=True`), or drop a held build,
+  whose staged work is discarded while the published controls stay as they
+  were. Refusals (`no_proposal`, `review_stale`, `generation_active`,
+  `pause_first`, `not_held`, `402`) come back as data.
+- **`list_control_revisions` and `undo_model_change`.**
+  Every change to a version's controls with its author; undo the latest
+  change (`target="controls"`); revert the latest model version to a copy of
+  the latest earlier version not already discarded (`target="version"`).
+- **`judge_imported_controls`.** Estimate, and on confirmation queue, the
+  judgement of the imported controls awaiting one.
 
 - **`judge_objectives` — judge every objective nothing else will.** An
   objective whose mitigation group has no judgement for its current controls,
@@ -140,6 +220,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explains `blocked` and tells agents not to regenerate controls in that state.
 
 ### Fixed
+
+- `update_control_status` returns the updated control (`Control`), which is
+  what the API answers; it was parsed as a threat model.
+- `RemediationApplyResult` carries `build_proposed_for`, the objectives the
+  remediation left without a control and for which a control build is now
+  proposed, in place of a `controls_generated` count the API no longer sends.
+- `revalidate_entity_quality` says it creates no model version: the re-judgment
+  runs in the background and returns `{accepted, queued, model}`, and the
+  refreshed warnings appear on the next read.
+- `refine_control` says an accepted refinement keeps the control's assertions
+  and judges them again against the new description; nothing is superseded
+  (`superseded_assertions` is always 0).
+- `get_controls` is read-only: it no longer says a first read starts
+  generation. An empty list means a proposed build has not been started, and
+  a `building` marker appears while a build holds the model.
+- `get_control_generation_status` documents `phase`, `stage` and
+  `phase_progress`, says `ready_cos`/`target_cos` are progress rather than
+  coverage, and names `covered_cos`, `judged_cos`, `awaiting_judgement_cos`
+  and `analysis_pending`.
+- `convert_assumption_to_controls`, and the README's
+  `set_control_assumption_groups` row, no longer say a control whose
+  assumption groups are removed reverts to `not_implemented`: its status is
+  not changed.
+- `get_control_assumption_groups` drops a paragraph pointing at the
+  single-group shorthand tools, which were removed in favour of
+  `set_control_assumption_groups`.
+- **`generate_threat_model`, `refine_threat_model` and `query_threat_model`
+  name their purpose.** Each request carries its intent, so the platform no
+  longer decides from the wording what a call does: a question is answered
+  and never turned into a change of the model, and a generation always
+  generates. A refine that cannot apply (a targeted change naming an entity
+  the model does not have) returns `{model_id, changed: false, message}`
+  instead of failing as an unsaved model. The client returns a
+  `ChatResponse` or a `GenerateResult` by what the platform answered.
+- The restore calls return the entity-change result (`{model,
+  controls_carried, controls_orphaned, orphaned_control_ids, ...}`), which is
+  what the API answers; they parsed it as a threat model, so a restore read
+  back a model with no id. `set_threat_model_parent` returns `{model_id,
+  parent_id, children}` and says the model keeps its version: the parent
+  edge is relationship metadata.
+- Response types declare only what the answers carry. `Control` no longer
+  has `is_verified` and `ControlObjective` no longer has `security_property`;
+  a field only some variants of an answer carry reads `null` when absent
+  (`ControlObjectivesResponse.returned` / `control_objectives`, the three
+  `ScanPromptResult` variants, `GenerateResult.semantic_rejections`,
+  `System.model_count` / `model_ids`). `SelectFrameworksResult`,
+  `SystemSelectFrameworksResult`, `ComplianceReport` and
+  `VerificationReport` declare the fields the API sends. A compact control
+  listing (`summary_only=True`) is a `ControlSummariesResponse`.
+- `get_threat_model` honours `include_cos`: the control objectives are left
+  out unless asked for, as the instructions said.
+- The instructions name the composition tools by their registered names
+  (`list_effective_entities`, `get_effective_coverage`, …) and a test fails
+  when they, or the README's tool tables, name a tool the server does not
+  register. The README lists `restore_entity` for assumptions in place of a
+  tool that does not exist, lists `import_compliance_framework`, and its
+  local example sets `SERVER_VERSION`.
+- Deleting an assumption clears its objective links and retires its
+  attestations, and restoring it does not bring the links back; the
+  instructions, `remove_entity` and `restore_entity` say so, and no longer
+  describe an `assumed_by` pointer controls do not carry.
 
 - **Justification length is checked before the call.** `set_mitigation_groups`,
   `set_control_assumption_groups` and `refine_control` state their

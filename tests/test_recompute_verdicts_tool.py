@@ -1,4 +1,4 @@
-"""Unit tests for the merged recompute_verdicts tool (enqueue + dry_run quote) + client methods."""
+"""Unit tests for the recompute_verdicts tool (quote, recompute) + client methods."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -51,11 +51,33 @@ class TestRecomputeVerdicts:
         client = AsyncMock()
         client.recompute_verdicts = AsyncMock(return_value=_RESULT)
         with patch("mipiti_mcp.server._get_client", return_value=client):
-            result = await recompute_verdicts(server_version="0", model_id="tm-001")
+            result = await recompute_verdicts(
+                server_version="0", model_id="tm-001", mode="recompute")
         client.recompute_verdicts.assert_awaited_once_with("tm-001")
         assert result == _RESULT
         assert result["total_enqueued"] == 20
         assert result["governor"]["exhausted"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_default_enqueues_nothing(self) -> None:
+        """A call that names no mode is the quote: the metered recompute runs
+        only when asked for by name."""
+        client = AsyncMock()
+        client.get_recompute_quote = AsyncMock(return_value=_QUOTE)
+        with patch("mipiti_mcp.server._get_client", return_value=client):
+            result = await recompute_verdicts(server_version="0", model_id="tm-001")
+        assert result == _QUOTE
+        client.recompute_verdicts.assert_not_awaited()
+        client.retry_verdicts.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_mode_is_refused(self) -> None:
+        client = AsyncMock()
+        with patch("mipiti_mcp.server._get_client", return_value=client):
+            with pytest.raises(ToolError, match="mode must be one of"):
+                await recompute_verdicts(
+                    server_version="0", model_id="tm-001", mode="dry_run")
+        client.recompute_verdicts.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_503_wrapped_as_tool_error(self) -> None:
@@ -76,7 +98,8 @@ class TestRecomputeVerdicts:
         )
         with patch("mipiti_mcp.server._get_client", return_value=client):
             with pytest.raises(ToolError, match="503"):
-                await recompute_verdicts(server_version="0", model_id="tm-x")
+                await recompute_verdicts(
+                    server_version="0", model_id="tm-x", mode="recompute")
 
 
 class TestGetRecomputeQuote:
@@ -86,7 +109,7 @@ class TestGetRecomputeQuote:
         client.get_recompute_quote = AsyncMock(return_value=_QUOTE)
         with patch("mipiti_mcp.server._get_client", return_value=client):
             result = await recompute_verdicts(
-                server_version="0", model_id="tm-001", dry_run=True,
+                server_version="0", model_id="tm-001", mode="quote",
             )
         client.get_recompute_quote.assert_awaited_once_with("tm-001")
         assert result == _QUOTE

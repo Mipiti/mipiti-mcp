@@ -82,7 +82,7 @@ async def test_submit_refuses_before_sending(monkeypatch):
     with pytest.raises(ToolError, match="mechanism"):
         await server.submit_assertions(server_version="x", model_id="m", assertions_json=body, control_id="c")
     with pytest.raises(ToolError, match="mechanism"):
-        await server.submit_functional_test_assertions(
+        await server.submit_assertions(
             server_version="x", model_id="m", functional_test_id="f", assertions_json=body,
         )
     assert called == []

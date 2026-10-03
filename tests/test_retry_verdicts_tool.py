@@ -1,4 +1,4 @@
-"""Unit tests for the retry_verdicts tool + client method."""
+"""Unit tests for recompute_verdicts(mode="retry_parked") + the retry client method."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -7,7 +7,7 @@ import pytest
 import respx
 
 from mipiti_mcp.client import MipitiClient
-from mipiti_mcp.server import retry_verdicts
+from mipiti_mcp.server import recompute_verdicts
 
 _RESULT = {
     "model_id": "tm-001",
@@ -17,15 +17,19 @@ _RESULT = {
 }
 
 
-class TestRetryVerdicts:
+class TestRetryParked:
     @pytest.mark.asyncio
     async def test_forwards_model_id_and_returns_envelope(self) -> None:
-        """The tool forwards model_id and returns the server envelope verbatim."""
+        """The retry mode forwards model_id and returns the server envelope
+        verbatim, and touches neither the quote nor the recompute."""
         client = AsyncMock()
         client.retry_verdicts = AsyncMock(return_value=_RESULT)
         with patch("mipiti_mcp.server._get_client", return_value=client):
-            result = await retry_verdicts(server_version="0", model_id="tm-001")
+            result = await recompute_verdicts(
+                server_version="0", model_id="tm-001", mode="retry_parked")
         client.retry_verdicts.assert_awaited_once_with("tm-001")
+        client.recompute_verdicts.assert_not_awaited()
+        client.get_recompute_quote.assert_not_awaited()
         assert result == _RESULT
         assert result["retried_slots"] == 7
 

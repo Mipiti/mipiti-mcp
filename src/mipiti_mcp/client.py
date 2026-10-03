@@ -32,6 +32,7 @@ from .types import (
     ControlEvidence,
     ControlObjectivesResponse,
     ControlsResponse,
+    ControlSummariesResponse,
     DeleteControlResult,
     EvidenceActionResult,
     Finding,
@@ -215,12 +216,18 @@ class MipitiClient:
         parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
         provenance: dict[str, Any] | None = None,
+        intent: str | None = None,
     ) -> dict[str, Any]:
         """POST /api/model/stream, consume SSE events, return final payload.
 
+        ``intent`` (``generate`` / ``refine`` / ``query``) names what the
+        caller asks for, so it is never classified from the message.
+
         Return shape is one of:
-        - ``{"result": ...}``-shaped dict (normal generate/refine path)
-        - ``{"chat_response": ...}``-shaped dict (query/general path)
+        - the ``result`` event (``"type": "result"``): a model was written
+        - the ``chat_response`` event (``"type": "chat_response"``): the
+          answer is prose and nothing was written, as for a question, or a
+          targeted refine that could not apply
         - ``{"similar_models": [...]}`` when the backend short-circuits
           generation because the feature description matches existing
           models in the workspace. Caller can retry with
@@ -228,6 +235,8 @@ class MipitiClient:
           instead.
         """
         body: dict[str, Any] = {"messages": messages}
+        if intent:
+            body["intent"] = intent
         if model_id:
             body["model_id"] = model_id
         if force_generate:
@@ -308,12 +317,14 @@ class MipitiClient:
         parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
         provenance: dict[str, Any] | None = None,
-    ) -> GenerateResult | dict:
+    ) -> GenerateResult | ChatResponse | dict:
         """Returns a ``GenerateResult`` on normal generation, OR a raw
         ``{"similar_models": [{id, title, reason}, ...]}`` dict when
         the backend short-circuited because similar models already
         exist in the workspace. Pass ``force_generate=True`` to skip
-        the similarity check and force a new generation.
+        the similarity check and force a new generation. A
+        ``ChatResponse`` means the backend answered in prose and wrote
+        nothing (a backend that does not take the named intent can).
 
         When ``parent_id`` is provided, the backend wires the new model
         under that parent on the recursive composition tree, so it
@@ -331,30 +342,47 @@ class MipitiClient:
             parent_id=parent_id,
             on_progress=on_progress,
             provenance=provenance,
+            intent="generate",
         )
         if isinstance(data, dict) and "similar_models" in data:
             return data
-        return GenerateResult.model_validate(data)
+        return self._stream_answer(data)
 
     async def refine_threat_model(
         self,
         model_id: str,
         instruction: str,
         on_progress: ProgressCallback | None = None,
-    ) -> GenerateResult:
+    ) -> GenerateResult | ChatResponse:
+        """A ``GenerateResult`` when the refine wrote a version; a
+        ``ChatResponse`` when it answered in prose and wrote nothing (a
+        targeted change naming an entity the model does not have)."""
         data = await self._stream_model(
             [{"role": "user", "content": instruction}],
             model_id=model_id,
             on_progress=on_progress,
+            intent="refine",
         )
-        return GenerateResult.model_validate(data)
+        return self._stream_answer(data)
 
-    async def query_threat_model(self, model_id: str, question: str) -> ChatResponse:
+    async def query_threat_model(
+        self, model_id: str, question: str,
+    ) -> ChatResponse | GenerateResult:
+        """A ``ChatResponse``. A ``GenerateResult`` means the backend did not
+        take the named intent and changed the model instead."""
         data = await self._stream_model(
             [{"role": "user", "content": question}],
             model_id=model_id,
+            intent="query",
         )
-        return ChatResponse.model_validate(data)
+        return self._stream_answer(data)
+
+    @staticmethod
+    def _stream_answer(data: dict) -> GenerateResult | ChatResponse:
+        """The stream's final event, typed by what it is."""
+        if isinstance(data, dict) and data.get("type") == "chat_response":
+            return ChatResponse.model_validate(data)
+        return GenerateResult.model_validate(data)
 
     async def list_models(
         self, source: str = "", include: str = "",
@@ -380,18 +408,19 @@ class MipitiClient:
 
     async def set_parent(
         self, model_id: str, parent_id: str | None,
-    ) -> ThreatModel:
+    ) -> dict:
         """Set (or clear) a model's parent on the recursive composition tree.
 
         Calls ``PUT /api/models/{model_id}/parent``. ``parent_id=None``
-        clears the parent. The backend rejects cycles and over-deep chains
-        with 400. Bumps the model version on success.
+        clears the parent. The backend rejects a cycle (409) and an
+        over-deep chain (400). The parent edge is relationship metadata, so
+        the model keeps its version. Returns ``{model_id, parent_id,
+        children}``.
         """
-        data = await self._put(
+        return await self._put(
             f"/api/models/{model_id}/parent",
             {"parent_id": parent_id},
         )
-        return ThreatModel.model_validate(data)
 
     async def delete_model(self, model_id: str) -> None:
         await self._delete(f"/api/models/{model_id}")
@@ -562,8 +591,10 @@ class MipitiClient:
     async def import_model_full(self, envelope: dict, workspace_id: str) -> dict:
         """Import an audit archive envelope into the target workspace.
 
-        Returns {"model_id": "<new id>"}. The caller must have write access
-        to the target workspace; title collisions auto-suffix on the server.
+        Returns ``{"model_id": "<new id>", "judgement": {...}}``: the
+        estimate of judging the imported model, which the import does not
+        queue. The caller must have write access to the target workspace;
+        title collisions auto-suffix on the server.
         """
         return await self._post(
             "/api/models/import",
@@ -580,7 +611,7 @@ class MipitiClient:
         control_id: str = "", status: str = "", co_id: str = "",
         component_id: str = "",
         offset: int = 0, limit: int = 0, summary_only: bool = False,
-    ) -> ControlsResponse:
+    ) -> ControlsResponse | ControlSummariesResponse:
         params: dict[str, Any] = {}
         if include_deleted:
             params["include_deleted"] = "true"
@@ -601,6 +632,8 @@ class MipitiClient:
         if limit:
             params["limit"] = limit
         data = await self._get(f"/api/models/{model_id}/controls", params=params)
+        if summary_only:
+            return ControlSummariesResponse.model_validate(data)
         return ControlsResponse.model_validate(data)
 
     async def get_control_generation_status(self, model_id: str) -> dict:
@@ -648,35 +681,144 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _refusal(resp: httpx.Response) -> dict:
+        """The ``detail`` of a refusal, as a dict a caller can relay."""
+        try:
+            detail = resp.json().get("detail", {})
+        except ValueError:
+            detail = {}
+        if not isinstance(detail, dict):
+            detail = {"message": str(detail)}
+        return detail
+
     async def strengthen_controls(
         self,
         model_id: str,
         co_ids: list[str] | None = None,
         confirm_estimate: bool = False,
+        model_version: int | None = None,
+        set_revision: int | None = None,
     ) -> dict:
         """Estimate, and with ``confirm_estimate`` start, a strengthening of
-        the model's controls.
+        the model's controls. A confirmation names the ``model_version`` and
+        ``set_revision`` the estimate answer reported; each is sent only when
+        given.
 
-        A refusal is an answer, not an error: 409 (a generation for the model
-        is still running) and 402 (the balance cannot cover the estimate) come
-        back as ``{"started": False, "http_status": ..., **detail}`` so a
-        caller can relay them. Any other failure raises."""
+        A refusal is an answer, not an error: 409 (a build holds the model, or
+        the model changed since the estimate) and 402 (the balance cannot
+        cover the estimate) come back as ``{"started": False, "http_status":
+        ..., **detail}`` so a caller can relay them. Any other failure
+        raises."""
         body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
         if co_ids:
             body["co_ids"] = list(co_ids)
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        if set_revision is not None:
+            body["set_revision"] = int(set_revision)
         resp = await self._request_with_idempotency(
             "POST", f"/api/models/{model_id}/controls/strengthen", json=body)
         if resp.status_code in (402, 409):
-            try:
-                detail = resp.json().get("detail", {})
-            except ValueError:
-                detail = {}
-            if not isinstance(detail, dict):
-                detail = {"message": str(detail)}
-            return {"started": False, "http_status": resp.status_code, **detail}
+            return {"started": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
         resp.raise_for_status()
         data = resp.json()
         return {"started": bool(data.get("confirmed")), **data}
+
+    async def start_control_build(
+        self,
+        model_id: str,
+        model_version: int | None = None,
+        set_revision: int | None = None,
+        confirm_estimate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/controls/build.
+
+        Without ``confirm_estimate`` the proposed build and a fresh estimate
+        come back and nothing starts. With it the build starts when
+        ``model_version`` and ``set_revision`` name the model as it stands.
+
+        A refusal is an answer, not an error: 404 (nothing proposed), 409
+        (the model changed since the review, or a build holds it) and 402 (the
+        balance cannot cover the estimate) come back as ``{"started": False,
+        "http_status": ..., **detail}``. Any other failure raises."""
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        if set_revision is not None:
+            body["set_revision"] = int(set_revision)
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/build", json=body)
+        if resp.status_code in (402, 404, 409):
+            return {"started": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
+    async def discard_control_build(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/controls/discard.
+
+        A refusal is an answer, not an error: 409 (the build is running, or
+        nothing is held) comes back as ``{"discarded": False, "http_status":
+        409, **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/discard")
+        if resp.status_code == 409:
+            return {"discarded": False, "http_status": 409, **self._refusal(resp)}
+        resp.raise_for_status()
+        return {"discarded": True, **resp.json()}
+
+    async def list_control_revisions(self, model_id: str, version: int = 0) -> dict:
+        """GET /api/models/{model_id}/controls/revisions[?version=]."""
+        params = {"version": version} if version else None
+        return await self._get(
+            f"/api/models/{model_id}/controls/revisions", params=params)
+
+    async def undo_control_change(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/controls/undo.
+
+        A refusal is an answer, not an error: 409 (a build holds the model,
+        nothing is left to undo, or a control the change touched has changed
+        since) comes back as ``{"applied": False, "http_status": 409,
+        **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/undo")
+        if resp.status_code == 409:
+            return {"applied": False, "http_status": 409, **self._refusal(resp)}
+        resp.raise_for_status()
+        return {"applied": True, **resp.json()}
+
+    async def revert_model_version(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/revert.
+
+        A refusal is an answer, not an error: 409 (a build holds the model,
+        or there is no earlier version) comes back as ``{"applied": False,
+        "http_status": 409, **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/revert")
+        if resp.status_code == 409:
+            return {"applied": False, "http_status": 409, **self._refusal(resp)}
+        resp.raise_for_status()
+        return {"applied": True, **resp.json()}
+
+    async def judge_imported_controls(
+        self, model_id: str, confirm_estimate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/controls/imported/judge.
+
+        Estimate, and with ``confirm_estimate`` queue, the judgement of the
+        imported controls awaiting one. A refusal is an answer, not an error:
+        402, 409 and 503 come back as ``{"confirmed": False, "queued": 0,
+        "http_status": ..., **detail}``. Any other failure raises."""
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/controls/imported/judge",
+            json={"confirm_estimate": bool(confirm_estimate)})
+        if resp.status_code in (402, 409, 503):
+            return {"confirmed": False, "queued": 0,
+                    "http_status": resp.status_code, **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
 
     async def regenerate_controls(
         self,
@@ -685,6 +827,11 @@ class MipitiClient:
         batch_size: int = 0,
         co_ids: list[str] | None = None,
     ) -> dict:
+        """POST /api/models/{model_id}/controls/regenerate.
+
+        Proposes a regeneration and starts nothing: the answer carries the
+        proposal (``status: "proposed"``). A 409 while a build holds the model
+        raises."""
         body: dict = {"mode": mode}
         if batch_size > 0:
             body["batch_size"] = batch_size
@@ -698,7 +845,8 @@ class MipitiClient:
         control_id: str,
         status: str,
         implementation_notes: str = "",
-    ) -> ThreatModel:
+    ) -> Control:
+        """PATCH /api/controls/{control_id}. Returns the updated control."""
         body: dict[str, Any] = {
             "status": status,
             "implementation_notes": implementation_notes,
@@ -708,7 +856,7 @@ class MipitiClient:
             body,
             params={"model_id": model_id},
         )
-        return ThreatModel.model_validate(data)
+        return Control.model_validate(data)
 
     async def start_refine_control(
         self,
@@ -892,8 +1040,8 @@ class MipitiClient:
 
     # ------------------------------------------------------------------
     # Composition (recursive-tree effective model) — read-only.
-    # Gated by ``TREE_COMPOSITION_ENABLED`` on the backend. When the flag
-    # is off, each endpoint returns a stable empty body with
+    # Available only where the deployment enables composition. Where it
+    # does not, each endpoint returns a stable empty body with
     # ``flag_enabled: false`` so callers can render a disabled state
     # without a separate code path.
     # ------------------------------------------------------------------
@@ -1144,7 +1292,7 @@ class MipitiClient:
 
         Returns ``{"model_id": str, "flag_enabled": bool, "rejections":
         [<rejection>, ...]}``. ``flag_enabled: false`` (with an empty
-        list) when ``TREE_COMPOSITION_ENABLED`` is off; the same empty
+        list) where composition is not enabled; the same empty
         shape is returned with ``flag_enabled: true`` when the
         rejection store is not configured.
         """
@@ -1195,7 +1343,7 @@ class MipitiClient:
         ``{assets, attackers, components}``, no LCA exists, conflict
         resolutions are stale, or the lift itself is structurally
         refused; 404 if the route model or either source descendant is
-        missing; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+        missing; 503 where composition is not enabled.
         """
         body: dict = {
             "kind": kind,
@@ -1249,8 +1397,8 @@ class MipitiClient:
         Errors: 400 if required fields are missing, the kind isn't in
         ``{assets, attackers, components}``, or the split itself is
         structurally refused; 404 if the ancestor or any target
-        descendant is missing; 503 if ``TREE_COMPOSITION_ENABLED`` is
-        off.
+        descendant is missing; 503 where composition is not
+        enabled.
         """
         return await self._post(
             f"/api/models/{model_id}/composition/split",
@@ -1277,7 +1425,7 @@ class MipitiClient:
         state has materially evolved.
 
         Errors: 404 if the cited event doesn't exist or belongs to a
-        different model; 503 if ``TREE_COMPOSITION_ENABLED`` is off.
+        different model; 503 where composition is not enabled.
         """
         resp = await self._get_client().get(
             f"/api/models/{model_id}/composition/lift/{lift_id}/undo/preview",
@@ -1302,8 +1450,8 @@ class MipitiClient:
         Errors: 409 with ``detail = {message, refusal: {reasons:
         [...]}}`` when the divergence detector refuses; 404 if the
         cited event doesn't exist or belongs to a different model;
-        400 on payload / event-type mismatch; 503 if
-        ``TREE_COMPOSITION_ENABLED`` is off.
+        400 on payload / event-type mismatch; 503 where
+        composition is not enabled.
         """
         return await self._post(
             f"/api/models/{model_id}/composition/lift/{lift_id}/undo",
@@ -1394,47 +1542,45 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def restore_asset(self, model_id: str, asset_id: str) -> ThreatModel:
+    # Each restore returns the entity-change envelope, as every other entity
+    # write does: ``{"model": <ThreatModel>, "controls_carried",
+    # "controls_orphaned", "orphaned_control_ids", ...}``.
+
+    async def restore_asset(self, model_id: str, asset_id: str) -> dict:
         """Un-soft-delete an asset. Tombstoned COs for that asset's
         pairs are revived at save-time with their original IDs."""
-        data = await self._post(
+        return await self._post(
             f"/api/models/{model_id}/assets/{asset_id}/restore", {},
         )
-        return ThreatModel.model_validate(data)
 
-    async def restore_attacker(self, model_id: str, attacker_id: str) -> ThreatModel:
+    async def restore_attacker(self, model_id: str, attacker_id: str) -> dict:
         """Un-soft-delete an attacker. Tombstoned COs for that
         attacker's pairs are revived with their original IDs."""
-        data = await self._post(
+        return await self._post(
             f"/api/models/{model_id}/attackers/{attacker_id}/restore", {},
         )
-        return ThreatModel.model_validate(data)
 
-
-    async def restore_assumption(self, model_id: str, as_id: str) -> ThreatModel:
+    async def restore_assumption(self, model_id: str, as_id: str) -> dict:
         """Un-soft-delete an assumption. It returns to active status;
         re-attestation is required before it mitigates COs again."""
-        data = await self._post(
+        return await self._post(
             f"/api/models/{model_id}/assumptions/{as_id}/restore", {},
         )
-        return ThreatModel.model_validate(data)
 
-    async def restore_component(self, model_id: str, component_id: str) -> ThreatModel:
+    async def restore_component(self, model_id: str, component_id: str) -> dict:
         """Un-soft-delete a component. Reinstates it under its original ID,
         restoring its trust-boundary contribution to asset reachability."""
-        data = await self._post(
+        return await self._post(
             f"/api/models/{model_id}/components/{component_id}/restore", {},
         )
-        return ThreatModel.model_validate(data)
 
-    async def restore_trust_boundary(self, model_id: str, tb_id: str) -> ThreatModel:
+    async def restore_trust_boundary(self, model_id: str, tb_id: str) -> dict:
         """Un-soft-delete a trust boundary. Reinstates the boundary; the
         reachability it filtered re-narrows and its seal/isolation claim is
         restored."""
-        data = await self._post(
+        return await self._post(
             f"/api/models/{model_id}/trust-boundaries/{tb_id}/restore", {},
         )
-        return ThreatModel.model_validate(data)
 
     async def get_mitigation_groups(
         self, model_id: str, co_id: str,
@@ -1753,11 +1899,13 @@ class MipitiClient:
 
         Non-destructive: an entity that should be removed is left in place with
         a quality warning rather than deleted, so no control objective loses its
-        asset/attacker anchor. The result is saved as a new model version
-        (controls and control objectives carry forward). May consume credits for
-        the entities that need the deeper review.
+        asset/attacker anchor. It creates no model version: the re-validation is
+        queued and runs in the background, and the refreshed warnings appear on
+        the next read. May consume credits for the entities that need the
+        deeper review.
 
-        Returns the entity-CRUD envelope: ``{"accepted": true, "model": {...}}``.
+        Returns ``{"accepted": true, "queued": int, "model": {...}}``, the
+        model as it stands before the re-validation lands.
         """
         return await self._post(
             f"/api/models/{model_id}/revalidate-entities", {},
@@ -2476,9 +2624,9 @@ class MipitiClient:
     ) -> list[dict[str, Any]]:
         """List the dispositions recorded on a threat model.
 
-        ``kind`` filters to one of ``risk_accepted`` / ``not_applicable``;
-        omitted returns both. Server-side shape; passed through unchanged so
-        newly added fields surface automatically.
+        ``kind`` is ``risk_accepted``, ``not_applicable`` or ``all``; omitted,
+        the API returns risk acceptances only. Server-side shape; passed
+        through unchanged so newly added fields surface automatically.
         """
         path = f"/api/models/{model_id}/risk-acceptances"
         if kind:

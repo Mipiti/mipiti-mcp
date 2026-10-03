@@ -192,12 +192,23 @@ async def test_get_controls(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_update_control_status(mock_env: None) -> None:
+    """The endpoint answers with the updated control record, and the client
+    returns it as a control."""
+    from mipiti_mcp.types import Control
+
     respx.patch("https://test.api.mipiti.io/api/controls/CTRL-01").mock(
-        return_value=httpx.Response(200, json={"id": "CTRL-01", "status": "implemented"})
+        return_value=httpx.Response(200, json={
+            "id": "CTRL-01", "description": "Hash passwords with bcrypt",
+            "control_objective_ids": ["CO1"], "status": "implemented",
+            "implementation_notes": "", "verification_status": "pending",
+            "assertion_count": 1,
+        })
     )
     client = MipitiClient()
     result = await client.update_control_status("tm-001", "CTRL-01", "implemented")
+    assert isinstance(result, Control)
     assert result.id == "CTRL-01"
+    assert result.status == "implemented"
     await client.close()
 
 
@@ -1713,14 +1724,13 @@ async def test_undo_split_pins_path_and_idempotency_key(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_set_parent_sets_id(mock_env: None) -> None:
-    payload = dict(SAMPLE_THREAT_MODEL, version=2)
+    payload = {"model_id": "tm-001", "parent_id": "tm-parent", "children": []}
     route = respx.put(
         f"{_BASE}/api/models/tm-001/parent",
     ).mock(return_value=httpx.Response(200, json=payload))
     client = MipitiClient()
     out = await client.set_parent("tm-001", "tm-parent")
-    assert out.id == "tm-001"
-    assert out.version == 2
+    assert out == payload
     assert route.called
     assert route.calls.last.request.method == "PUT"
     assert json.loads(route.calls.last.request.content) == {"parent_id": "tm-parent"}
@@ -1731,13 +1741,13 @@ async def test_set_parent_sets_id(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_set_parent_clears_with_none(mock_env: None) -> None:
-    payload = dict(SAMPLE_THREAT_MODEL, version=3)
+    payload = {"model_id": "tm-001", "parent_id": None, "children": []}
     route = respx.put(
         f"{_BASE}/api/models/tm-001/parent",
     ).mock(return_value=httpx.Response(200, json=payload))
     client = MipitiClient()
     out = await client.set_parent("tm-001", None)
-    assert out.id == "tm-001"
+    assert out["parent_id"] is None
     assert route.called
     assert route.calls.last.request.method == "PUT"
     assert json.loads(route.calls.last.request.content) == {"parent_id": None}
@@ -2257,4 +2267,98 @@ async def test_list_decisions_defaults_send_no_params(mock_env: None) -> None:
     await client.list_decisions("tm-001")
     assert route.calls.last.request.url.path == "/api/models/tm-001/decisions"
     assert not dict(route.calls.last.request.url.params)
+    await client.close()
+
+
+# ------------------------------------------------------------------
+# Each stream call names its intent, and the answer is typed by what it is
+# ------------------------------------------------------------------
+
+
+def _stream_route(events):
+    return respx.post(f"{_BASE}/api/model/stream").mock(
+        return_value=httpx.Response(
+            200, content=_build_sse_bytes(events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+
+_RESULT_EVENT = ("result", {"type": "result", "markdown": "", "csv": "",
+                            "threat_model": SAMPLE_THREAT_MODEL,
+                            "model_id": "tm-001", "version": 2})
+_CHAT_EVENT = ("chat_response", {"type": "chat_response",
+                                 "content": "Asset 'A9' not found in the model."})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call,intent", [
+    (lambda c: c.generate_threat_model("A service"), "generate"),
+    (lambda c: c.refine_threat_model("tm-001", "Add a store"), "refine"),
+    (lambda c: c.query_threat_model("tm-001", "What is protected?"), "query"),
+])
+@respx.mock
+async def test_each_stream_call_names_its_intent(mock_env: None, call, intent) -> None:
+    route = _stream_route([_CHAT_EVENT if intent == "query" else _RESULT_EVENT])
+    client = MipitiClient()
+    await call(client)
+    assert json.loads(route.calls.last.request.content)["intent"] == intent
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refine_answered_in_prose_is_a_chat_response(mock_env: None) -> None:
+    """A targeted refine that cannot apply answers in prose and writes
+    nothing; it is never read as a model with no id."""
+    from mipiti_mcp.types import ChatResponse
+    _stream_route([_CHAT_EVENT])
+    client = MipitiClient()
+    result = await client.refine_threat_model("tm-001", "Edit A9")
+    assert isinstance(result, ChatResponse)
+    assert "A9" in result.content
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_question_answered_with_a_model_is_a_generate_result(mock_env: None) -> None:
+    from mipiti_mcp.types import GenerateResult
+    _stream_route([_RESULT_EVENT])
+    client = MipitiClient()
+    result = await client.query_threat_model("tm-001", "What is protected?")
+    assert isinstance(result, GenerateResult)
+    assert result.version == 2
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_restore_returns_the_entity_change_envelope(mock_env: None) -> None:
+    envelope = {"model": SAMPLE_THREAT_MODEL, "controls_carried": 1,
+                "controls_orphaned": 0, "orphaned_control_ids": []}
+    respx.post(f"{_BASE}/api/models/tm-001/assets/A1/restore").mock(
+        return_value=httpx.Response(200, json=envelope))
+    client = MipitiClient()
+    out = await client.restore_asset("tm-001", "A1")
+    assert out == envelope
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_compact_control_listing_is_typed_as_summaries(mock_env: None) -> None:
+    from mipiti_mcp.types import ControlSummariesResponse
+    respx.get(f"{_BASE}/api/models/tm-001/controls").mock(
+        return_value=httpx.Response(200, json={
+            "controls": [{"id": "CTRL-01", "description": "d", "status": "implemented",
+                          "verification_status": "pending", "assertion_count": 1,
+                          "co_ids": ["CO1"], "assumption_groups": {},
+                          "attestation_dependency": None}],
+            "model_id": "tm-001", "model_version": 1, "total": 1, "returned": 1}))
+    client = MipitiClient()
+    out = await client.get_controls("tm-001", summary_only=True)
+    assert isinstance(out, ControlSummariesResponse)
+    assert out.controls[0].co_ids == ["CO1"]
+    assert "control_objective_ids" not in out.controls[0].model_dump()
     await client.close()
