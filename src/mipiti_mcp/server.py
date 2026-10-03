@@ -90,7 +90,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (removals are audit-preserving; restore applies to `asset`, `attacker`, and `assumption`).
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
-- `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and saves a new version.
+- `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
 - `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model.
 - `list_threat_models` — browse existing models.
@@ -118,13 +118,13 @@ A threat model produces control objectives. Controls are derived from these and 
 - `get_sufficiency` — quick check: do assertions for a single control collectively cover all aspects? Evaluated server-side at submission. For the per-clause work list read `get_control_work_order`: where the order names a required class for a clause, `required_evidence` carries the class, the clause id to bind evidence to, and a submission skeleton to fill in.
 - `get_mitigation_groups` — get the current group structure for a CO with control details (id, description, status) for each entry. Shows numbered groups (AND within, OR across), defense-in-depth controls, and unmapped controls available for assignment. Use before `set_mitigation_groups`, when reviewing why a CO is at_risk, or to find unmapped controls.
 - `set_mitigation_groups` — set which controls are required vs defense-in-depth for a CO. Use when a control is blocking a CO but is redundant with existing mitigations (e.g., HMAC signing redundant with TLS + content hash), or when restructuring alternative mitigation paths. Groups define: within group AND (all required), across groups OR (any complete group mitigates). AI-gated: rejected if the new structure doesn't satisfy the CO.
-- `refine_control` — modify a control's description if it doesn't match the actual security requirement. **Side effect on accepted refinements**: every assertion attached to the control is superseded — their claims were authored against the prior description and may not be on-topic for the new one. Response carries `superseded_assertions: <count>`. Re-submit any assertion that still applies; superseded rows remain in history.
+- `refine_control` — modify a control's description if it doesn't match the actual security requirement. **After an accepted refinement** the control's assertions are kept and judged again against the new description in the background: one that still fits keeps counting as evidence, and one that no longer fits is flagged, so read `get_sufficiency` once the re-judgement lands and replace what it names. Nothing is superseded by the refinement itself (`superseded_assertions` is always 0).
 - `delete_control` — soft-delete a control with justification. Blocked if it is the only control covering a CO — add a replacement first.
 - `import_controls` — import existing controls from JSON or free text, auto-mapped to COs and deduplicated against existing controls. They await their judgement: the groups they join credit nothing until `judge_imported_controls` is asked for.
 - `add_evidence` / `remove_evidence` — attach auxiliary metadata (docs, links, artifacts) to a control. Evidence is contextual only — it does NOT prove a control is implemented. Only assertions do that.
 - `regenerate_controls` — propose a regeneration of the controls (it starts nothing; `start_control_build` starts it). Supports `mode="per_co"` for thorough single-responsibility generation, and `co_ids="CO1,CO5"` to regenerate only specific COs (preserving other controls). Controls whose descriptions survive unchanged keep their implementation status, assertions, and mappings.
 - `start_control_build` / `discard_control_build` — start the model's proposed control build after reviewing it, or drop a held one. See **Control builds** below.
-- `list_control_revisions` / `undo_control_change` / `revert_model_version` — every change to a version's controls with its author; undo the latest change (latest first, no redo); revert the latest model version to a copy of the one before it.
+- `list_control_revisions` / `undo_control_change` / `revert_model_version` — every change to a version's controls with its author; undo the latest change (latest first, no redo); revert the latest model version to a copy of the latest earlier version not already discarded.
 
 **Workflow — handle in this order:**
 
@@ -382,7 +382,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 **Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits`, and the `model_version` and `set_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, confirm_estimate=True)`. A `review_stale` refusal means the model or its controls changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
-**Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_control_change` undoes the latest change (latest first, no redo); `revert_model_version` replaces the latest model version with a copy of the one before it, keeping the replaced one in the history as discarded.
+**Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_control_change` undoes the latest change (latest first, no redo); `revert_model_version` replaces the latest model version with a copy of the latest earlier version not already discarded, keeping the replaced one in the history as discarded.
 
 **Strengthening runs when asked.** A completed build reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: to have them judged now, call `judge_objectives` (estimate first, then `confirm_estimate=True`). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
 """
@@ -1434,7 +1434,27 @@ async def get_control_generation_status(
       Nothing was published.
     - ``discarded`` — someone discarded the held build; nothing it did was
       published, and it is proposed again (``proposal``).
-    - ``ready_cos`` / ``target_cos`` — coverage progress.
+    - ``ready_cos`` / ``target_cos`` — objectives that have at least one
+      control so far, out of those in the build's scope. Progress, never
+      coverage: an attached control says nothing about whether its group
+      would mitigate the objective.
+    - ``phase`` / ``stage`` / ``phase_progress`` — WHILE ``generating``:
+      ``phase`` is ``generating`` (authoring controls) or ``refining`` (every
+      objective has a control and the build's later stages are still
+      changing the set it will publish); ``stage`` names the stage the run is
+      in (``authoring``, ``selfheal`` — a strengthening —, ``finishing`` —
+      the quality review and coverage-gap close —, or ``dispatch`` —
+      publishing); ``phase_progress`` is the percent through a
+      strengthening and says nothing about the other stages. ``hint`` says
+      the same in words. ``stage`` is empty once ``terminal``.
+    - ``covered_cos`` / ``judged_cos`` / ``awaiting_judgement_cos`` — ONCE
+      ``complete``: the coverage figure. ``covered_cos`` of ``judged_cos``
+      objectives have controls whose group would mitigate them once
+      implemented; ``awaiting_judgement_cos`` more have no answer yet and are
+      in neither number.
+    - ``analysis_pending`` — true while judgements queued for the model, or
+      background passes the build's publish dispatched, have not finished:
+      the coverage figure may still move.
     - ``selfheal_activity`` — WHILE RUNNING, once drafting is done: what the
       strengthening round in flight is working on. Carries ``round``,
       ``open_objectives`` / ``selected_objectives`` (still insufficient, and
@@ -2013,13 +2033,13 @@ async def refine_control(
     not currently meet it means the control is UNMET, never that the control
     should ask for less.
 
-    **Side effect on accepted refinements**: every assertion attached
-    to this control is superseded — their claims were authored against
-    the prior description and are not guaranteed to align with the new
-    one. The response includes ``superseded_assertions: <count>`` so
-    the caller knows how many. Re-submit any assertion that still
-    applies under the new description; superseded rows remain in
-    history with ``superseded_by="control_refined:..."``.
+    **After an accepted refinement** the control's assertions are kept
+    and judged again against the new description in the background: an
+    assertion that still fits keeps counting as evidence, and one that no
+    longer fits is flagged as not aligned with the control. Read
+    ``get_sufficiency`` once that re-judgement lands, and replace the
+    assertions it names. The refinement itself supersedes nothing; the
+    response's ``superseded_assertions`` is always 0.
 
     Args:
         model_id: ID of the threat model.
@@ -5470,10 +5490,6 @@ async def get_control_assumption_groups(
     - When reviewing why a control is / isn't externally handled
     - When an assumption's attestation expires and you need to trace impact
 
-    The legacy set_control_assumption_groups / set_control_assumption_groups tools remain as shorthand
-    for the common single-assumption, single-group case. They operate on
-    group 1.
-
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control (e.g., "CTRL-03").
@@ -5587,9 +5603,10 @@ async def convert_assumption_to_controls(
 
     Side effect on control-level linkage: this assumption is also removed
     from every assumption_groups entry on every control that referenced it.
-    Any group left empty by the removal is dropped, and any control that
-    no longer has at least one complete group reverts to not_implemented.
-    Underlying assumptions are not deleted — only the linkages.
+    Any group left empty by the removal is dropped; a control's status is
+    not changed, and a control left with no group is no longer backed by
+    an assumption. Underlying assumptions are not deleted — only the
+    linkages.
 
     Args:
         model_id: ID of the threat model.
@@ -7100,17 +7117,19 @@ async def get_controls(
     include_orphaned: bool = False,
     summary_only: bool = False,
 ) -> dict:
-    """Get implementation controls for a threat model — list or single-control detail. Read-only (with one list-mode side effect, below).
+    """Get implementation controls for a threat model — list or single-control detail. Read-only; no side effects.
 
     Two modes, selected by whether ``control_id`` is set:
 
     - **List mode** (``control_id`` omitted) — returns the controls that
       should be implemented to satisfy the model's control objectives, as
-      ``{"controls": [...], "total": N, "returned": M}``. One side effect:
-      if controls have never been generated for this model, the first
-      call triggers generation. Generation may finish inline or continue
-      in the background — if results look incomplete, poll
-      ``get_control_generation_status`` and re-read once it reports
+      ``{"controls": [...], "total": N, "returned": M}``. Reading builds
+      nothing: a model's controls are built only by a control build someone
+      starts, so an empty list on a new model means its proposed build has
+      not been started (``get_control_generation_status`` shows the
+      ``proposal``; ``start_control_build`` starts it). While a started
+      build holds the model, the list is the last published set and carries
+      a ``building`` marker; read again once the build reports
       ``complete``. The filters (``status``, ``co_id``, ``component_id``),
       pagination (``offset``/``limit``), and the ``include_deleted`` /
       ``include_orphaned`` / ``summary_only`` toggles apply only in this
@@ -7423,12 +7442,14 @@ async def revalidate_entity_quality(
     (which would destroy controls, assertions, and components). It is
     non-destructive: an entity that should be removed is left in place with a
     quality warning rather than deleted, so no control objective loses its asset
-    or attacker anchor. The result is saved as a new model version; controls and
-    control objectives carry forward.
+    or attacker anchor. It creates no new model version: the re-validation is
+    queued and runs in the background, and the refreshed warnings appear on the
+    next read of the model.
 
     May consume credits for the entities that need the deeper review; a model
-    already in good shape costs nothing. Returns the updated model envelope:
-    ``{"accepted": true, "model": {...}}``.
+    already in good shape costs nothing. Returns at once with
+    ``{"accepted": true, "queued": <entities queued>, "model": {...}}``, where
+    ``model`` is the model as it stands before the re-validation lands.
 
     Args:
         model_id: ID of the threat model whose assets and attackers to

@@ -814,7 +814,8 @@ class MipitiClient:
         control_id: str,
         status: str,
         implementation_notes: str = "",
-    ) -> ThreatModel:
+    ) -> Control:
+        """PATCH /api/controls/{control_id}. Returns the updated control."""
         body: dict[str, Any] = {
             "status": status,
             "implementation_notes": implementation_notes,
@@ -824,7 +825,7 @@ class MipitiClient:
             body,
             params={"model_id": model_id},
         )
-        return ThreatModel.model_validate(data)
+        return Control.model_validate(data)
 
     async def start_refine_control(
         self,
@@ -1869,11 +1870,13 @@ class MipitiClient:
 
         Non-destructive: an entity that should be removed is left in place with
         a quality warning rather than deleted, so no control objective loses its
-        asset/attacker anchor. The result is saved as a new model version
-        (controls and control objectives carry forward). May consume credits for
-        the entities that need the deeper review.
+        asset/attacker anchor. It creates no model version: the re-validation is
+        queued and runs in the background, and the refreshed warnings appear on
+        the next read. May consume credits for the entities that need the
+        deeper review.
 
-        Returns the entity-CRUD envelope: ``{"accepted": true, "model": {...}}``.
+        Returns ``{"accepted": true, "queued": int, "model": {...}}``, the
+        model as it stands before the re-validation lands.
         """
         return await self._post(
             f"/api/models/{model_id}/revalidate-entities", {},

@@ -290,7 +290,10 @@ class RemediationApplyResult(_Base):
     # "name"|"capability": "...", "reason": "..."}.
     skipped: list[dict] = []
     exclusions_created: int = 0
-    controls_generated: int = 0
+    # The control objectives the remediation's new version left without a
+    # control, for which a control build is now proposed. Nothing is built
+    # until a person starts that build.
+    build_proposed_for: list[str] = []
     mappings_created: int = 0
     version: int = 0
 

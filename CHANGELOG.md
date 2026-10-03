@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pause_first`, `not_held`, `402`) come back as data.
 - **`list_control_revisions`, `undo_control_change`, `revert_model_version`.**
   Every change to a version's controls with its author; undo the latest
-  change; revert the latest model version to a copy of the one before it.
+  change; revert the latest model version to a copy of the latest earlier
+  version not already discarded.
 - **`judge_imported_controls`.** Estimate, and on confirmation queue, the
   judgement of the imported controls awaiting one.
 
@@ -169,6 +170,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explains `blocked` and tells agents not to regenerate controls in that state.
 
 ### Fixed
+
+- `update_control_status` returns the updated control (`Control`), which is
+  what the API answers; it was parsed as a threat model.
+- `RemediationApplyResult` carries `build_proposed_for`, the objectives the
+  remediation left without a control and for which a control build is now
+  proposed, in place of a `controls_generated` count the API no longer sends.
+- `revalidate_entity_quality` says it creates no model version: the re-judgment
+  runs in the background and returns `{accepted, queued, model}`, and the
+  refreshed warnings appear on the next read.
+- `refine_control` says an accepted refinement keeps the control's assertions
+  and judges them again against the new description; nothing is superseded
+  (`superseded_assertions` is always 0).
+- `get_controls` is read-only: it no longer says a first read starts
+  generation. An empty list means a proposed build has not been started, and
+  a `building` marker appears while a build holds the model.
+- `get_control_generation_status` documents `phase`, `stage` and
+  `phase_progress`, says `ready_cos`/`target_cos` are progress rather than
+  coverage, and names `covered_cos`, `judged_cos`, `awaiting_judgement_cos`
+  and `analysis_pending`.
+- `convert_assumption_to_controls`, and the README's
+  `set_control_assumption_groups` row, no longer say a control whose
+  assumption groups are removed reverts to `not_implemented`: its status is
+  not changed.
+- `get_control_assumption_groups` drops a paragraph pointing at the
+  single-group shorthand tools, which were removed in favour of
+  `set_control_assumption_groups`.
 
 - **Justification length is checked before the call.** `set_mitigation_groups`,
   `set_control_assumption_groups` and `refine_control` state their

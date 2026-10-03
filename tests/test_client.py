@@ -192,12 +192,23 @@ async def test_get_controls(mock_env: None) -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_update_control_status(mock_env: None) -> None:
+    """The endpoint answers with the updated control record, and the client
+    returns it as a control."""
+    from mipiti_mcp.types import Control
+
     respx.patch("https://test.api.mipiti.io/api/controls/CTRL-01").mock(
-        return_value=httpx.Response(200, json={"id": "CTRL-01", "status": "implemented"})
+        return_value=httpx.Response(200, json={
+            "id": "CTRL-01", "description": "Hash passwords with bcrypt",
+            "control_objective_ids": ["CO1"], "status": "implemented",
+            "implementation_notes": "", "verification_status": "pending",
+            "assertion_count": 1,
+        })
     )
     client = MipitiClient()
     result = await client.update_control_status("tm-001", "CTRL-01", "implemented")
+    assert isinstance(result, Control)
     assert result.id == "CTRL-01"
+    assert result.status == "implemented"
     await client.close()
 
 

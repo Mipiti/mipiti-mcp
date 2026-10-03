@@ -227,7 +227,13 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
             "awaiting_judgement": ["CTRL-09"], "co_ids": ["CO2"],
             "scope": ["CO2"], "ungrouped": [],
             "estimate": {"credits": 3.0, "objectives": 1}},
-        "update_control_status": {"id": "CTRL-01", "status": "implemented"},
+        "update_control_status": Control.model_validate({
+            "id": "CTRL-01", "control_objective_ids": ["CO1"],
+            "description": "Implement token rotation with short-lived access tokens",
+            "status": "implemented", "implementation_notes": "",
+            "evidence": [], "framework_refs": [],
+            "is_verified": False, "verification_status": "pending",
+            "orphaned": False}),
         "add_evidence": {"control_id": "CTRL-01", "evidence_count": 2},
         "remove_evidence": {"control_id": "CTRL-01", "evidence_count": 0},
         "import_controls": {"imported": 3},
@@ -249,7 +255,8 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                           "controls_carried": 0, "controls_orphaned": 0},
         "remove_attacker": {"model": {"id": "tm-001", "attackers": []},
                             "controls_carried": 0, "controls_orphaned": 0},
-        "revalidate_entities": {"accepted": True, "model": {"id": "tm-001"}},
+        "revalidate_entities": {"accepted": True, "queued": 3,
+                                "model": {"id": "tm-001"}},
         "reevaluate_factors": {
             "model_id": "tm-001",
             "assets_reevaluated": 2,
@@ -1833,7 +1840,9 @@ class TestUpdateControlStatus:
         mock = _mock_client()
         with _patch_client(mock):
             result = await update_control_status(server_version="0", model_id="tm-001", control_id="CTRL-01", status="implemented")
+        assert result["id"] == "CTRL-01"
         assert result["status"] == "implemented"
+        assert result["control_objective_ids"] == ["CO1"]
 
     @pytest.mark.asyncio
     async def test_invalid_status(self) -> None:
@@ -2033,6 +2042,7 @@ class TestRevalidateEntities:
                 server_version="0", model_id="tm-001",
             )
         assert result["accepted"] is True
+        assert result["queued"] == 3
         assert result["model"]["id"] == "tm-001"
         mock.revalidate_entities.assert_awaited_once_with("tm-001")
 
