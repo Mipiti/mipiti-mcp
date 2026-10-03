@@ -68,4 +68,6 @@ constraint-dependencies = [
     "mcp>=1.28.1",               # CVE-2026-52870, CVE-2026-59950
     "pyjwt>=2.14.0",             # CVE-2026-102274
     "urllib3>=2.8.0",            # PYSEC-2026-4175 / PYSEC-2026-4176 / PYSEC-2026-4177
+    "pip>=26.2.0",               # PYSEC-2026-3721 (via pip-audit in requirements-audit.lock)
+    "msgpack>=1.2.1",            # PYSEC-2026-3625 (via pip-audit's cachecontrol)
 ]

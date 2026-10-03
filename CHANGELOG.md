@@ -86,8 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Floored `pyjwt>=2.14.0` via `[tool.uv] constraint-dependencies` (CVE-2026-102274)
   and recompiled the lockfiles.
 - Floored `urllib3>=2.8.0` the same way (PYSEC-2026-4175, PYSEC-2026-4176,
-  PYSEC-2026-4177); it is pulled in by the build and audit toolchains, and
-  `pip-audit` reports no known vulnerabilities in any lockfile.
+  PYSEC-2026-4177), pulled in by the build and audit toolchains, and `pip>=26.2.0`
+  (PYSEC-2026-3721) and `msgpack>=1.2.1` (PYSEC-2026-3625), pulled in by the
+  audit toolchain. `pip-audit` reports no known vulnerabilities in any lockfile.
 
 ### Added
 
