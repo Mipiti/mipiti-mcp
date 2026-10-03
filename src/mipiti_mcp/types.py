@@ -2,6 +2,11 @@
 
 All models use ``extra="allow"`` so new API fields pass through automatically
 as attributes — no client update needed when the backend adds fields.
+
+A model declares only what the answer it parses carries: a declared field the
+answer lacks is read back as its default, and an agent reports that default as
+fact. A field only some variants of an answer carry defaults to ``None``, which
+reads as "not sent".
 """
 
 from __future__ import annotations
@@ -75,7 +80,6 @@ class TrustBoundary(_Base):
 class ControlObjective(_Base):
     id: str
     asset_id: str
-    security_property: SecurityProperty | None = None
     security_properties: list[SecurityProperty] = []
     attacker_id: str
     statement: str
@@ -114,7 +118,6 @@ class Control(_Base):
     source: str = ""
     source_label: str = ""
     framework_refs: list[str] = []
-    is_verified: bool = False
     verification_status: str = "pending"
     # Derived at read time: True when every mapped CO is tombstoned.
     # Orphaned controls are hidden from the default get_controls
@@ -165,8 +168,10 @@ class GenerateResult(_Base):
     # The corresponding entity's identity fields in ``threat_model``
     # were reverted to pre-refine values, so the LLM's proposed
     # rewrite did not apply. Agents surfacing a refine result to the
-    # operator should check this array and present each rejection.
-    semantic_rejections: list[dict[str, Any]] = []
+    # operator should check this array and present each rejection. Sent by
+    # a broad refine only; ``None`` on a generation or a targeted edit, which
+    # run no such guard.
+    semantic_rejections: list[dict[str, Any]] | None = None
 
 
 class ChatResponse(_Base):
@@ -181,6 +186,27 @@ class ChatResponse(_Base):
 
 class ControlsResponse(_Base):
     controls: list[Control] = []
+    model_id: str = ""
+    model_version: int = 0
+    total: int = 0
+    returned: int = 0
+
+
+class ControlSummary(_Base):
+    """A control as the compact (``summary_only``) listing gives it."""
+    id: str
+    description: str
+    status: str = "not_implemented"
+    verification_status: str = "pending"
+    assertion_count: int = 0
+    co_ids: list[str] = []
+    assumption_groups: dict[str, list[str]] = {}
+    attestation_dependency: Any = None
+
+
+class ControlSummariesResponse(_Base):
+    """The compact (``summary_only``) control listing."""
+    controls: list[ControlSummary] = []
     model_id: str = ""
     model_version: int = 0
     total: int = 0
@@ -208,17 +234,27 @@ class GapAnalysisResult(_Base):
 
 
 class ScanPromptResult(_Base):
-    control_id: str = ""
-    prompt: str = ""
-    message: str = ""
+    """One of three answers: one control's prompt (``control_id`` and
+    ``prompt``); the batch of every control not yet implemented
+    (``controls``, ``included``, ``total_controls``, ``truncated``); or, when
+    every control is implemented, a ``message``."""
+    control_id: str | None = None
+    prompt: str | None = None
+    message: str | None = None
+    controls: list[dict[str, Any]] | None = None
+    included: int | None = None
+    total_controls: int | None = None
+    truncated: bool | None = None
 
 
 class ControlObjectivesResponse(_Base):
+    """The count, and, when ``offset``/``limit`` asked for them, the
+    objectives themselves (``None`` when they were not asked for)."""
     model_id: str = ""
     version: int = 1
     total: int = 0
-    returned: int = 0
-    control_objectives: list[dict[str, Any]] = []
+    returned: int | None = None
+    control_objectives: list[dict[str, Any]] | None = None
 
 
 # ------------------------------------------------------------------
@@ -232,7 +268,9 @@ class AssessmentResult(_Base):
 
 
 class ReviewQueueResponse(_Base):
-    """Stale controls not reviewed in 90+ days."""
+    """What needs a person, ranked; each row's ``item_type`` names its kind
+    (escalation, proposal, unaccepted_assumption, open_assumption,
+    stale_control)."""
     items: list[dict[str, Any]] = []
 
 
@@ -251,16 +289,25 @@ class ComplianceFramework(_Base):
 
 
 class SelectFrameworksResult(_Base):
-    model_id: str = ""
-    selected_frameworks: list[str] = []
-    added: list[str] = []
-    framework_count: int = 0
+    """The frameworks selected, and the auto-remediation job started for each
+    (none when the model has no controls yet)."""
+    selected: list[str] = []
+    auto_remediate_jobs: list[dict[str, Any]] = []
 
 
 class ComplianceReport(_Base):
+    """A model's or a system's report on one framework (the scope's id is
+    ``model_id`` or ``system_id``)."""
     framework_id: str = ""
     framework_name: str = ""
-    coverage: int = 0
+    total_requirements: int = 0
+    covered: int = 0
+    partial: int = 0
+    uncovered: int = 0
+    unmapped: int = 0
+    excluded: int = 0
+    coverage_percent: float = 0.0
+    assessments: list[dict[str, Any]] = []
 
 
 class AutoMapResult(_Base):
@@ -311,17 +358,19 @@ class Workspace(_Base):
 
 
 class System(_Base):
+    """A system. The listing gives each one's ``model_count``; creating or
+    reading one gives its ``model_ids`` (and, read, its ``models``)."""
     id: str = ""
     workspace_id: str = ""
     name: str = ""
     description: str = ""
-    model_count: int = 0
+    model_count: int | None = None
+    model_ids: list[str] | None = None
 
 
 class SystemSelectFrameworksResult(_Base):
-    system_id: str = ""
-    selected_frameworks: list[str] = []
-    model_count: int = 0
+    """The frameworks selected, and how many member models they reached."""
+    selected: list[str] = []
     propagated_to_models: int = 0
 
 
@@ -348,11 +397,15 @@ class SubmitAssertionsResult(_Base):
 
 class VerificationReport(_Base):
     model_id: str = ""
-    version: int = 0
     total_assertions: int = 0
     tier1: dict[str, int] = {}
     tier2: dict[str, int] = {}
-    controls: dict[str, dict[str, int]] = {}
+    controls_fully_verified: int = 0
+    controls_partially_verified: int = 0
+    controls_unverified: int = 0
+    controls_total_filtered: int = 0
+    controls_returned: int = 0
+    control_details: list[dict[str, Any]] = []
 
 
 # ------------------------------------------------------------------

@@ -25,6 +25,7 @@ from .assertion_types import (
     validate_covers,
 )
 from .client import MipitiClient
+from .types import ChatResponse
 
 # ------------------------------------------------------------------
 # Instructions (tier-aware)
@@ -88,14 +89,14 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it attests it and requires `change_reason` on either tool; it is audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
-- `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (removals are audit-preserving; restore applies to `asset`, `attacker`, and `assumption`).
+- `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving, and both return the entity-change result with the model as it now stands.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
 - `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
 - `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them).
-- `query_threat_model` — ask questions about an existing model.
+- `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
 - `list_threat_models` — browse existing models.
 - `rename_threat_model` — rename a model (metadata only, no new version). Model titles must be unique within a workspace (case-insensitive); pick a distinct name on the first try to avoid a 409 retry.
-- `set_threat_model_parent` — wire a model under (or detach it from) a parent on the recursive composition tree. Pass `parent_id=None` to clear. Server rejects cycles and over-deep chains; bumps version on success.
+- `set_threat_model_parent` — wire a model under (or detach it from) a parent on the recursive composition tree. Pass `parent_id=None` to clear. Server rejects cycles and over-deep chains. The parent edge is relationship metadata: the model keeps its version.
 - `delete_threat_model` — permanently delete a model and all its data.
 - `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces the group/tag auditor report (see Tags).
 - `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
@@ -105,7 +106,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 A threat model produces control objectives. Controls are derived from these and represent specific security requirements to implement. Assertions are typed, machine-verifiable claims about system properties that prove a control is satisfied. A system property can be verified by examining source code, configuration files, infrastructure definitions, or external service settings.
 
 **Key tools:**
-- `get_controls` — lists controls with current status; pass a single control id to read just one. Use `summary_only=True` for a compact response (id, description, status, assertion_count, assumed_by).
+- `get_controls` — lists controls with current status; pass a single control id to read just one. Use `summary_only=True` for a compact response (id, description, status, verification_status, assertion_count, co_ids, assumption_groups, attestation_dependency).
 - `get_control_objectives` — lists COs with which controls cover each one; pass a single CO id to read just one. Pair with `get_reachability_verdicts` to surface composer reachability state per CO before linking assumptions or regenerating.
 - `submit_assertions` — provide proof for a control. Call `get_assertion_types` for the types and their params; the tool description is prose your client may shorten. Always verify locally first: `mipiti-verify verify <type> -p key=value --project-root .` Read the target file and confirm a reviewer would agree with the claim.
 - **Assertion design: prefer decomposition over breadth.** Tier 2 (semantic LLM check) evaluates each assertion with only its own check-type evidence. A single broad claim like "X calls Y to do A and B using C" will pass Tier 1 but fail Tier 2 — the mechanical evidence (e.g., a function_calls result) doesn't surface facts A, B, C. Split into multiple atomic assertions — one for each narrow aspect — each with a check type that directly shows the relevant code (`pattern_matches` on the specific line, `function_exists` for the named function, etc.). Submit them as a group on the same control. Sufficiency combines them; individually each is trivially provable.
@@ -225,8 +226,8 @@ Trust boundaries and assumptions are versioned (CRUD creates new model versions 
 - `add_trust_boundary` / `edit_trust_boundary` — create or edit trust boundaries (defines where trust transitions occur); soft-delete one with `remove_entity(entity_type="trust_boundary")`. `sealed=True` on its own is a suggestion; only an attested seal (`edit_trust_boundary` with `seal_source="attested"` and a `change_reason`) lets reachability decisively drop an objective past the boundary.
 - `add_assumption` — add an assumption, optionally linking it to COs it covers via `linked_co_ids`. Linked assumptions can mitigate COs when attested.
 - `edit_assumption` — update description and/or linked COs.
-- `remove_entity(entity_type="assumption")` — soft-delete an assumption (preserved for audit). Linked COs are no longer mitigated by it; controls with `assumed_by` pointing to it become inert (pointer preserved to enable restore).
-- `restore_entity(entity_type="assumption")` — restore a soft-deleted assumption. Controls with `assumed_by` pointing to it automatically reconnect. Re-attestation required before the assumption mitigates COs again.
+- `remove_entity(entity_type="assumption")` — soft-delete an assumption (preserved for audit). Its CO links are cleared and its attestations retired; controls whose `assumption_groups` name it keep their groups, which credit nothing through it while it is deleted.
+- `restore_entity(entity_type="assumption")` — restore a soft-deleted assumption to active. Its CO links are not restored (set them again with `edit_assumption`), and it must be attested again before it counts anywhere it is linked or grouped.
 - `submit_attestation` — record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, and `expires_at` (ISO 8601, e.g. "2027-03-29T00:00:00Z"). Expiry triggers CO re-evaluation. Attesting accepts the assumption: a program is refused (403 with `escalation_id`) unless the workspace delegates `assumption_accepted` to it. Editing an assumption's description retires its attestation. An attestation is a claim: it can cover an existential clause and never a for-all one, and a CI-minted attestation is no stronger than the weakest assertion behind it.
 - `list_attestations` — attestation history for an assumption.
 
@@ -255,11 +256,11 @@ Threat models can compose hierarchically — a child model inherits assets, atta
 
 Start with the overview, then drill in:
 - `get_composition_overview` — flag state, tree position, own-vs-inherited counts, reconciliation badge. Cheapest call (~1-2KB). Use first.
-- `composition_entities` — full own + inherited entity set per kind.
-- `composition_control_objectives` — effective CO list (classified own / cross / inherited).
-- `composition_coverage` — effective coverage / compliance numbers.
-- `composition_reachability` — composed reachability verdicts.
-- `composition_attack_paths` — AttackPath references resolved against the effective entity set (paths spanning inherited entities resolve cleanly).
+- `list_effective_entities` — full own + inherited entity set per kind.
+- `list_effective_control_objectives` — effective CO list (classified own / cross / inherited).
+- `get_effective_coverage` — effective coverage / compliance numbers.
+- `get_reachability_verdicts(composed=True)` — composed reachability verdicts.
+- `list_effective_attack_paths` — AttackPath references resolved against the effective entity set (paths spanning inherited entities resolve cleanly).
 
 ### Reconciliation — surfaced cross-tree duplicates
 
@@ -268,10 +269,10 @@ When the same entity is authored on both the child and an ancestor (e.g., both n
 - `heuristic` — identical name only; structural refs differ. Triage needed.
 
 Tools:
-- `composition_reconciliation` — paginated candidate list with names, source-model titles, and reasons.
+- `list_reconciliation_candidates` — the paginated candidate list with names, source-model titles, and reasons; `disposition="rejected"` lists the pairs rejected on the model instead.
+- `apply_certain_reconciliation_match` — collapse a candidate onto the inherited entity.
 - `reject_reconciliation_candidate` — record "these are NOT duplicates"; the detector filters the pair out of future queues, durable at org scope.
 - `unreject_reconciliation_candidate` — undo a rejection.
-- `list_reconciliation_candidates` — the unified candidate reader; pass its rejections param to list the rejected pairs for a model instead of the active candidates.
 
 ### Mutations — lift and split
 
@@ -329,7 +330,7 @@ _INSTRUCTIONS_COMPLIANCE = """\
 ## Compliance
 
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
-2. `import_compliance_framework` — import a customer-specific framework (regulatory, contractual, or internal program not covered by the 11 built-ins). Accepts a JSON body with `name`, `requirements`, and the optional `level_definitions` per-level legend.
+2. `import_compliance_framework` — import a customer-specific framework (regulatory, contractual, or internal program not covered by the built-ins). Accepts a JSON body with `name`, `requirements`, and the optional `level_definitions` per-level legend.
 3. `select_compliance_frameworks` — activate frameworks for a model (or, by scope, for a system or tag/group). **Automatically triggers auto-remediation**: maps existing controls, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for remaining gaps. Returns `auto_remediate_jobs` with job IDs for polling.
 4. `get_compliance_report` — coverage report for a model, system, or tag/group by scope (run after auto-remediation completes).
 5. `auto_remediate_compliance` — re-trigger auto-remediation manually (e.g. after model changes).
@@ -737,6 +738,10 @@ async def generate_threat_model(
       is superficial and the operator confirmed the new model is
       distinct).
 
+    The request names its purpose, so the platform always generates: it
+    never reads the description as a question or a change to another
+    model.
+
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
@@ -842,6 +847,10 @@ async def generate_threat_model(
                     "anyway."
                 ),
             }
+        if isinstance(result, ChatResponse):
+            # Only a backend that does not take the named intent answers a
+            # generation in prose; nothing was written.
+            return {"generated": False, "message": result.content}
         tm = result.threat_model
         # `model_id` is the persisted model id; `threat_model.id` is the
         # generated in-memory id, which can be present even when the model was
@@ -930,6 +939,12 @@ async def refine_threat_model(
     ``controls_status`` / ``proposal`` / ``controls_expected`` say what the
     refined model owes in controls, as for ``generate_threat_model``: a
     proposed build that runs only when ``start_control_build`` starts it.
+
+    When the instruction cannot be applied — a targeted change naming an
+    entity the model does not have — nothing is written and the answer is
+    ``{model_id, changed: false, message}``, the message saying why.
+    ``semantic_rejections`` is sent by a broad rewrite only; a targeted
+    change runs no such guard and reports it empty.
     """
     # See generate_threat_model for rationale on the last-total tracker.
     last_progress_total: list[float] = [0.0, 0.0]
@@ -946,6 +961,11 @@ async def refine_threat_model(
             await _safe_report_progress(
                 ctx, last_progress_total[1], last_progress_total[1], "Complete",
             )
+        if isinstance(result, ChatResponse):
+            # The refine could not apply (a targeted change naming an entity
+            # the model does not have) and said why; nothing was written.
+            return {"model_id": model_id, "changed": False,
+                    "message": result.content}
         tm = result.threat_model
         live_assets = [a for a in tm.assets if not getattr(a, "deleted", False)]
         live_attackers = [t for t in tm.attackers if not getattr(t, "deleted", False)]
@@ -999,6 +1019,14 @@ async def query_threat_model(
     """
     try:
         result = await _get_client().query_threat_model(model_id, question)
+        if not isinstance(result, ChatResponse):
+            # Only a backend that does not take the named intent can treat
+            # a question as a change; say what happened rather than report
+            # an empty answer.
+            return {"model_id": model_id, "answer": None, "changed": True,
+                    "version": result.version,
+                    "message": "The platform handled the question as a change "
+                               "to the model and wrote a new version."}
         return {"model_id": model_id, "answer": result.content}
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -1072,11 +1100,11 @@ async def set_threat_model_parent(
 
     Pass ``parent_id=None`` to clear the parent (the model becomes a
     tree root). The server rejects cycles (you cannot make a descendant
-    your parent) and over-deep chains (depth bounded by the platform's
-    configured maximum tree depth) with HTTP 400. Bumps the model version on
-    success.
+    your parent, 409) and over-deep chains (depth bounded by the platform's
+    configured maximum tree depth, 400). The parent edge is relationship
+    metadata, so the model keeps its version.
 
-    Returns the updated threat model.
+    Returns ``{model_id, parent_id, children}``.
 
     Args:
         model_id: ID of the threat model whose parent is being set.
@@ -1305,11 +1333,15 @@ async def get_threat_model(
     Args:
         model_id: ID of the threat model.
         version: Optional specific version number. Defaults to latest.
-        include_cos: Include control objectives inline.
+        include_cos: Include control objectives inline (default False:
+            the answer carries no ``control_objectives`` key; read them
+            with ``get_control_objectives``).
     """
     try:
         model = await _get_client().get_model(model_id, version)
-        return model.model_dump()
+        if include_cos:
+            return model.model_dump()
+        return model.model_dump(exclude={"control_objectives"})
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3995,7 +4027,7 @@ async def import_compliance_framework(
     """Import a custom compliance framework. Requires PRO tier.
 
     Use this when your customer's program (regulatory, contractual, or
-    internal) is not covered by Mipiti's 11 built-in frameworks. After
+    internal) is not covered by Mipiti's built-in frameworks. After
     import, the framework is selectable on threat models exactly like
     a built-in.
 
@@ -6062,10 +6094,10 @@ async def remove_entity(
       boundary was filtering now pass freely and its ``sealed``/isolation
       claim is dropped, so CO reachability verdicts past it can flip
       toward reachable/indeterminate.
-    - ``assumption`` — marked deleted (kept for the audit trail); linked
-      COs are no longer mitigated by it; controls with ``assumed_by``
-      pointing to it are preserved as inert pointers that reconnect on
-      restore.
+    - ``assumption`` — marked deleted (kept for the audit trail); its CO
+      links are cleared and its attestations retired; controls whose
+      ``assumption_groups`` name it keep their groups, which credit
+      nothing through it while it is deleted.
 
     Args:
         model_id: ID of the threat model.
@@ -6118,8 +6150,12 @@ async def restore_entity(
       unreachable.
     - ``assumption`` — returns the assumption to active status; controls
       whose ``assumption_groups`` referenced it keep their group
-      structure intact. Re-attestation is required before it mitigates
-      COs again.
+      structure intact. Its CO links are not restored (set them again
+      with ``edit_assumption``), and re-attestation is required before it
+      counts anywhere it is linked or grouped.
+
+    Returns the entity-change result: ``{"model": <ThreatModel>,
+    "controls_carried", "controls_orphaned", "orphaned_control_ids", ...}``.
 
     Args:
         model_id: ID of the threat model.
@@ -7159,8 +7195,8 @@ async def get_controls(
 
     **Two different status fields — do not conflate them.** ``status`` is the
     operator-set implementation state (``not_implemented`` / ``implemented``
-    / ``verified``). ``verification_status`` and ``is_verified`` are the
-    EVIDENCE state, derived from the control's assertions:
+    / ``verified``). ``verification_status`` is the EVIDENCE state, derived
+    from the control's assertions:
 
     - ``"verified"`` — every assertion passes both tiers AND they
       collectively cover the whole control description.
@@ -7206,7 +7242,8 @@ async def get_controls(
         include_orphaned: List mode — include controls mapped only to
             tombstoned COs (default False).
         summary_only: List mode — if True, returns only id, description,
-            status, assertion_count, and assumed_by per control (much
+            status, verification_status, assertion_count, co_ids,
+            assumption_groups and attestation_dependency per control (much
             smaller response).
 
     Returns a single control dict in detail mode, or a dict with

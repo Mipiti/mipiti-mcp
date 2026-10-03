@@ -196,6 +196,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_control_assumption_groups` drops a paragraph pointing at the
   single-group shorthand tools, which were removed in favour of
   `set_control_assumption_groups`.
+- **`generate_threat_model`, `refine_threat_model` and `query_threat_model`
+  name their purpose.** Each request carries its intent, so the platform no
+  longer decides from the wording what a call does: a question is answered
+  and never turned into a change of the model, and a generation always
+  generates. A refine that cannot apply (a targeted change naming an entity
+  the model does not have) returns `{model_id, changed: false, message}`
+  instead of failing as an unsaved model. The client returns a
+  `ChatResponse` or a `GenerateResult` by what the platform answered.
+- The restore calls return the entity-change result (`{model,
+  controls_carried, controls_orphaned, orphaned_control_ids, ...}`), which is
+  what the API answers; they parsed it as a threat model, so a restore read
+  back a model with no id. `set_threat_model_parent` returns `{model_id,
+  parent_id, children}` and says the model keeps its version: the parent
+  edge is relationship metadata.
+- Response types declare only what the answers carry. `Control` no longer
+  has `is_verified` and `ControlObjective` no longer has `security_property`;
+  a field only some variants of an answer carry reads `null` when absent
+  (`ControlObjectivesResponse.returned` / `control_objectives`, the three
+  `ScanPromptResult` variants, `GenerateResult.semantic_rejections`,
+  `System.model_count` / `model_ids`). `SelectFrameworksResult`,
+  `SystemSelectFrameworksResult`, `ComplianceReport` and
+  `VerificationReport` declare the fields the API sends. A compact control
+  listing (`summary_only=True`) is a `ControlSummariesResponse`.
+- `get_threat_model` honours `include_cos`: the control objectives are left
+  out unless asked for, as the instructions said.
+- The instructions name the composition tools by their registered names
+  (`list_effective_entities`, `get_effective_coverage`, …) and a test fails
+  when they, or the README's tool tables, name a tool the server does not
+  register. The README lists `restore_entity` for assumptions in place of a
+  tool that does not exist, lists `import_compliance_framework`, and its
+  local example sets `SERVER_VERSION`.
+- Deleting an assumption clears its objective links and retires its
+  attestations, and restoring it does not bring the links back; the
+  instructions, `remove_entity` and `restore_entity` say so, and no longer
+  describe an `assumed_by` pointer controls do not carry.
 
 - **Justification length is checked before the call.** `set_mitigation_groups`,
   `set_control_assumption_groups` and `refine_control` state their

@@ -94,8 +94,8 @@ uvx mipiti-mcp
 |------|-------------|
 | `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Progress reported automatically via MCP protocol — the tool blocks until complete. Optional `provenance_*` params record where the description came from at creation (for a repository: `provenance_kind="code"` + `provenance_repo_url` + `provenance_commit_sha`). |
 | `set_model_provenance` | Record where a model's description came from (`code` / `ticket` / `document` / `manual` / `mixed`). `code` with a commit SHA means the code is authoritative and the model follows it; anything else means the description is intent and the code is measured against it. Bumps the model version. |
-| `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. |
-| `query_threat_model` | Ask a question about an existing threat model. |
+| `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. An instruction that cannot be applied (a targeted change naming an entity the model does not have) writes nothing and returns `{model_id, changed: false, message}`. |
+| `query_threat_model` | Ask a question about an existing threat model. It only answers; it never changes the model. |
 | `get_threat_model` | Get the full details of a specific threat model (trust boundaries, assets, attackers, assumptions). Use `include_cos=True` to include control objectives. |
 | `list_threat_models` | List all saved threat models with IDs, titles, versions, and creation dates. Supports `source` filter and `include_assessment_summary=True` to inline per-model posture counts in one call (avoids N+1 looping `assess_model`). |
 | `rename_threat_model` | Rename a model (metadata only, no new version). Titles must be unique within a workspace (case-insensitive). |
@@ -124,7 +124,7 @@ uvx mipiti-mcp
 
 | Tool | Description |
 |------|-------------|
-| `get_controls` | List controls with current status. Use `summary_only=True` for compact response. |
+| `get_controls` | List controls with current status. Use `summary_only=True` for a compact response (id, description, status, verification_status, assertion_count, co_ids, assumption_groups, attestation_dependency). |
 | `get_control_objectives` | List COs with which controls cover each one. Pair with `get_reachability_verdicts` for per-CO composer reachability state. |
 | `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
 | `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. An accepted refinement keeps the control's assertions and judges them again against the new description; nothing is superseded. |
@@ -152,8 +152,8 @@ uvx mipiti-mcp
 | `get_threat_model` | Returns existing assumptions (along with assets, attackers, trust boundaries). Review current assumptions before adding or modifying. |
 | `add_assumption` | Add an assumption, optionally linking it to COs via `linked_co_ids`. |
 | `edit_assumption` | Update description and/or linked COs. |
-| `remove_entity (entity_type="assumption")` | Soft-delete (preserved for audit). Linked COs are no longer mitigated by it. |
-| `restore_assumption` | Restore a soft-deleted assumption. Re-attestation required. |
+| `remove_entity (entity_type="assumption")` | Soft-delete (preserved for audit). Its CO links are cleared and its attestations retired. |
+| `restore_entity (entity_type="assumption")` | Restore a soft-deleted assumption to active. Its CO links are not restored (set them with `edit_assumption`), and it must be attested again. |
 | `submit_attestation` | Record that a responsible party affirmed an assumption holds. Provide `attested_by`, `statement`, `expires_at`. A claim, never a proof over every site: it can cover an existential clause and never a for-all one. Attesting accepts the assumption, a judgment: a program is refused with 403 and an `escalation_id` unless the workspace delegates `assumption_accepted` to it. Editing the assumption's description retires the attestation. |
 | `list_attestations` | Attestation history for an assumption. |
 | `set_control_assumption_groups` | Declaratively set a control's assumption group structure: mark it externally handled by a single assumption (shorthand), clear the groups (the control's status is not changed), or express compound cases with multiple groups (within a group = AND, across groups = OR; e.g. "AWS KMS + quarterly review"). Attested groups count as active for mitigation group completeness. |
@@ -289,7 +289,8 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 
 | Tool | Description |
 |------|-------------|
-| `list_compliance_frameworks` | Available frameworks (OWASP ASVS, ISO 27001, SOC 2, NIST CSF, GDPR, FedRAMP, PCI DSS, EU CRA). |
+| `list_compliance_frameworks` | Available frameworks: the built-ins (among them OWASP ASVS, ISO 27001, SOC 2, NIST CSF, IEC 62443, ISO/SAE 21434, PCI DSS, GDPR) and any imported. |
+| `import_compliance_framework` | Import a customer-specific framework (JSON: `name`, `requirements`, optional `level_definitions`). |
 | `select_compliance_frameworks` | Select frameworks for a model. |
 | `get_compliance_report` | Coverage report for a selected framework. |
 | `auto_map_controls` | AI-powered semantic mapping of controls to framework requirements. |
@@ -346,7 +347,8 @@ python -m pytest -v
       "command": "uv",
       "args": ["run", "--directory", "/path/to/mipiti-mcp", "mipiti-mcp"],
       "env": {
-        "MIPITI_API_KEY": "your-key"
+        "MIPITI_API_KEY": "your-key",
+        "SERVER_VERSION": "local"
       }
     }
   }
