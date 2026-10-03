@@ -74,12 +74,13 @@ def test_delegation_section_present(tier: str, role: str) -> None:
     assert "Cross-model dependencies (delegation)" in text
     for tool in (
         "declare_foundation",
-        "create_reliance",
-        "confirm_reliance",
+        "manage_reliance",
         "attach_foundation",
         "list_reliance",
     ):
         assert tool in text
+    for action in ('action="create"', 'action="confirm"', 'action="delete"'):
+        assert action in text
 
 
 @pytest.mark.parametrize(
@@ -127,9 +128,13 @@ def test_functional_conformance_section_present(tier: str, role: str) -> None:
         "associate_functional_test",
         "get_functional_coverage",
         "set_functional_satisfaction_groups",
-        "get_functional_test_sufficiency",
+        "get_capabilities",
+        "submit_assertions",
+        "get_sufficiency",
     ):
         assert tool in text
+    section = text[text.index("## Functional conformance"):]
+    assert "functional_test_id" in section and "gaps_only=True" in section
 
 
 @pytest.mark.parametrize(
@@ -163,9 +168,10 @@ def test_verification_diagnostic_path_orders_free_reads_before_recompute() -> No
     section_end = text.index("## When you hit an implementation constraint", section_start)
     section = text[section_start:section_end]
 
-    # Free diagnostic reads come first; the metered write comes last.
+    # Free diagnostic reads come first; the metered write comes last, and
+    # its default call is the estimate.
     assert section.index("get_sufficiency") < section.index("recompute_verdicts")
-    assert "dry_run=True" in section
+    assert 'mode="quote"' in section and 'mode="recompute"' in section
     # coherence_status must be labelled advisory so "pending" is not read as
     # a missing verdict that needs recomputing.
     assert "coherence_status" in section

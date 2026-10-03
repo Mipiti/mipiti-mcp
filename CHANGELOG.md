@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — the tool surface is 129 tools, down from 150.** Tools that
+  act on one subject with a choice of mode fold behind a parameter naming
+  it, and only tools of the same class fold together (a read never joins a
+  paid or destructive call); where a preview folded into its action, the
+  preview is the default. No capability is removed:
+  - `update_threat_model` replaces `rename_threat_model`,
+    `set_threat_model_parent` and `set_model_provenance` (`name`,
+    `parent_id` or `clear_parent`, `provenance_*`; applied in that order, and
+    a failure names what was already applied).
+  - `manage_reliance(action="create"|"confirm"|"delete")` replaces
+    `create_reliance`, `confirm_reliance` and `delete_reliance`;
+    `attach_foundation` without `selections` returns what
+    `propose_attach_foundation` did.
+  - `undo_model_change(target="controls"|"version")` replaces
+    `undo_control_change` and `revert_model_version`.
+  - `get_composition(view="overview"|"entities"|"objectives"|"coverage"|"attack_paths")`
+    replaces `get_composition_overview`, `list_effective_entities`,
+    `list_effective_control_objectives`, `get_effective_coverage` and
+    `list_effective_attack_paths`.
+  - `decide_reconciliation_candidate(decision="apply"|"reject"|"unreject")`
+    replaces `apply_certain_reconciliation_match`,
+    `reject_reconciliation_candidate` and `unreject_reconciliation_candidate`.
+  - `undo_composition_event(dry_run=True)` (the default) returns what
+    `preview_undo_composition` did; `dry_run=False` applies the undo.
+  - `edit_evidence(action="add"|"remove")` replaces `add_evidence` and
+    `remove_evidence`.
+  - `resolve_verdict_divergences(action="accept"|"dismiss")` replaces
+    `accept_coverage_divergences` and `dismiss_verdict_divergences`; both
+    take `reason`.
+  - `recompute_verdicts(mode="quote"|"recompute"|"retry_parked")` replaces
+    its `dry_run` flag and `retry_verdicts`. The default is the estimate,
+    which enqueues nothing.
+  - `remediate_finding` replaces `preview_finding_remediation` (the default)
+    and `apply_finding_remediation` (`apply=True` with `justification`).
+  - `get_capabilities` replaces `list_capabilities` and `get_capability`
+    (`capability_id`); `get_functional_coverage(gaps_only=True)` replaces
+    `check_functional_gaps`; `submit_assertions(functional_test_id=…)`
+    replaces `submit_functional_test_assertions`, and
+    `get_sufficiency(functional_test_id=…)` replaces
+    `get_functional_test_sufficiency`. Each names exactly one subject.
+
+  Every tool description fits in 2048 characters, the length some clients
+  render, and a test fails when one does not. Because tool schemas are
+  pinned per session, upgrading requires a teardown and re-add under a new
+  server name.
+
 - **Control builds are proposed, then started.** `regenerate_controls` returns
   the proposed build (`status: "proposed"`, `proposal`) and starts nothing;
   `generate_threat_model` and `refine_threat_model` return `controls_status:
@@ -48,10 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose staged work is discarded while the published controls stay as they
   were. Refusals (`no_proposal`, `review_stale`, `generation_active`,
   `pause_first`, `not_held`, `402`) come back as data.
-- **`list_control_revisions`, `undo_control_change`, `revert_model_version`.**
+- **`list_control_revisions` and `undo_model_change`.**
   Every change to a version's controls with its author; undo the latest
-  change; revert the latest model version to a copy of the latest earlier
-  version not already discarded.
+  change (`target="controls"`); revert the latest model version to a copy of
+  the latest earlier version not already discarded (`target="version"`).
 - **`judge_imported_controls`.** Estimate, and on confirmation queue, the
   judgement of the imported controls awaiting one.
 

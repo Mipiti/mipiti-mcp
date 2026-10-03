@@ -95,8 +95,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them).
 - `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
 - `list_threat_models` — browse existing models.
-- `rename_threat_model` — rename a model (metadata only, no new version). Model titles must be unique within a workspace (case-insensitive); pick a distinct name on the first try to avoid a 409 retry.
-- `set_threat_model_parent` — wire a model under (or detach it from) a parent on the recursive composition tree. Pass `parent_id=None` to clear. Server rejects cycles and over-deep chains. The parent edge is relationship metadata: the model keeps its version.
+- `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
 - `delete_threat_model` — permanently delete a model and all its data.
 - `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces the group/tag auditor report (see Tags).
 - `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
@@ -122,10 +121,10 @@ A threat model produces control objectives. Controls are derived from these and 
 - `refine_control` — modify a control's description if it doesn't match the actual security requirement. **After an accepted refinement** the control's assertions are kept and judged again against the new description in the background: one that still fits keeps counting as evidence, and one that no longer fits is flagged, so read `get_sufficiency` once the re-judgement lands and replace what it names. Nothing is superseded by the refinement itself (`superseded_assertions` is always 0).
 - `delete_control` — soft-delete a control with justification. Blocked if it is the only control covering a CO — add a replacement first.
 - `import_controls` — import existing controls from JSON or free text, auto-mapped to COs and deduplicated against existing controls. They await their judgement: the groups they join credit nothing until `judge_imported_controls` is asked for.
-- `add_evidence` / `remove_evidence` — attach auxiliary metadata (docs, links, artifacts) to a control. Evidence is contextual only — it does NOT prove a control is implemented. Only assertions do that.
+- `edit_evidence` — attach (`action="add"`) or detach (`action="remove"`) auxiliary metadata (docs, links, artifacts) on a control. Evidence is contextual only — it does NOT prove a control is implemented. Only assertions do that.
 - `regenerate_controls` — propose a regeneration of the controls (it starts nothing; `start_control_build` starts it). Supports `mode="per_co"` for thorough single-responsibility generation, and `co_ids="CO1,CO5"` to regenerate only specific COs (preserving other controls). Controls whose descriptions survive unchanged keep their implementation status, assertions, and mappings.
 - `start_control_build` / `discard_control_build` — start the model's proposed control build after reviewing it, or drop a held one. See **Control builds** below.
-- `list_control_revisions` / `undo_control_change` / `revert_model_version` — every change to a version's controls with its author; undo the latest change (latest first, no redo); revert the latest model version to a copy of the latest earlier version not already discarded.
+- `list_control_revisions` / `undo_model_change` — every change to a version's controls with its author; undo the latest change (`target="controls"`, latest first, no redo), or revert the latest model version to a copy of the latest earlier version not already discarded (`target="version"`).
 
 **Workflow — handle in this order:**
 
@@ -146,7 +145,7 @@ Before implementing a control call `get_control_work_order`; reconcile with `rec
 1. `get_sufficiency` (or `get_verification_report` for the whole model) — **start here, it is free and it is usually the answer.** If `status` is `insufficient`, `details` names each uncovered clause and the evidence that would close it. That is the work list. Write those assertions.
 2. Check the clause against reality. If the control describes a mechanism the system deliberately does not use (it returns 404 where the control demands 403, say), the DESCRIPTION is what is wrong — `refine_control`, do not manufacture evidence to match prose no one intends to honour.
 3. `list_assertions` — only if sufficiency looks fine. A `fail` on `tier1_status`/`tier2_status` means the evidence itself is broken. `coherence_status: "pending"` is advisory: it is not a blocker and not a missing verdict.
-4. `recompute_verdicts` — **only** when control-to-CO MAPPINGS look wrong (`get_verdict_divergence` shows missing/spurious mappings). It does not compute per-control sufficiency or assertion coherence, it costs credits proportional to model size, and running it for a sufficiency gap changes nothing. Quote with `dry_run=True` and show the operator the number first.
+4. `recompute_verdicts` — **only** when control-to-CO MAPPINGS look wrong (`get_verdict_divergence` shows missing/spurious mappings). It does not compute per-control sufficiency or assertion coherence, it costs credits proportional to model size, and running it for a sufficiency gap changes nothing. Its default `mode="quote"` returns the estimate and enqueues nothing: show the operator the number first, then call it with `mode="recompute"`.
 
 The general rule: exhaust the free read-only verdict surfaces before recommending any metered write.
 
@@ -191,7 +190,7 @@ For controls with status not_implemented, determine whether the code already imp
 - `create_risk_acceptance` — record a deliberate acceptance of a control objective's residual risk (owner, justification, review deadline) so a known-and-accepted decision is explicit and auditable rather than an implicit gap.
 - `create_co_disposition` — record that a control objective DOES NOT APPLY to this system (owner, justification, review deadline). The sibling of a risk acceptance, and the difference is the claim: an acceptance says the exposure is real and is being carried; a disposition says the objective does not apply here at all. The objective is NOT removed — it stays in the matrix and in every coverage count, reported in its own class with the owner and justification attached, so a reviewer can challenge the judgment. What it does suppress is work: no controls are generated for it and no coverage gap is raised against it.
 - `list_co_dispositions` — see every signed judgment on a model's objectives (both kinds, including expired and revoked ones, which are part of the audit trail). Read this before authoring a new one: an existing judgment may already cover the objective, or may have expired and need re-signing rather than duplicating.
-- `recompute_verdicts` — force a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale. Runs in the background; the response includes an informational cost estimate and a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped). Pass its quote-only param to get the cost estimate alone, pre-flight, without enqueuing the recompute.
+- `recompute_verdicts` — `mode="quote"` (the default) returns the cost estimate and enqueues nothing; `mode="recompute"` forces a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict when the surfaced divergences look stale; `mode="retry_parked"` re-runs only the verdicts a transient failure parked. Work runs in the background, with a spend status object (an exhausted status means the work is queued and resumes automatically — never dropped).
 - `judge_objective` — have ONE control objective's mitigation group judged. The right tool for an objective reading `awaiting_judgement`; prefer it over `recompute_verdicts`, which sweeps the whole model and costs accordingly. Runs in the background and may consume credits. It is not a repair: the judgement can come back insufficient.
 - `judge_objectives` — the same for every objective that has no judgement for its current controls and none queued (the diagnosis's `not_judged` count). Call once for the estimate and show the user, then again with `confirm_estimate=True` to queue; any credits it consumes are metered as each judgement runs. Objectives with no mitigation group come back in `ungrouped` and are not judged.
 
@@ -199,17 +198,17 @@ For controls with status not_implemented, determine whether the code already imp
 
 The platform emits structural-drift findings (e.g. duplicate controls that accumulated from prior platform behavior, framework-binding asymmetries when mitigation groups have inconsistent compliance coverage) via list_findings. For findings whose kind supports automatic remediation, you can offer the operator a one-click cleanup flow:
 
-1. Call preview_finding_remediation(finding_id) to see the proposed change. The response is a structured diff scoped to that one finding — typically very small.
+1. Call remediate_finding(finding_id) to see the proposed change: without `apply` it only previews. The response is a structured diff scoped to that one finding — typically very small.
 
 2. SHOW THE OPERATOR THE DIFF. Do not commit silently. The operator should see exactly which controls would be merged, what framework refs would consolidate, etc.
 
 3. Get the operator's confirmation AND a one-line rationale (e.g. "cleaning up duplicates from pre-fix trigger bug").
 
-4. Call apply_finding_remediation(finding_id, justification=<rationale>) to commit. The platform records who, what, and why for the audit trail.
+4. Call remediate_finding(finding_id, apply=True, justification=<rationale>) to commit. The platform records who, what, and why for the audit trail.
 
 Never apply remediation without preview. The platform does not enforce this — it's the agent's responsibility to surface the change before committing.
 
-**Diagnose-and-hand-off findings.** Some finding kinds have NO automatic remediation handler (`preview_finding_remediation` / `apply_finding_remediation` return 422) — they describe a gap for you to resolve directly with the control tools, then submit assertions / `update_finding`: `coverage_gap` (the CO's controls do not span its full threat → add the missing controls via `regenerate_controls` / `import_controls`, or `dismiss` if a false positive, or record a risk acceptance / assumption if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate it even if fully implemented → do NOT just implement the defined controls; redesign or add controls to the mitigation group via `regenerate_controls` / `import_controls` + `set_mitigation_groups` so the group can span the threat, or `dismiss` if a false positive, or record a risk acceptance / assumption if intentional), `control_mechanism` (an existing control's mechanism is wrong and could not be corrected automatically → edit, split, or remove it; the finding's details list the control's full CO-set so you see the blast radius before changing a shared control), `misclassified_defense_in_depth` (a defense-in-depth control is load-bearing for a CO's coverage → promote it into that CO's mitigation group via `set_mitigation_groups`). Do not call `apply_finding_remediation` for these kinds.
+**Diagnose-and-hand-off findings.** Some finding kinds have NO automatic remediation handler (`remediate_finding` returns 422) — they describe a gap for you to resolve directly with the control tools, then submit assertions / `update_finding`: `coverage_gap` (the CO's controls do not span its full threat → add the missing controls via `regenerate_controls` / `import_controls`, or `dismiss` if a false positive, or record a risk acceptance / assumption if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate it even if fully implemented → do NOT just implement the defined controls; redesign or add controls to the mitigation group via `regenerate_controls` / `import_controls` + `set_mitigation_groups` so the group can span the threat, or `dismiss` if a false positive, or record a risk acceptance / assumption if intentional), `control_mechanism` (an existing control's mechanism is wrong and could not be corrected automatically → edit, split, or remove it; the finding's details list the control's full CO-set so you see the blast radius before changing a shared control), `misclassified_defense_in_depth` (a defense-in-depth control is load-bearing for a CO's coverage → promote it into that CO's mitigation group via `set_mitigation_groups`). Do not call `remediate_finding` for these kinds.
 
 ## Project setup
 
@@ -254,13 +253,13 @@ Threat models can compose hierarchically — a child model inherits assets, atta
 
 ### Reading the composed view
 
-Start with the overview, then drill in:
-- `get_composition_overview` — flag state, tree position, own-vs-inherited counts, reconciliation badge. Cheapest call (~1-2KB). Use first.
-- `list_effective_entities` — full own + inherited entity set per kind.
-- `list_effective_control_objectives` — effective CO list (classified own / cross / inherited).
-- `get_effective_coverage` — effective coverage / compliance numbers.
+Start with the overview, then drill in, all through `get_composition`:
+- `get_composition(view="overview")` — flag state, tree position, own-vs-inherited counts, reconciliation badge. Cheapest call (~1-2KB). Use first.
+- `get_composition(view="entities")` — full own + inherited entity set per kind.
+- `get_composition(view="objectives")` — effective CO list (classified own / cross / inherited).
+- `get_composition(view="coverage")` — effective coverage / compliance numbers.
+- `get_composition(view="attack_paths")` — AttackPath references resolved against the effective entity set (paths spanning inherited entities resolve cleanly).
 - `get_reachability_verdicts(composed=True)` — composed reachability verdicts.
-- `list_effective_attack_paths` — AttackPath references resolved against the effective entity set (paths spanning inherited entities resolve cleanly).
 
 ### Reconciliation — surfaced cross-tree duplicates
 
@@ -270,9 +269,7 @@ When the same entity is authored on both the child and an ancestor (e.g., both n
 
 Tools:
 - `list_reconciliation_candidates` — the paginated candidate list with names, source-model titles, and reasons; `disposition="rejected"` lists the pairs rejected on the model instead.
-- `apply_certain_reconciliation_match` — collapse a candidate onto the inherited entity.
-- `reject_reconciliation_candidate` — record "these are NOT duplicates"; the detector filters the pair out of future queues, durable at org scope.
-- `unreject_reconciliation_candidate` — undo a rejection.
+- `decide_reconciliation_candidate` — `decision="apply"` collapses a candidate onto the inherited entity; `decision="reject"` records "these are NOT duplicates" (the detector filters the pair out of future queues, durable at org scope); `decision="unreject"` undoes a rejection.
 
 ### Mutations — lift and split
 
@@ -283,8 +280,9 @@ When the operator confirms a duplicate should be reconciled, lift it to the lowe
 ### Undo with divergence detection
 
 Both lift and split mutations are reversible. The divergence detector refuses the undo with enumerated reasons if state has continued to evolve since the mutation (e.g., entity edited after lift, re-lifted further up, descendant collision, attached-state mutation, model deletion).
-- `preview_undo_composition(…)` — read-only preview of undoing a lift or split (pass the event type / id); returns `{plan, refusal}`. Always preview FIRST.
-- `undo_composition_event(…)` — apply the inverse of a prior lift or split mutation. Emits `lift_undone` / `split_undone` citing `original_event_id`.
+- `undo_composition_event(…)` — by default (`dry_run=True`) a read-only preview of undoing a lift or split (pass the event type / id), returning `{plan, refusal}`; with `dry_run=False` it applies the inverse. Always preview FIRST. An applied undo emits one of:
+  - `lift_undone` — citing `original_event_id`.
+  - `split_undone` — citing `original_event_id`.
 
 **Operator pattern**: preview → inspect plan or refusal-reasons → if clean proceed with apply; if refused, surface the enumerated reasons (operator decides whether to edit the divergence manually or accept it).
 
@@ -293,11 +291,9 @@ Both lift and split mutations are reversible. The divergence detector refuses th
 Distinct from the parent/composition tree (containment): a *reliance* edge declares that one model depends on a control implemented in ANOTHER model — the right tool when a product is built on shared services (auth, logging, a shared datastore) rather than being a sub-part of them. The target is always a provider *control*, so credit terminates at a proven mechanism. Reliance is scoped to the current workspace: a consumer can only delegate to provider models in the SAME workspace (these tools don't see models across workspace boundaries), so pick the foundation from this workspace's models. These tools are available when the recursive-tree feature is enabled.
 
 - `declare_foundation` — mark a shared-service model as a foundation that advertises specific controls other models can delegate to.
-- `propose_attach_foundation` → `attach_foundation` — bulk flow: propose which of a consumer's objectives each foundation capability covers (read-only, scored), then create draft delegation edges for the chosen subset.
-- `create_reliance` — declare a single dependency. `delegated` (consumer has no local control for an objective; the provider handles it — pass `source_objective_id`) or `relied_upon` (consumer keeps its own control but its validity depends on the provider's — pass `source_control_id`).
-- `confirm_reliance` — promote a draft edge to active. Edges run LLM semantic validation on creation and carry NO credit until confirmed, and only when validation returned `valid` (a `partial` or mode-mismatch is refused — never silently credited).
+- `attach_foundation` — bulk flow: without `selections` it proposes which of a consumer's objectives each foundation capability covers (read-only, scored); with the chosen subset as `selections` it creates draft delegation edges for them.
+- `manage_reliance` — one edge at a time. `action="create"` declares a dependency: `delegated` (consumer has no local control for an objective; the provider handles it — pass `source_objective_id`) or `relied_upon` (consumer keeps its own control but its validity depends on the provider's — pass `source_control_id`). `action="confirm"` promotes a draft edge to active: edges run LLM semantic validation on creation and carry NO credit until confirmed, and only when validation returned `valid` (a `partial` or mode-mismatch is refused — never silently credited). `action="delete"` removes an edge.
 - `list_reliance` — a model's dependency edges (as consumer) plus who relies on it (as provider — the blast radius before changing its controls).
-- `delete_reliance` — remove an edge.
 
 A delegated objective is credited only while the provider control stays verified; if the provider control regresses or a refined mechanism no longer satisfies the consumer, the edge breaks and a finding is raised on the consumer.
 
@@ -316,13 +312,14 @@ A tag can also be a **compliance / audit scope** spanning several models: `selec
 
 Functional conformance proves a feature does what it was *specified* to do — the parallel of security controls, verified by the same assertion + CI engine. Capabilities are the behaviours the feature must deliver; each is tested against a taxonomy of operating conditions (nominal, boundary, dependency-failure, …), and a Functional Objective is a Given-When-Then acceptance criterion. Two ways to establish coverage:
 
-**Generate (top-down).** `generate_functional_objectives` derives capabilities, objectives, and the concrete tests to write; `get_scan_prompt` (pass the functional kind) returns the per-test brief; implement each test, register it with `add_functional_test`, then submit `TEST_EXISTS` + `TEST_ATTESTED` evidence with `submit_functional_test_assertions` so CI verifies it.
+**Generate (top-down).** `generate_functional_objectives` derives capabilities, objectives, and the concrete tests to write; `get_scan_prompt` (pass the functional kind) returns the per-test brief; implement each test, register it with `add_functional_test`, then submit `TEST_EXISTS` + `TEST_ATTESTED` evidence with `submit_assertions` (pass `functional_test_id`) so CI verifies it.
 
 **Import (bottom-up) — bring the tests you already have.** `import_functional_tests` registers your existing codebase tests (optionally with the objectives they cover; the platform verifies each association is applicable before accepting it). For tests you don't map yourself, `suggest_functional_test_mappings` proposes which objective each one actually proves (judged on behaviour, with a confidence) and `associate_functional_test` confirms a mapping — so an existing suite counts toward conformance, not only Mipiti-specified tests.
 
-- `get_functional_coverage` / `check_functional_gaps` — the Capability × Condition coverage report and the actionable gaps (uncovered cells, failing/untested objectives).
+- `get_capabilities` — every capability, or one by `capability_id`.
+- `get_functional_coverage` — the Capability × Condition coverage report; `gaps_only=True` returns just the actionable gaps (uncovered cells, failing/untested objectives).
 - `set_functional_satisfaction_groups` / `get_functional_satisfaction_groups` — when several tests must *together* prove an objective, group them (within a group all must pass; any complete group proves the objective).
-- `get_functional_test_sufficiency` — whether a test's submitted evidence is sufficient to prove the objective it targets.
+- `get_sufficiency` with `functional_test_id` — whether a test's submitted evidence is sufficient to prove the objective it targets.
 """
 
 _INSTRUCTIONS_COMPLIANCE = """\
@@ -383,7 +380,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 **Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits`, and the `model_version` and `set_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, confirm_estimate=True)`. A `review_stale` refusal means the model or its controls changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
-**Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_control_change` undoes the latest change (latest first, no redo); `revert_model_version` replaces the latest model version with a copy of the latest earlier version not already discarded, keeping the replaced one in the history as discarded.
+**Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_model_change(target="controls")` undoes the latest change (latest first, no redo); `undo_model_change(target="version")` replaces the latest model version with a copy of the latest earlier version not already discarded, keeping the replaced one in the history as discarded.
 
 **Strengthening runs when asked.** A completed build reports `strengthening` and a `diagnosis` (objectives covered, uncovered, undecided, judging, not judged, or waiting on an assumption decision). `judging` counts objectives whose judgement is queued: wait for them. `not_judged` counts objectives with no judgement for their current controls and none queued: to have them judged now, call `judge_objectives` (estimate first, then `confirm_estimate=True`). Unless the workspace strengthens automatically, nothing works on the uncovered ones until `strengthen_controls` is called: call it once to get the estimate, show the user, and call it again with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned to start. A gap only the environment can close is answered with an assumption, never a control: an accepted one is bound into the group, and otherwise a proposal waits in the review queue for a person to accept (with an expiry) or reject.
 """
@@ -761,7 +758,7 @@ async def generate_threat_model(
             the code is then authoritative and the model follows it.
             Any other kind means the description is intent and the code
             is measured against it. The same record can be set later
-            with ``set_model_provenance``.
+            with ``update_threat_model``.
         provenance_repo_url: Repository URL the description was
             gathered from (``code`` kind).
         provenance_commit_sha: Commit SHA the description was gathered
@@ -1069,52 +1066,73 @@ async def list_threat_models(
         raise _api_error(exc) from exc
 
 
-@mcp.tool()
-async def rename_threat_model(server_version: str, model_id: str, name: str) -> dict:
-    """Rename a threat model. Metadata change only, does not create new version.
-
-    Args:
-        model_id: ID of the threat model.
-        name: New name (1-120 chars).
-    """
-    try:
-        result = await _get_client().rename_model(model_id, name)
-        return result.model_dump()
-    except Exception as exc:
-        raise _api_error(exc) from exc
+_PROVENANCE_KINDS = ("code", "ticket", "document", "manual", "mixed")
 
 
 @mcp.tool()
-async def set_threat_model_parent(
+async def update_threat_model(
     server_version: str,
     model_id: str,
-    parent_id: str | None,
+    name: Optional[str] = None,
+    parent_id: Optional[str] = None,
+    clear_parent: bool = False,
+    provenance_kind: str = "",
+    provenance_repo_url: str = "",
+    provenance_commit_sha: str = "",
+    provenance_ref: str = "",
+    provenance_source_ref: str = "",
+    provenance_source_url: str = "",
 ) -> dict:
-    """Set (or clear) a model's parent on the recursive composition tree.
+    """Change a threat model's metadata: its name, its parent, where its
+    description came from. Mutating; pass only what changes.
 
-    The composition substrate (Layer 0) builds an ancestor chain from
-    each model's ``parent_id`` so child models inherit topology, control
-    objectives, and other entities from their ancestors. Use this tool
-    when wiring a child model under a platform / system / shared-services
-    ancestor, or when re-rooting a model after a re-org.
+    - ``name`` (1-120 chars) renames it; no new version. Titles are unique
+      within a workspace, case-insensitive (409 on a clash).
+    - ``parent_id`` wires it under a parent on the recursive composition
+      tree, so it inherits the parent's topology and objectives;
+      ``clear_parent=True`` makes it a tree root. Cycles (409) and chains
+      past the platform's maximum depth (400) are refused. No new version.
+    - ``provenance_kind`` (``code``, ``ticket``, ``document``, ``manual``,
+      ``mixed``) records where the description came from, with the other
+      ``provenance_*`` values. ``code`` with ``provenance_commit_sha`` means
+      the code is authoritative and the model follows it
+      (``reconcile_model`` measures it against the code); any other kind
+      means the description is intent and the code is measured against it.
+      Bumps the model version.
 
-    Pass ``parent_id=None`` to clear the parent (the model becomes a
-    tree root). The server rejects cycles (you cannot make a descendant
-    your parent, 409) and over-deep chains (depth bounded by the platform's
-    configured maximum tree depth, 400). The parent edge is relationship
-    metadata, so the model keeps its version.
-
-    Returns ``{model_id, parent_id, children}``.
-
-    Args:
-        model_id: ID of the threat model whose parent is being set.
-        parent_id: ID of the new parent model, or ``None`` to clear.
+    Changes apply in that order. Returns ``{model_id, name?, parent?,
+    provenance?}``, one entry per change applied. A failure raises and
+    names the changes already applied.
     """
+    if parent_id and clear_parent:
+        raise ToolError("Pass parent_id or clear_parent, not both.")
+    kind = provenance_kind.strip()
+    if kind and kind not in _PROVENANCE_KINDS:
+        raise ToolError(f"provenance_kind must be one of {', '.join(_PROVENANCE_KINDS)}.")
+    if name is None and not parent_id and not clear_parent and not kind:
+        raise ToolError("Nothing to change: pass name, parent_id, clear_parent or provenance_kind.")
+    client = _get_client()
+    out: dict = {"model_id": model_id}
     try:
-        result = await _get_client().set_parent(model_id, parent_id)
-        return _dump(result)
+        if name is not None:
+            out["name"] = (await client.rename_model(model_id, name)).model_dump()
+        if parent_id or clear_parent:
+            out["parent"] = _dump(await client.set_parent(
+                model_id, None if clear_parent else parent_id))
+        if kind:
+            out["provenance"] = await client.set_model_provenance(
+                model_id, kind,
+                repo_url=provenance_repo_url, commit_sha=provenance_commit_sha,
+                ref=provenance_ref, source_ref=provenance_source_ref,
+                source_url=provenance_source_url,
+            )
     except Exception as exc:
-        raise _api_error(exc) from exc
+        applied = [k for k in ("name", "parent", "provenance") if k in out]
+        err = _api_error(exc)
+        if applied:
+            raise ToolError(f"{err} (already applied: {', '.join(applied)})") from exc
+        raise err from exc
+    return out
 
 
 @mcp.tool()
@@ -1126,7 +1144,7 @@ async def declare_foundation(
 ) -> dict:
     """Mark a model as a shared foundation that advertises providable controls.
 
-    Mutating: records this model as a foundation and stores its advertised controls; other models can then delegate to them (see ``propose_attach_foundation`` / ``attach_foundation``). A foundation is a shared service (auth, logging, a shared datastore) whose controls other models can rely on.
+    Mutating: records this model as a foundation and stores its advertised controls; other models can then delegate to them (see ``attach_foundation``). A foundation is a shared service (auth, logging, a shared datastore) whose controls other models can rely on.
 
     Each entry in ``provides`` advertises one of THIS model's controls as providable: ``{"control_id": "CTRL-07", "capability_label": "Validates session tokens", "description": "..."}``. A capability always advertises a control (a proven mechanism), never an objective.
 
@@ -1147,7 +1165,7 @@ async def list_reliance(server_version: str, model_id: str) -> dict:
 
     Read-only; no side effects. Returns ``{model_id, as_consumer: [...], as_provider: [...]}``. Consumer edges are this model's declared delegations / reliances on other models' controls; provider edges are other models relying on this one (its blast radius if its controls change).
 
-    Use this to inspect existing dependencies before creating or deleting edges (``create_reliance`` / ``attach_foundation`` / ``delete_reliance``), or to understand what breaks if this model's controls change.
+    Use this to inspect existing dependencies before creating or deleting edges (``manage_reliance`` / ``attach_foundation``), or to understand what breaks if this model's controls change.
 
     Args:
         model_id: ID of the model to inspect.
@@ -1158,105 +1176,66 @@ async def list_reliance(server_version: str, model_id: str) -> dict:
         raise _api_error(exc) from exc
 
 
+_RELIANCE_ACTIONS = ("create", "confirm", "delete")
+
+
 @mcp.tool()
-async def create_reliance(
+async def manage_reliance(
     server_version: str,
-    model_id: str,
-    provider_model_id: str,
-    provider_control_id: str,
-    mode: str,
+    action: Literal["create", "confirm", "delete"],
+    model_id: str = "",
+    provider_model_id: str = "",
+    provider_control_id: str = "",
+    mode: str = "",
     source_objective_id: str = "",
     source_control_id: str = "",
-) -> dict:
-    """Declare a cross-model dependency: this model relies on a provider control.
-
-    Two modes (the target is ALWAYS a provider control — credit terminates at a
-    proven mechanism):
-    - ``delegated``: this model does NOT implement an objective locally; it is
-      handled entirely by the provider's control. Pass ``source_objective_id``.
-    - ``relied_upon``: this model has its OWN control whose validity depends on
-      the provider's control. Pass ``source_control_id``.
-
-    The provider must be a model in the SAME workspace as the consumer (reliance
-    is workspace-scoped and does not reach across workspace boundaries). The edge
-    enters ``draft`` and runs LLM semantic validation; it carries no credit until
-    confirmed via ``confirm_reliance`` (and only when validation returned
-    ``valid``). Returns the created edge.
-
-    Args:
-        model_id: the consumer model declaring the dependency.
-        provider_model_id: the model whose control satisfies the dependency.
-        provider_control_id: the provider's control (the credit terminus).
-        mode: "delegated" or "relied_upon".
-        source_objective_id: consumer objective id (required for "delegated").
-        source_control_id: consumer control id (required for "relied_upon").
-    """
-    try:
-        return await _get_client().create_reliance(
-            model_id, provider_model_id, provider_control_id, mode,
-            source_objective_id, source_control_id,
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def confirm_reliance(
-    server_version: str,
-    edge_id: str,
+    edge_id: str = "",
     accept_partial_as_relied_upon: bool = False,
 ) -> dict:
-    """Promote a draft reliance edge to active (the credit-soundness gate).
+    """Create, confirm or delete one cross-model reliance edge. Mutating.
 
-    Refuses unless LLM validation returned ``valid``. A ``partial`` result or a
-    mode mismatch is refused (never silently credited). Returns the updated edge.
+    ``action="create"`` declares that ``model_id`` relies on a provider
+    control (the target is ALWAYS a control, so credit ends at a proven
+    mechanism). ``mode`` is ``delegated`` (this model does not implement the
+    objective; pass ``source_objective_id``) or ``relied_upon`` (this model's
+    own control depends on the provider's; pass ``source_control_id``). The
+    provider must be in the same workspace. The edge enters ``draft``, runs
+    LLM semantic validation, and carries no credit until confirmed. Returns
+    the edge.
 
-    Args:
-        edge_id: ID of the reliance edge to confirm.
-        accept_partial_as_relied_upon: reserved for partial-coverage handling.
+    ``action="confirm"`` promotes the draft ``edge_id`` to active, the
+    credit-soundness gate: refused unless validation returned ``valid``; a
+    ``partial`` result or a mode mismatch is never silently credited.
+    Returns the edge.
+
+    ``action="delete"`` permanently removes ``edge_id``, withdrawing any
+    credit the consumer derived from it (its coverage can move); neither
+    model's controls change. Returns ``{deleted: true, edge_id}``.
+
+    ``list_reliance`` shows a model's edges and their ids.
     """
+    if action not in _RELIANCE_ACTIONS:
+        raise ToolError(f"action must be one of {', '.join(_RELIANCE_ACTIONS)}.")
+    if action == "create":
+        missing = [n for n, v in (("model_id", model_id),
+                                  ("provider_model_id", provider_model_id),
+                                  ("provider_control_id", provider_control_id),
+                                  ("mode", mode)) if not v.strip()]
+        if missing:
+            raise ToolError(f"action='create' requires {', '.join(missing)}.")
+    elif not edge_id.strip():
+        raise ToolError(f"action='{action}' requires edge_id.")
     try:
-        return await _get_client().confirm_reliance(edge_id, accept_partial_as_relied_upon)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def delete_reliance(server_version: str, edge_id: str) -> dict:
-    """Delete a cross-model reliance / delegation edge. Destructive and immediate.
-
-    Mutating: permanently removes the edge. Any credit the consumer model derived from it (a delegated objective or a relied-upon control) is withdrawn, which can move the consumer's coverage/posture. Does not affect either model's own controls. Returns ``{deleted: True, edge_id}``.
-
-    Use ``list_reliance`` to find the edge_id first. To pause an edge without deleting, there is no toggle — deletion is the only removal path.
-
-    Args:
-        edge_id: ID of the reliance edge to delete.
-    """
-    try:
-        await _get_client().delete_reliance(edge_id)
+        client = _get_client()
+        if action == "create":
+            return await client.create_reliance(
+                model_id, provider_model_id, provider_control_id, mode,
+                source_objective_id, source_control_id,
+            )
+        if action == "confirm":
+            return await client.confirm_reliance(edge_id, accept_partial_as_relied_upon)
+        await client.delete_reliance(edge_id)
         return {"deleted": True, "edge_id": edge_id}
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def propose_attach_foundation(
-    server_version: str,
-    model_id: str,
-    foundation_model_id: str,
-) -> dict:
-    """Propose which of this model's objectives each foundation capability covers.
-
-    Read-only: returns candidate (objective ↔ provider control) pairs with a
-    match score. Nothing is created or credited. Feed the chosen subset to
-    ``attach_foundation``.
-
-    Args:
-        model_id: the consumer model.
-        foundation_model_id: the foundation to delegate to.
-    """
-    try:
-        return await _get_client().propose_attach_foundation(model_id, foundation_model_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -1266,22 +1245,30 @@ async def attach_foundation(
     server_version: str,
     model_id: str,
     foundation_model_id: str,
-    selections: list[dict],
+    selections: Optional[list[dict]] = None,
 ) -> dict:
-    """Create draft delegation edges for selected (objective, control) pairs.
+    """Delegate this model's objectives to a foundation's controls, in bulk.
 
-    ``selections`` is a list of ``{"source_objective_id": ..., "provider_control_id": ...}``
-    (typically the operator-confirmed subset of ``propose_attach_foundation``).
-    Each becomes a ``delegated`` draft edge that runs LLM validation; none
-    carries credit until separately confirmed. Returns ``{created, failed}``.
+    Without ``selections`` it is read-only: it returns candidate
+    (objective ↔ provider control) pairs with a match score, and nothing is
+    created or credited. Show them to the operator.
+
+    With ``selections`` — a list of ``{"source_objective_id": ...,
+    "provider_control_id": ...}``, typically the confirmed subset of those
+    candidates — it is mutating: each becomes a ``delegated`` draft edge that
+    runs LLM validation and carries no credit until confirmed with
+    ``manage_reliance(action="confirm")``. Returns ``{created, failed}``.
 
     Args:
         model_id: the consumer model.
         foundation_model_id: the foundation to delegate to.
-        selections: list of {source_objective_id, provider_control_id} dicts.
+        selections: the pairs to delegate; omit to get the candidates.
     """
     try:
-        return await _get_client().attach_foundation(
+        client = _get_client()
+        if selections is None:
+            return await client.propose_attach_foundation(model_id, foundation_model_id)
+        return await client.attach_foundation(
             model_id, foundation_model_id, selections,
         )
     except Exception as exc:
@@ -1415,120 +1402,41 @@ async def get_control_generation_status(
     model_id: str,
     ctx: Context,
 ) -> dict:
-    """Read a threat model's control build: the one proposed, and the last
-    one started.
+    """Read a model's control build: the one proposed, and the last one
+    started. Read-only.
 
-    A model's controls are built only by a build someone starts. A write that
-    owes controls — generating or refining the model, editing an entity,
-    ``regenerate_controls`` — PROPOSES a build and starts nothing. While a
-    started build runs it holds the model: it works on a staging copy that no
-    read sees, other writers of the model's controls are refused, and reads
-    show the last published controls until the build publishes its result in
-    one step.
+    A build runs only when someone starts it; a write that owes controls
+    PROPOSES one. ``proposal`` (or null) carries ``mode``,
+    ``objective_count``, ``estimated_credits`` and the ``model_version`` /
+    ``set_revision`` that ``start_control_build`` must name. Poll until
+    ``terminal``; ``hint`` names the next action.
 
-    ``proposal`` is the proposed build, or null: ``mode``, ``objective_ids``,
-    ``objective_count``, ``estimated_credits``, ``proposed_by``,
-    ``proposed_at``, ``reason``, and the ``model_version`` and
-    ``set_revision`` a start must name. Review the model with the user, then
-    call ``start_control_build`` with those two values and
-    ``confirm_estimate=True``. Nothing runs until then, so a proposal is not
-    something to wait for.
+    ``status``: ``queued | generating | deferred | pausing | paused |
+    blocked | complete | failed | skipped | discarded | none``. ``deferred``
+    waits for the daily budget reset. ``pausing`` is stopping; ``paused``
+    keeps its staged work until ``resume_control_generation`` (or
+    ``discard_control_build``). ``blocked`` carries ``code``
+    (``dependency_unavailable`` or ``analysis_incomplete``), ``message`` and
+    ``retry_after_seconds``: relay the message and retry with
+    ``resume_control_generation``, never ``regenerate_controls``, which
+    redoes and re-bills the work.
 
-    Return shape: ``{status, mode, target_cos, ready_cos, error_message,
-    terminal, hint, proposal}`` plus exactly ONE timing field
-    (``{status: "none", proposal}`` when no build has run). ``hint`` names
-    the next action. ``status`` is ``queued | generating | deferred |
-    pausing | paused | blocked | complete | failed | skipped | discarded |
-    none``; the first six hold the model:
-    - ``deferred`` — today's background-analysis budget is used up; the build
-      resumes automatically at the daily reset (relay this to the user).
-    - ``pausing`` — someone paused the run and it is stopping at its next
-      step (it starts nothing new). Not terminal: poll again shortly.
-    - ``paused`` — stopped by request, with its work so far kept in staging
-      (NOT published). ``terminal`` is true: stop polling. Nothing resumes it
-      but ``resume_control_generation``, which continues where it stopped and
-      redoes and re-bills nothing; ``discard_control_build`` drops it instead.
-      ``paused`` carries ``since``, ``by_self`` (whether the caller paused
-      it) and ``resumable``. Do NOT call ``regenerate_controls`` to restart
-      it: it is refused while the build holds the model, and a discarded
-      build's work is thrown away.
-    - ``blocked`` — the run paused before finishing, with its work so far kept
-      in staging (NOT published). ``terminal`` is true: stop polling.
-      ``blocked`` carries ``code``, ``message``, ``resumable``, ``auto_resume``
-      (whether it resumes by itself) and ``retry_after_seconds``. ``code`` is
-      ``dependency_unavailable`` (a service the platform depends on was
-      unavailable) or ``analysis_incomplete`` (some new controls could not be
-      checked for duplicates, so they were held back). Relay ``message`` to
-      the user; do NOT discard it to start again with ``regenerate_controls``
-      (that re-authors and re-bills everything already done). Retry with
-      ``resume_control_generation`` once ``retry_after_seconds`` has passed.
-    - ``failed`` — ``error_message`` says why (e.g. insufficient credits).
-      Nothing was published.
-    - ``discarded`` — someone discarded the held build; nothing it did was
-      published, and it is proposed again (``proposal``).
-    - ``ready_cos`` / ``target_cos`` — objectives that have at least one
-      control so far, out of those in the build's scope. Progress, never
-      coverage: an attached control says nothing about whether its group
-      would mitigate the objective.
-    - ``phase`` / ``stage`` / ``phase_progress`` — WHILE ``generating``:
-      ``phase`` is ``generating`` (authoring controls) or ``refining`` (every
-      objective has a control and the build's later stages are still
-      changing the set it will publish); ``stage`` names the stage the run is
-      in (``authoring``, ``selfheal`` — a strengthening —, ``finishing`` —
-      the quality review and coverage-gap close —, or ``dispatch`` —
-      publishing); ``phase_progress`` is the percent through a
-      strengthening and says nothing about the other stages. ``hint`` says
-      the same in words. ``stage`` is empty once ``terminal``.
-    - ``covered_cos`` / ``judged_cos`` / ``awaiting_judgement_cos`` — ONCE
-      ``complete``: the coverage figure. ``covered_cos`` of ``judged_cos``
-      objectives have controls whose group would mitigate them once
-      implemented; ``awaiting_judgement_cos`` more have no answer yet and are
-      in neither number.
-    - ``analysis_pending`` — true while judgements queued for the model, or
-      background passes the build's publish dispatched, have not finished:
-      the coverage figure may still move.
-    - ``selfheal_activity`` — WHILE RUNNING, once drafting is done: what the
-      strengthening round in flight is working on. Carries ``round``,
-      ``open_objectives`` / ``selected_objectives`` (still insufficient, and
-      how many this round took on), ``refining`` (controls being rewritten,
-      each with the ``co_ids`` it serves and the ``gap`` the rewrite must
-      close), ``authoring`` (objectives getting a new control, with the gap),
-      and ``set_aside`` (objectives the pass has nothing further to try on —
-      left as they stand for a person to decide, NOT a failure). The three
-      lists are a bounded SAMPLE: read ``refining_total`` /
-      ``authoring_total`` / ``set_aside_total`` for the counts, never the
-      array lengths, or a round working two hundred controls reports five.
-      Use it to say what the run is doing rather than that it is still going;
-      it says nothing about coverage, and the objectives named in it are still
-      being worked. Absent between rounds and once the run is terminal.
-    - ``elapsed_seconds`` — WHILE RUNNING: time since the job last showed
-      progress, which the worker refreshes as it works. A SMALL value means it
-      is alive, so this does not grow with a healthy long run; a large one on
-      ``queued`` / ``generating`` means it may be stuck — surface that instead
-      of polling forever. Absent once terminal.
-    - ``duration_seconds`` — ONCE TERMINAL: how long the run actually took.
-      Absent while running. The two are never both present and are not
-      interchangeable: one measures silence, the other measures work. Do not
-      read ``elapsed_seconds`` as a runtime.
-    - ``strengthening`` — whether the strengthening pass has run for this
-      model: ``not_run`` (generation stopped after drafting and judging; a
-      person starts strengthening with ``strengthen_controls``), ``running``,
-      ``done``, or ``automatic`` (the workspace strengthens every generation).
-    - ``diagnosis`` — ONCE ``complete``: objective counts by what the
-      background judge found — ``covered``, ``uncovered``, ``undecided``,
-      ``judging`` (no judgement for its current controls yet, and one is
-      queued: wait for it), ``not_judged`` (no judgement for its current
-      controls and none queued: call ``judge_objectives`` to have it judged
-      now), ``awaiting_assumption`` (waiting on a
-      person to accept or reject a proposed assumption, in the review
-      queue) and ``dispositioned`` (risk accepted or declared not
-      applicable). ``uncovered`` and ``undecided`` are what
-      ``strengthen_controls`` works on.
+    While running: ``ready_cos`` / ``target_cos`` count progress, never
+    coverage; ``stage`` names the stage; ``elapsed_seconds`` is the time
+    since the last progress (large means it may be stuck).
+    ``selfheal_activity`` is a SAMPLE of what a strengthening round works
+    on: read ``refining_total`` / ``authoring_total`` / ``set_aside_total``
+    for the counts; ``set_aside`` objectives wait for a person and are
+    NOT a failure.
 
-    Read-only; no side effects (polling neither starts nor alters a build).
-
-    Args:
-        model_id: ID of the threat model whose control build to read.
+    Once ``complete``: ``covered_cos`` of ``judged_cos`` objectives would be
+    mitigated by their controls; ``awaiting_judgement_cos`` have no answer
+    yet. ``diagnosis`` counts ``covered``, ``uncovered`` and ``undecided``
+    (what ``strengthen_controls`` works on), ``judging`` (queued: wait),
+    ``not_judged`` (none queued: ``judge_objectives``) and
+    ``awaiting_assumption`` (in the review queue). ``strengthening`` says
+    whether that pass has run. ``analysis_pending`` means the figures may
+    still move; ``duration_seconds`` is the runtime.
     """
     try:
         return _dump(
@@ -1623,59 +1531,41 @@ async def strengthen_controls(
     set_revision: Optional[int] = None,
 ) -> dict:
     """Strengthen a model's controls: work on the objectives whose mitigation
-    groups the background judge found do not cover them. Mutating only with
-    ``confirm_estimate=True``; consumes credits then.
+    groups the background judge found do not cover them (the ``uncovered``
+    and ``undecided`` of ``get_control_generation_status``'s ``diagnosis``).
+    Mutating only with ``confirm_estimate=True``; consumes credits then.
+    ``not_judged`` objectives have nothing to strengthen from: judge them
+    first with ``judge_objectives``.
 
-    Generation drafts controls, forms groups and has them judged, and stops
-    there unless the workspace strengthens automatically. What is left is in
-    ``get_control_generation_status``'s ``diagnosis``. Objectives it counts
-    as ``not_judged`` have no judgement to strengthen from and nothing queued
-    to produce one, so they are outside this tool's scope until judged: call
-    ``judge_objectives`` for them first. Strengthening is the expensive part,
-    so it runs when asked:
+    1. Call with ``confirm_estimate=False`` (the default): nothing starts or
+       is charged; the answer carries ``diagnosis``, ``scope``, ``estimate``
+       (``credits``, ``per_objective``, ``basis``) and the
+       ``model_version`` / ``set_revision`` the model stands at. Show the
+       user the estimate.
+    2. Once they agree, call with ``confirm_estimate=True`` and those two
+       values (their review of the model as it stood). A background run
+       starts (``started: true``); poll ``get_control_generation_status``.
+       It holds the model like any build: pausable, resumable, discardable.
 
-    1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
-       nothing is charged; the answer carries ``diagnosis``, ``scope`` (the
-       objectives it would work on), ``estimate`` (``credits``,
-       ``per_objective``, ``basis``) and the ``model_version`` and
-       ``set_revision`` the model stands at. Show the user the estimate.
-    2. Call again with ``confirm_estimate=True`` and the ``model_version``
-       and ``set_revision`` from step 1 once they agree: the confirmation is
-       their review of the model as it stood. A background run starts
-       (``started: true``, ``status: "queued"``); poll
-       ``get_control_generation_status`` until terminal. It holds the model
-       like any build, and can be paused, resumed, discarded and stopped by
-       deleting the model.
+    A gap only the environment can close (hosting, a third party) is never
+    answered with a control: an accepted assumption stating it is bound
+    into the group; otherwise an assumption proposal waits in the
+    review queue (``get_review_queue`` / ``decide_proposal``) and the objective
+    counts as ``awaiting_assumption``. A rejected one is not proposed again.
 
-    A gap only the environment can close — how the system is deployed or
-    hosted, a third party it relies on — is never answered with a control.
-    If an accepted assumption states the precondition, it is bound into the
-    group. Otherwise the run raises an assumption proposal and the objective
-    waits (``diagnosis.awaiting_assumption``) until a person accepts it or
-    rejects it from the review queue (``get_review_queue`` /
-    ``decide_proposal``). A rejected precondition is not proposed again.
-
-    Refusals come back as data:
-    - ``{started: false, http_status: 409, code: "review_stale",
-      model_version, set_revision, estimate}`` — the model or its controls
-      changed since the estimate (or the confirmation named no values).
-      Review again and confirm with the values returned.
-    - ``{started: false, http_status: 409, code: "generation_active"}`` — a
-      build holds the model; wait for it to finish, or resume or discard it.
-    - ``{started: false, http_status: 402, ...}`` — the balance this
-      workspace bills to cannot cover the estimate.
+    Refusals come back as data, ``{started: false, http_status, code}``:
+    409 ``review_stale`` (the model or its controls changed since the
+    estimate: confirm again with the values returned), 409
+    ``generation_active`` (a build holds the model), 402 (the balance cannot
+    cover the estimate).
 
     Args:
         model_id: ID of the threat model.
-        co_ids: Optional comma-separated objective IDs to restrict the run
-            to, of those the diagnosis lists as uncovered or undecided. Omit
-            for all of them.
-        confirm_estimate: False (default) returns the estimate and starts
-            nothing; True starts the run.
-        model_version: With ``confirm_estimate=True``: the ``model_version``
-            the estimate reported.
-        set_revision: With ``confirm_estimate=True``: the ``set_revision``
-            the estimate reported.
+        co_ids: Optional comma-separated objective IDs, of those diagnosed
+            uncovered or undecided; omit for all.
+        confirm_estimate: False (default) estimates; True starts the run.
+        model_version: With ``confirm_estimate=True``: the estimate's value.
+        set_revision: With ``confirm_estimate=True``: the estimate's value.
     """
     parsed: list[str] | None = None
     if co_ids:
@@ -1697,56 +1587,38 @@ async def judge_objectives(
     confirm_estimate: bool = False,
 ) -> dict:
     """Have judged every objective whose mitigation group has no judgement for
-    its current controls and none queued. Mutating only with
-    ``confirm_estimate=True``; may consume credits then.
+    its current controls and none queued (the diagnosis's ``not_judged``, or
+    objectives reading ``awaiting_judgement``). Mutating only with
+    ``confirm_estimate=True``; may consume credits then. Adding or
+    implementing controls does not move such an objective; a judgement
+    does. ``judging`` objectives are already queued: wait for them.
 
-    Use it when ``get_control_generation_status``'s ``diagnosis`` reports
-    ``not_judged`` above zero, or objectives read ``awaiting_judgement``.
-    Adding or implementing controls does not move such an objective; a
-    judgement does. Objectives counted under ``judging`` already
-    have a judgement queued: wait for them instead.
+    1. Call with ``confirm_estimate=False`` (the default): nothing is queued
+       or charged; the answer carries ``diagnosis``, ``scope``, ``ungrouped``
+       and ``estimate`` (``credits``, ``objectives``, ``computed_at``,
+       ``rate_version``). Show the user the estimate.
+    2. Once they agree, call with ``confirm_estimate=True``: each objective
+       in ``scope`` is queued (``confirmed: true``, ``queued``), metered at
+       actuals as it runs, and ``status_detail`` is the fresh status.
 
-    1. Call with ``confirm_estimate=False`` (the default). Nothing is queued
-       and nothing is charged; the answer carries ``diagnosis``, ``scope``
-       (the objectives it would judge), ``ungrouped`` and ``estimate``
-       (``credits``, ``objectives``, ``computed_at``, ``rate_version``).
-       Show the user the estimate.
-    2. Call again with ``confirm_estimate=True`` once they agree. The
-       judgement of each objective in ``scope`` is queued (``confirmed:
-       true``, ``queued`` counts them); any credits it consumes are metered
-       at actuals as each runs. ``status_detail`` is the model's fresh
-       control-generation status; re-read ``get_control_generation_status``
-       shortly after to see the diagnosis move from ``not_judged`` through
-       ``judging``.
+    ``ungrouped`` objectives have no mitigation group and are never judged:
+    group their controls with ``set_mitigation_groups`` first.
 
-    ``ungrouped`` lists objectives with no mitigation group. They are never
-    judged, because there is nothing to judge: group their controls first
-    with ``set_mitigation_groups``.
+    A judgement is not a repair: it can come back insufficient or undecided,
+    which counts the objective as ``uncovered`` or ``undecided``, work for
+    ``strengthen_controls``. ``judge_objective`` does the same for one.
 
-    A judgement is not a repair. It can come back insufficient or undecided,
-    which counts the objective as ``uncovered`` or ``undecided`` and makes it
-    work for ``strengthen_controls``.
-    For a single objective, ``judge_objective`` does the same for one.
-
-    Refusals come back as data:
-    - ``{confirmed: false, queued: 0, http_status: 409, code:
-      "control_generation_in_progress", message}`` — controls are still being
-      generated; poll ``get_control_generation_status`` until terminal.
-    - ``{confirmed: false, queued: 0, http_status: 402, code, message,
-      estimated_credits}`` — the balance this workspace bills to cannot
-      cover the estimate (``code`` is ``insufficient_credits`` or
-      ``quota_exceeded``).
-    - ``{confirmed: false, queued: 0, http_status: 503, ...}`` — judging is
-      unavailable on this deployment.
-    An unknown objective id in ``co_ids`` fails with a 400 error.
+    Refusals come back as data, ``{confirmed: false, queued: 0,
+    http_status, code, message}``: 409 ``control_generation_in_progress``
+    (poll ``get_control_generation_status``), 402 ``insufficient_credits`` /
+    ``quota_exceeded`` (with ``estimated_credits``), 503 (judging
+    unavailable). An unknown id in ``co_ids`` is a 400 error.
 
     Args:
         model_id: ID of the threat model.
-        co_ids: Optional comma-separated objective IDs to restrict the call
-            to. Omit for every objective with no judgement for its current
-            controls and none queued.
-        confirm_estimate: False (default) returns the estimate and queues
-            nothing; True queues the judgements.
+        co_ids: Optional comma-separated objective IDs; omit for every
+            objective with no judgement and none queued.
+        confirm_estimate: False (default) estimates; True queues.
     """
     parsed: list[str] | None = None
     if co_ids:
@@ -1921,7 +1793,7 @@ async def list_control_revisions(
     build that wrote it, if any), ``started_by``, ``started_at``,
     ``controls`` (the ids it touched), ``undo_of`` (the revision it undid,
     for an undo) and ``undone_by`` / ``undone_at``. ``undo_target`` is the
-    revision ``undo_control_change`` would undo (null when none, and for any
+    revision ``undo_model_change(target="controls")`` would undo (null when none, and for any
     version but the latest). ``discarded`` is true for a version a revert
     replaced.
 
@@ -1937,65 +1809,46 @@ async def list_control_revisions(
 
 
 @mcp.tool()
-async def undo_control_change(
+async def undo_model_change(
     server_version: str,
     model_id: str,
+    target: Literal["controls", "version"],
     ctx: Context,
 ) -> dict:
-    """Undo the latest change to the model's controls. Mutating.
+    """Undo the latest change to a model's controls, or revert its latest
+    version. Mutating.
 
-    Restores exactly what the latest set revision of the latest version
-    replaced (``list_control_revisions``' ``undo_target``). Changes are undone
-    latest first, one per call; the undo is itself recorded, and the next
-    undo goes to the change before it. There is no redo. Verdicts the undo
-    returns to are served again rather than re-judged.
+    ``target="controls"`` restores exactly what the latest set revision of
+    the latest version replaced (``list_control_revisions``'
+    ``undo_target``). Changes are undone latest first, one per call; the
+    undo is itself recorded, and the next undo goes to the change before
+    it. There is no redo. Verdicts the undo returns to are served again
+    rather than re-judged. Answers ``{applied: true, model_id,
+    model_version, undone, revision, controls}``: ``undone`` is the revision
+    undone, ``revision`` the one the undo recorded, ``controls`` the ids it
+    restored.
 
-    Returns one of:
-    - ``{applied: true, model_id, model_version, undone, revision,
-      controls}`` — ``undone`` is the revision undone, ``revision`` the one
-      the undo recorded, ``controls`` the ids it restored.
-    - ``{applied: false, http_status: 409, code, message}`` — ``code`` is
-      ``generation_active`` (a build holds the model), ``nothing_to_undo``,
-      or ``set_diverged`` (a control the change touched has changed since,
-      so undoing it would discard that later change; undo the later change
-      first).
+    ``target="version"`` creates a new version copying the latest earlier
+    version not already discarded — the model, its controls and their
+    objective metadata — and marks the replaced version discarded. Version
+    numbers are never reused, and the discarded version stays readable in
+    the history. Findings on controls the revert removes are resolved.
+    Answers ``{applied: true, model_id, model_version, copied_from,
+    discarded}``: ``model_version`` is the new version.
 
-    Args:
-        model_id: ID of the threat model.
+    A refusal comes back as ``{applied: false, http_status: 409, code,
+    message}``: ``generation_active`` (a build holds the model), and for
+    controls ``nothing_to_undo`` or ``set_diverged`` (a control the change
+    touched has changed since; undo the later change first), for a version
+    ``no_earlier_version``.
     """
+    if target not in ("controls", "version"):
+        raise ToolError('target must be "controls" or "version".')
     try:
-        return _dump(await _get_client().undo_control_change(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def revert_model_version(
-    server_version: str,
-    model_id: str,
-    ctx: Context,
-) -> dict:
-    """Revert the model's latest version. Mutating.
-
-    Creates a new version that copies the latest earlier version not already
-    discarded — the model, its controls and their objective metadata — and
-    marks the replaced version discarded. Version numbers are never reused,
-    and the discarded version stays readable in the history. Findings on
-    controls the revert removes are resolved.
-
-    Returns one of:
-    - ``{applied: true, model_id, model_version, copied_from, discarded}`` —
-      ``model_version`` is the new version, ``copied_from`` the version it
-      copies, ``discarded`` the version it replaced.
-    - ``{applied: false, http_status: 409, code, message}`` — ``code`` is
-      ``generation_active`` (a build holds the model) or
-      ``no_earlier_version``.
-
-    Args:
-        model_id: ID of the threat model.
-    """
-    try:
-        return _dump(await _get_client().revert_model_version(model_id))
+        client = _get_client()
+        if target == "controls":
+            return _dump(await client.undo_control_change(model_id))
+        return _dump(await client.revert_model_version(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2204,93 +2057,37 @@ async def model_coherence_report(
     model_id: str,
     co_id: str = "",
 ) -> dict:
-    """Static-analysis report on coherence between the model's
-    component declarations, the code-binding strings on its controls
-    and assertions, and the structural reachability of every CO.
+    """How coherent a model's structure is: its component bindings, the
+    repos its controls' assertions name, and whether every CO is
+    structurally reachable. Read-only.
 
-    Pass ``co_id`` to scope the report to findings carrying that CO id
-    (the ``co_*`` reachability findings + the attestation cross-link
-    findings). Component- and assertion-level findings without a CO
-    binding are excluded in single-CO mode. 404 if the CO doesn't
-    exist on the model.
+    Pass ``co_id`` to keep only the findings about that CO (404 if it does
+    not exist). Each finding carries ``type``, ``severity``, a ``message``
+    and the ids it concerns, so its fix can be called directly:
 
-    The report carries up to twelve finding types, grouped below by
-    concern. Each finding includes the entity IDs it concerns
-    (``co_id``, ``asset_id``, ``attacker_id``, ``component_id``, etc.)
-    so the agent can dispatch the resolution tool directly without
-    re-fetching the model.
+    - ``control_component_unknown``, ``assertion_repo_orphan``,
+      ``control_unscoped_with_scoped_assertions``:
+      ``assign_to_components(target_type="control")``.
+      ``assertion_repo_mismatch``: rebind the assertion or rescope the
+      control.
+    - ``asset_component_unknown``: ``edit_asset`` with corrected
+      ``component_ids``.
+    - ``component_unbound``: for your own code, ``edit_component`` with the
+      real ``repo_url``. An external-zone component (a third-party service,
+      a customer's IdP) stays unbound: the finding is a permanent marker of
+      an external dependency, not a TODO, and client code touching it is no
+      reason to bind it.
+    - ``co_attacker_unpositioned``: ``edit_attacker`` with
+      ``trust_boundary_ids``. ``co_asset_unbounded``:
+      ``assign_to_components(target_type="asset")``.
+      ``co_no_shared_boundary``: reposition the attacker or rescope the
+      asset; if the boundaries truly do not meet, that is the answer.
+      ``co_missing_entity``: ``restore_entity``, or remove the CO.
 
-    Component / assertion bindings:
-    - ``control_component_unknown`` — control references a component
-      ID that no longer exists. Resolve: ``assign_to_components (target_type="control")``.
-    - ``asset_component_unknown`` — asset references a missing
-      component. Resolve: ``edit_asset`` (with corrected
-      ``component_ids``).
-    - ``assertion_repo_mismatch`` — an assertion's ``repo`` does not
-      match the ``repo_url`` of any component scoping its control.
-      Resolve: rebind the assertion or rescope the control.
-    - ``assertion_repo_orphan`` — an assertion has a ``repo`` but its
-      control is unscoped. Resolve: ``assign_to_components (target_type="control")``
-      to scope the control, or correct the assertion's repo.
-    - ``control_unscoped_with_scoped_assertions`` — control is
-      unscoped, but its assertions all carry a single component's
-      ``repo``. Resolve: ``assign_to_components (target_type="control")`` to that
-      component.
-    - ``component_unbound`` — a component has no ``repo_url``. Two
-      cases, told apart by the component's trust boundary. An
-      internal-zone component (your own code) that isn't linked yet:
-      resolve with ``edit_component`` pointing at the real repo. An
-      external-zone component (e.g. a third-party service, the
-      customer's IdP, or other external infrastructure you call but
-      don't own): leave it
-      unbound — the finding is a permanent, auditor-visible external-
-      dependency marker, NOT a TODO. Never bind an external component
-      to your repo to silence this; "some client code touches it" is
-      not a reason to bind (that client code lives in your repo for
-      every dependency).
-
-    Reachability findings (deterministic composer; indeterminate
-    verdicts surface as findings, never auto-decided by an LLM):
-    - ``co_attacker_unpositioned`` — the CO's attacker has no
-      positioned trust boundaries. Resolve by REPAIRING THE MODEL:
-      ``edit_attacker`` (set ``trust_boundary_ids``).
-    - ``co_asset_unbounded`` — the CO's asset has no component-derived
-      trust boundaries. Resolve by REPAIRING THE MODEL:
-      ``assign_to_components (target_type="asset")`` or ``edit_asset``
-      (with ``component_ids``).
-    - ``co_no_shared_boundary`` — attacker and asset boundaries do
-      not intersect. Resolve by REPAIRING THE MODEL: re-position the
-      attacker via ``edit_attacker``, or scope the asset to a shared
-      component via ``assign_to_components (target_type="asset")``.
-
-      An indeterminate verdict means the derivation could not decide, so the
-      first move is to supply the structure it is missing. It does NOT mean
-      the objective is inapplicable, and asserting that it is would answer a
-      structural question with a judgment.
-
-      ``co_no_shared_boundary`` can also fire where the connecting structure
-      genuinely does not exist rather than merely going unstated, so supplying
-      it is the first thing to try, not a guaranteed resolution. If the
-      boundaries really do not meet, that is still a modelling answer.
-
-      If the objective genuinely does not apply to this system, that is a
-      separate claim: record it with ``create_co_disposition``, which keeps
-      the objective visible, owned and expiring rather than hiding it.
-    - ``co_missing_entity`` — the CO references a missing
-      asset/attacker; model state inconsistent. Resolve: restore
-      the entity (``restore_entity (entity_type="asset")`` / ``restore_entity (entity_type="attacker")``) or
-      remove the orphaned CO via ``refine_threat_model``.
-
-    Use this before relying on component-scoped control discovery,
-    when assertion verification fails for path/repo reasons, or to
-    enumerate structural-completeness gaps the operator should
-    address before treating the model as audit-ready. ``get_reachability_verdicts``
-    exposes the underlying composer verdicts directly when the
-    finding-shape summary isn't enough.
-
-    Args:
-        model_id: ID of the threat model.
-        co_id: Optional CO id to scope the report to a single CO.
+    An indeterminate reachability verdict means the structure it needs is
+    missing: supply it. It never means the objective is inapplicable, which
+    is a separate claim recorded with ``create_co_disposition``.
+    ``get_reachability_verdicts`` returns the raw verdicts.
     """
     try:
         return _dump(
@@ -2309,241 +2106,64 @@ async def model_coherence_report(
 # detect the disabled state without separate code paths or 404 handling.
 
 
-@mcp.tool()
-async def get_composition_overview(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Composition index for a model — counts, tree metadata, warnings.
-
-    Read-only; no side effects. Cheapest call in the composition surface
-    (~1-2KB). Use it first to learn whether composition is available for
-    this model, where the model sits on the recursive tree (parent +
-    ancestor chain + child ids), how many own vs inherited entities and
-    COs there are per kind, and whether any structural warnings (cycle,
-    parent missing, max depth exceeded) need surfacing before drilling
-    into sub-resources.
-
-    Return shape::
-
-        {
-          model_id, model_version, flag_enabled,
-          tree: {parent_id, ancestor_chain, depth, child_ids},
-          counts: {
-            entities: {kind: {own, inherited}, ...},
-            control_objectives: {total, live, covered, uncovered,
-              indeterminate, by_origin: {own, cross, inherited}},
-            reconciliation_candidates: {certain, heuristic},
-          },
-          warnings: [str, ...],
-        }
-
-    When composition is not available on the backend, the same shape is
-    returned with all counts zeroed and ``flag_enabled: false`` — detect
-    that rather than handling an error.
-
-    Args:
-        model_id: ID of the threat model.
-    """
-    try:
-        return _dump(await _get_client().composition_index(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
+_COMPOSITION_VIEWS = ("overview", "entities", "objectives", "coverage", "attack_paths")
 
 
 @mcp.tool()
-async def list_effective_entities(
+async def get_composition(
     server_version: str,
     model_id: str,
+    view: Literal["overview", "entities", "objectives", "coverage", "attack_paths"] = "overview",
     page: int = 1,
     page_size: int = 100,
     kind: str | None = None,
-) -> dict:
-    """Effective entity set (own ⊕ inherited) keyed by kind.
-
-    Returns the entity set this model sees after composition with
-    ancestors: trust boundaries, components, assets, attackers, and
-    (when applicable) attack paths. Each entry carries its provenance —
-    whether it originates on this model or is inherited from an
-    ancestor — plus a fully-qualified id so cross-model references are
-    unambiguous.
-
-    Pair with ``list_effective_control_objectives`` and
-    ``get_effective_coverage`` to see how inherited topology contributes
-    to coverage credit.
-
-    Return shape::
-
-        {
-          model_id, flag_enabled,
-          kinds: {
-            trust_boundaries: [{kind, qualified_id, owner_model_id,
-              owner_title, origin, entity}, ...],
-            components: [...], assets: [...], attackers: [...], ...
-          },
-          total, page, page_size,
-        }
-
-    When composition is disabled on the backend, ``kinds`` is returned
-    with every kind mapped to an empty list and ``flag_enabled: false``.
-
-    Omitting ``page`` / ``page_size`` defaults to ``page=1,
-    page_size=100`` — the response is paginated and no longer returns
-    every entity in a single call.
-
-    Args:
-        model_id: ID of the threat model.
-        page: 1-indexed page number (default ``1``).
-        page_size: entries per page (default ``100``).
-        kind: optional single entity kind to restrict the response to
-            (e.g. ``"attackers"``, ``"assets"``, ``"components"``,
-            ``"trust_boundaries"``). When omitted, all kinds are
-            returned.
-    """
-    try:
-        return _dump(
-            await _get_client().composition_entities(
-                model_id,
-                page=page,
-                page_size=page_size,
-                kind=kind,
-            ),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def list_effective_control_objectives(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Effective control objectives with origin classification.
-
-    Returns every CO visible on the effective model, each tagged with
-    its origin: ``own`` (authored on this model), ``cross`` (an inherited
-    CO whose asset or attacker is local to this model), or ``inherited``
-    (purely inherited from an ancestor). Use this to see what control
-    objectives the model is on the hook for — including those it
-    inherits — before reading coverage or reach.
-
-    Return shape::
-
-        {
-          model_id, flag_enabled,
-          control_objectives: [
-            {co_qid, asset_qid, attacker_qid,
-             security_properties: ["C"|"I"|"A"|"U", ...],
-             origin: "own"|"cross"|"inherited"},
-            ...
-          ],
-        }
-
-    When composition is disabled on the backend, returns an empty list
-    and ``flag_enabled: false``.
-
-    Args:
-        model_id: ID of the threat model.
-    """
-    try:
-        return _dump(
-            await _get_client().composition_control_objectives(model_id),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_effective_coverage(
-    server_version: str,
-    model_id: str,
-    page: int = 1,
-    page_size: int = 100,
     origin: str | None = None,
 ) -> dict:
-    """Effective coverage rollup with credited inheritance.
+    """A model's composed view: its own entities with everything inherited
+    from its ancestors on the recursive tree. Read-only.
 
-    Read-only. Per effective CO: whether it is covered, how much credit
-    comes from controls owned by this model vs inherited from ancestors,
-    and the list of contributing controls (with the owning model id,
-    origin tag, verification status, and mitigation group). This is the
-    surface that drives the composition view's coverage / compliance
-    numbers — it reflects composed (own ⊕ inherited) math, NOT the
-    per-model coverage shown by ``get_verification_report``.
+    ``view`` selects what is returned:
 
-    Return shape::
+    - ``overview`` (default, ~1-2KB, read it first): ``{model_id,
+      model_version, flag_enabled, tree: {parent_id, ancestor_chain, depth,
+      child_ids}, counts: {entities, control_objectives,
+      reconciliation_candidates}, warnings}``.
+    - ``entities``: the effective entity set keyed by kind (trust
+      boundaries, components, assets, attackers, attack paths), each entry
+      ``{kind, qualified_id, owner_model_id, owner_title, origin, entity}``.
+      Paginated (``page``, ``page_size``); ``kind`` (e.g. ``"attackers"``)
+      keeps one kind.
+    - ``objectives``: effective COs ``{co_qid, asset_qid, attacker_qid,
+      security_properties, origin}``, where ``origin`` is ``own``,
+      ``cross`` (inherited, with a local asset or attacker) or
+      ``inherited``.
+    - ``coverage``: per effective CO ``{co_qid, is_covered, own_credit,
+      inherited_credit, contributing_controls}`` — the composed figures, not
+      the per-model ``get_verification_report``. Paginated; ``origin``
+      filters by contributing-control origin.
+    - ``attack_paths``: ``{effective_paths, lattice_positions,
+      authored_paths, suggestions: {missing_path, dangling_path}}`` against
+      the composed topology.
 
-        {
-          model_id, flag_enabled,
-          coverage: [
-            {co_qid, is_covered, own_credit, inherited_credit,
-             contributing_controls: [{control_id, owner_model_id,
-               origin, is_verified, mitigation_group}, ...]},
-            ...
-          ],
-          total, page, page_size,
-        }
-
-    When composition is not available on the backend, ``coverage`` is
-    empty and ``flag_enabled: false``.
-
-    Paginated: omitting ``page`` / ``page_size`` defaults to ``page=1,
-    page_size=100`` — a single call no longer returns every coverage row.
-
-    Args:
-        model_id: ID of the threat model.
-        page: 1-indexed page number (default ``1``).
-        page_size: coverage rows per page (default ``100``).
-        origin: filter coverage rows by contributing-control origin — one
-            of ``"own" | "cross" | "inherited"``. When omitted, rows with
-            any origin mix are returned.
+    Where composition is not available, every view returns its shape empty
+    with ``flag_enabled: false`` rather than an error. Composed reachability
+    is ``get_reachability_verdicts(composed=True)``.
     """
+    if view not in _COMPOSITION_VIEWS:
+        raise ToolError(f"view must be one of {', '.join(_COMPOSITION_VIEWS)}.")
     try:
-        return _dump(
-            await _get_client().composition_coverage(
-                model_id,
-                page=page,
-                page_size=page_size,
-                origin=origin,
-            ),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def list_effective_attack_paths(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Effective AttackPath set + lifted missing/dangling suggestions.
-
-    AttackPaths inherit from ancestors with the same own / inherited
-    provenance as other entities. The ``suggestions`` block is the
-    missing-path / dangling-path delta computed against the *composed*
-    effective topology — a child sees the inherited baseline claims, the
-    composed reach surface, and the delta against both.
-
-    Return shape::
-
-        {
-          model_id, flag_enabled,
-          effective_paths: [{kind, qualified_id, owner_model_id,
-            owner_title, origin, entity}, ...],
-          lattice_positions: int,
-          authored_paths: int,
-          suggestions: {missing_path: [...], dangling_path: [...]},
-        }
-
-    When composition is disabled on the backend, ``effective_paths`` is
-    empty, the counts are zero, ``suggestions`` is empty, and
-    ``flag_enabled: false``.
-
-    Args:
-        model_id: ID of the threat model.
-    """
-    try:
-        return _dump(await _get_client().composition_attack_paths(model_id))
+        client = _get_client()
+        if view == "overview":
+            return _dump(await client.composition_index(model_id))
+        if view == "entities":
+            return _dump(await client.composition_entities(
+                model_id, page=page, page_size=page_size, kind=kind))
+        if view == "objectives":
+            return _dump(await client.composition_control_objectives(model_id))
+        if view == "coverage":
+            return _dump(await client.composition_coverage(
+                model_id, page=page, page_size=page_size, origin=origin))
+        return _dump(await client.composition_attack_paths(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2551,55 +2171,12 @@ async def list_effective_attack_paths(
 _RECONCILIATION_KINDS = {"assets", "attackers", "components"}
 
 
-@mcp.tool()
-async def apply_certain_reconciliation_match(
-    server_version: str,
-    model_id: str,
-    kind: str,
-    own_qid: str,
-    inherited_qid: str,
-    confirm_heuristic: bool = False,
-) -> dict:
-    """Apply a certain-tier reconciliation candidate. Mutates state.
+_RECONCILIATION_DECISIONS = ("apply", "reject", "unreject")
 
-    Soft-deletes the descendant's own duplicate entity; the inherited
-    entity becomes the canonical surface for the effective-model
-    resolver. Use after surveying candidates via
-    ``list_reconciliation_candidates``. Certain-tier candidates apply
-    directly; heuristic-tier candidates need operator review of the
-    structural divergence and are refused server-side unless
-    ``confirm_heuristic=True`` is passed to acknowledge the divergence.
 
-    The server re-validates the candidate against current live state
-    before applying; if the model has moved since the candidate was
-    detected, returns 400 and the operator should refresh the candidate
-    list and retry. Bumps model version and emits an activity event on
-    success.
-
-    Args:
-        model_id: ID of the descendant threat model the duplicate is on.
-        kind: Entity kind — one of ``"assets"``, ``"attackers"``,
-            ``"components"``.
-        own_qid: Qualified id of the descendant's own duplicate (e.g.
-            ``"child:A1"``).
-        inherited_qid: Qualified id of the canonical entity on the
-            ancestor (e.g. ``"parent:A1"``).
-        confirm_heuristic: Acknowledge and apply a heuristic-tier
-            candidate despite its structural divergence. Default False
-            — heuristic-tier matches are refused server-side without
-            this flag. Leave False for certain-tier candidates.
-
-    Returns the post-mutation model envelope::
-
-        {"model": <ThreatModel>,
-         "controls_carried": int,
-         "controls_orphaned": int,
-         "orphaned_control_ids": [str, ...]}
-
-    Errors: 400 on stale candidates, or heuristic-tier candidates without
-    ``confirm_heuristic``; 404 if the model isn't found; 503 if
-    composition is not available on the backend.
-    """
+def _check_candidate_pair(kind: str, own_qid: str, inherited_qid: str) -> None:
+    """The candidate pair an apply or a reject names, refused before the call
+    when it cannot name one."""
     if kind not in _RECONCILIATION_KINDS:
         raise ToolError(
             "kind must be one of 'assets', 'attackers', 'components'.",
@@ -2617,123 +2194,65 @@ async def apply_certain_reconciliation_match(
             "inherited_qid must be a qualified id of the form "
             "'<owner>:<local_id>'.",
         )
+
+
+@mcp.tool()
+async def decide_reconciliation_candidate(
+    server_version: str,
+    model_id: str,
+    decision: Literal["apply", "reject", "unreject"],
+    kind: str = "",
+    own_qid: str = "",
+    inherited_qid: str = "",
+    confirm_heuristic: bool = False,
+    rejection_id: str = "",
+) -> dict:
+    """Decide a reconciliation candidate from
+    ``list_reconciliation_candidates``. Mutating.
+
+    ``kind`` is ``assets``, ``attackers`` or ``components``; ``own_qid`` /
+    ``inherited_qid`` are the pair's qualified ids (``"child:A1"``,
+    ``"parent:A1"``).
+
+    - ``decision="apply"`` soft-deletes the descendant's own duplicate so the
+      inherited entity becomes canonical. A ``heuristic``-tier candidate is
+      refused unless ``confirm_heuristic=True`` acknowledges its structural
+      divergence. The server re-validates the pair (400 when the model has
+      moved since: refresh the list). Bumps the model version; returns
+      ``{model, controls_carried, controls_orphaned,
+      orphaned_control_ids}``.
+    - ``decision="reject"`` records "these are NOT duplicates" at org scope,
+      so the pair leaves the active queue for everyone. Idempotent on the
+      pair; no new version. Returns the record; keep its ``id``.
+    - ``decision="unreject"`` removes the rejection ``rejection_id`` (from
+      ``list_reconciliation_candidates(disposition="rejected")``), returning
+      the pair to the queue. Returns ``{ok: true}``.
+
+    503 where composition is not available on the backend.
+    """
+    if decision not in _RECONCILIATION_DECISIONS:
+        raise ToolError(f"decision must be one of {', '.join(_RECONCILIATION_DECISIONS)}.")
+    if decision == "unreject":
+        if not model_id or not model_id.strip():
+            raise ToolError("model_id is required and must be non-empty.")
+        if not rejection_id or not rejection_id.strip():
+            raise ToolError("rejection_id is required and must be non-empty.")
+    else:
+        _check_candidate_pair(kind, own_qid, inherited_qid)
     try:
-        return _dump(
-            await _get_client().apply_certain_reconciliation_match(
+        client = _get_client()
+        if decision == "apply":
+            return _dump(await client.apply_certain_reconciliation_match(
                 model_id, kind, own_qid, inherited_qid,
                 confirm_heuristic=confirm_heuristic,
-            ),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def reject_reconciliation_candidate(
-    server_version: str,
-    model_id: str,
-    kind: str,
-    own_qid: str,
-    inherited_qid: str,
-) -> dict:
-    """Reject a reconciliation candidate. Mutates state.
-
-    Records the operator's "these are NOT duplicates" decision at org
-    scope so the candidate detector filters this pair out of the active
-    queue on subsequent reads. Idempotent on the natural key
-    ``(model_id, kind, own_qid, inherited_qid)`` — re-rejecting an existing
-    pair returns the same row. Use when ``list_reconciliation_candidates``
-    surfaces a pair that looks like a duplicate but the operator has
-    confirmed it is not.
-
-    Persistence is at org scope, not model state — the rejection is durable
-    across sessions and teammates but does NOT bump model version.
-
-    Args:
-        model_id: ID of the descendant threat model.
-        kind: Entity kind — one of ``"assets"``, ``"attackers"``,
-            ``"components"``.
-        own_qid: Qualified id of the descendant's own entity (e.g.
-            ``"child:A1"``).
-        inherited_qid: Qualified id of the ancestor's entity (e.g.
-            ``"parent:A1"``).
-
-    Returns the persisted record::
-
-        {"id": str, "model_id": str, "kind": str, "own_qid": str,
-         "inherited_qid": str, "rejected_by": str,
-         "rejected_at": <ISO-8601>}
-
-    Use the ``id`` field with ``unreject_reconciliation_candidate`` if the
-    operator changes their mind.
-
-    Errors: 404 if the model isn't found; 503 if composition is not
-    available on the backend, or the rejection store is not configured.
-    """
-    if kind not in _RECONCILIATION_KINDS:
-        raise ToolError(
-            "kind must be one of 'assets', 'attackers', 'components'.",
-        )
-    if not own_qid or not own_qid.strip():
-        raise ToolError("own_qid is required and must be non-empty.")
-    if not inherited_qid or not inherited_qid.strip():
-        raise ToolError("inherited_qid is required and must be non-empty.")
-    if ":" not in own_qid:
-        raise ToolError(
-            "own_qid must be a qualified id of the form '<owner>:<local_id>'.",
-        )
-    if ":" not in inherited_qid:
-        raise ToolError(
-            "inherited_qid must be a qualified id of the form "
-            "'<owner>:<local_id>'.",
-        )
-    try:
-        return _dump(
-            await _get_client().reject_reconciliation_candidate(
+            ))
+        if decision == "reject":
+            return _dump(await client.reject_reconciliation_candidate(
                 model_id, kind, own_qid, inherited_qid,
-            ),
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def unreject_reconciliation_candidate(
-    server_version: str,
-    model_id: str,
-    rejection_id: str,
-) -> dict:
-    """Remove a persisted reconciliation rejection. Mutates state.
-
-    The pair becomes eligible to surface in the active candidate queue
-    again on the next read of ``list_reconciliation_candidates``. Use when
-    the operator changes their mind about a prior rejection — the surrogate
-    ``rejection_id`` comes from ``rejections[*].id`` on
-    ``list_reconciliation_candidates (disposition="rejected")`` (or the return value of
-    ``reject_reconciliation_candidate``).
-
-    Does NOT bump model version (rejection is org state, not model state).
-
-    Args:
-        model_id: ID of the descendant threat model the rejection is on.
-        rejection_id: Surrogate id of the persisted rejection.
-
-    Returns ``{"ok": True}`` on success.
-
-    Errors: 404 if no rejection with that id exists on the model; 503 if
-    composition is not available on the backend, or the rejection store is
-    not configured.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    if not rejection_id or not rejection_id.strip():
-        raise ToolError("rejection_id is required and must be non-empty.")
-    try:
-        return _dump(
-            await _get_client().unreject_reconciliation_candidate(
-                model_id, rejection_id,
-            ),
-        )
+            ))
+        return _dump(await client.unreject_reconciliation_candidate(
+            model_id, rejection_id,
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2784,9 +2303,8 @@ async def lift_composition_entity(
     ``model_refined`` activity event; a structured ``lift_applied`` event
     with the full ``lift_event`` payload lands on the LCA. The audit pack
     surfaces this under ``lift_history``. Reverse it with
-    ``undo_composition_event (event_type="lift")`` (preview first via
-    ``preview_undo_composition (event_type="lift")``); the inverse operation is
-    ``split_composition_entity``.
+    ``undo_composition_event(event_type="lift")``, which previews unless
+    ``dry_run=False``; the inverse operation is ``split_composition_entity``.
 
     Args:
         model_id: Operator's context model — the model whose composition
@@ -3017,58 +2535,44 @@ async def set_mitigation_groups(
 
 
 @mcp.tool()
-async def add_evidence(
+async def edit_evidence(
     server_version: str,
     model_id: str,
     control_id: str,
+    action: Literal["add", "remove"],
     type: str = "code",
     label: str = "",
     url: str = "",
-) -> dict:
-    """Attach an auxiliary evidence item (doc, link, or artifact reference) to a control. Mutating.
-
-    Evidence is contextual metadata only — it does NOT count toward a
-    control's implementation status; only assertions prove controls.
-    Use ``remove_evidence`` to detach an item.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control.
-        type: Evidence type — one of "code", "test", "config",
-            "document", "link" (default "code").
-        label: Human-readable description of the evidence (required).
-        url: Optional file path or URL pointing at the artifact.
-    """
-    if not label.strip():
-        raise ToolError("label is required.")
-    try:
-        return _dump(await _get_client().add_evidence(model_id, control_id, type, label, url))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def remove_evidence(
-    server_version: str,
-    model_id: str,
-    control_id: str,
     evidence_index: int = 0,
 ) -> dict:
-    """Remove one evidence item from a control by its position in the control's evidence array. Mutating.
+    """Attach or detach an auxiliary evidence item (doc, link, artifact
+    reference) on a control. Mutating.
 
-    Evidence is auxiliary metadata (see ``add_evidence``); removing it
-    does not affect the control's implementation status or any
-    assertions. To find the index, read the control via ``get_controls (control_id=...)``
-    and count its ``evidence`` array from 0.
+    Evidence is contextual metadata only: it does NOT count toward a
+    control's implementation status, and removing it changes neither the
+    status nor any assertion. Only assertions prove controls.
 
     Args:
         model_id: ID of the threat model.
         control_id: ID of the control.
-        evidence_index: Zero-based position of the item to remove within
-            the control's ``evidence`` array (default 0 = first item).
+        action: "add" attaches an item; "remove" detaches one.
+        type: add — "code", "test", "config", "document" or "link" (default
+            "code").
+        label: add — human-readable description of the item (required).
+        url: add — optional file path or URL pointing at the artifact.
+        evidence_index: remove — zero-based position of the item in the
+            control's ``evidence`` array (read it with
+            ``get_controls(control_id=...)``; default 0, the first item).
     """
+    if action not in ("add", "remove"):
+        raise ToolError('action must be "add" or "remove".')
+    if action == "add" and not label.strip():
+        raise ToolError("label is required.")
     try:
-        return _dump(await _get_client().remove_evidence(model_id, control_id, evidence_index))
+        client = _get_client()
+        if action == "add":
+            return _dump(await client.add_evidence(model_id, control_id, type, label, url))
+        return _dump(await client.remove_evidence(model_id, control_id, evidence_index))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3091,7 +2595,7 @@ async def import_controls(
     asked to confirm before the controls are saved.
 
     The saved controls are added to the model's current controls as one
-    change (undoable with ``undo_control_change``); no model version is
+    change (undoable with ``undo_model_change``); no model version is
     created, and it is refused while a control build holds the model. Nothing
     runs for them unprompted: the result's ``awaiting_judgement`` lists them,
     and the mitigation groups they join credit nothing and read awaiting
@@ -3330,53 +2834,29 @@ async def add_asset(
 ) -> dict:
     """Add a new asset to a threat model. Creates a new version.
 
-    **Authoring contract**: name the *data or resource being
-    protected* and the security property at stake (Confidentiality /
-    Integrity / Availability / Usage) — not a mechanism, control, or
-    capability. Name the thing whose exposure or corruption is the
-    harm (e.g. "per-organization key-wrapping material", not "KMS
-    encryption"). An asset phrased as a mechanism is flagged with a
-    ``quality_warning`` and the control objectives derived from it may
-    be under-specified.
-
-    There is no asset status to set: an asset that does not apply is
+    **Authoring contract**: name the *data or resource being protected* and
+    the security property at stake (Confidentiality / Integrity /
+    Availability / Usage), not a mechanism or control ("per-organization
+    key-wrapping material", not "KMS encryption"). An asset phrased as a
+    mechanism is flagged with a ``quality_warning`` and yields
+    under-specified control objectives. An asset that does not apply is
     recorded with a non-applicability assumption or
-    ``create_co_disposition``.
+    ``create_co_disposition``; there is no status to set.
 
-    The caller supplies identity-bearing fields (name, description,
-    security_properties, notes) plus optional component scoping; the
-    backend LLM-reasons the factor decomposition (and composes the
-    ``impact`` rating from it). The same prompt the generation
-    pipeline uses for LLM-produced assets is reused here, so factors
-    are calibrated consistently regardless of who introduced the
-    asset. Override any factor post-create via ``edit_asset`` with a
-    ``change_reason`` for the audit trail.
+    The platform reasons the factor decomposition and composes ``impact``
+    with the prompt generation uses, so factors are calibrated alike;
+    override one afterwards with ``edit_asset`` and a ``change_reason``.
+    ``component_ids`` links the asset to the deployable units that hold it,
+    which feeds reachability (several for a multi-instance asset, e.g. a
+    session token on client and cache).
 
-    ``component_ids`` (optional) links the asset to one or more
-    deployable units. Components are the canonical bridge between
-    security architecture (trust boundaries) and code organization
-    (repos); linking assets here flows boundary context into the
-    reachability graph. Multi-component is the right shape for
-    multi-instance assets (e.g., a session token on client + cache).
-
-    LLM-gated against a re-add of a previously soft-deleted asset on
-    the same model. Three possible outcomes:
-
-    - **Normal create** — fresh asset with a new ID. Returns the
-      envelope ``{"model": ThreatModel, "controls_carried": N, ...}``.
-    - **Auto-restore** — proposal matched a soft-deleted asset; that
-      asset is un-deleted (CO tombstones revive). Response carries
-      ``auto_restored: True``, ``restored_asset_id``, and
-      ``discarded_fields``.
-    - **Similar-verdict rejection** — ``{"accepted": False,
-      "classification": "similar", "candidate_restore_id": "A-N",
-      ...}``; nothing saved.
-
-    Fails with a tool error on:
-    - 503 — restore-candidate evaluator OR factor-reasoning evaluator
-      unavailable. Retry with backoff.
-    - 502 — restore-candidate evaluator returned malformed response.
-      Retry same prompt.
+    A proposal matching a soft-deleted asset is gated: it either restores
+    that asset (``auto_restored: true``, ``restored_asset_id``,
+    ``discarded_fields``; its CO tombstones revive) or is refused as similar
+    (``{accepted: false, classification: "similar", candidate_restore_id}``,
+    nothing saved). A normal create returns ``{model, controls_carried,
+    ...}``. 503: an evaluator is unavailable, retry with backoff; 502: it
+    answered malformed, retry.
 
     Args:
         model_id: ID of the threat model.
@@ -3851,8 +3331,9 @@ async def get_verdict_divergence(
     page with ``offset`` to review every divergence — not only the first page.
 
     Also returns ``group_sufficiency`` divergences (observation-only). Apply
-    coverage rows with ``accept_coverage_divergences``; set aside rows the
-    structural model got right with ``dismiss_verdict_divergences``.
+    coverage rows with ``resolve_verdict_divergences(action="accept")``; set
+    aside rows the structural model got right with
+    ``resolve_verdict_divergences(action="dismiss")``.
 
     Args:
         model_id: ID of the threat model.
@@ -3877,125 +3358,61 @@ async def get_verdict_divergence(
 
 
 @mcp.tool()
-async def accept_coverage_divergences(
+async def resolve_verdict_divergences(
     server_version: str,
     model_id: str,
-    items: str,
-    change_reason: str,
-) -> dict:
-    """Accept a set of coverage divergences as mapping changes, in one batch.
-
-    Each accepted ``missing_mapping`` ADDS its CO to the control; each
-    ``spurious_mapping`` REMOVES it. Applied as one version per affected
-    control. Each item is validated independently — the response separates
-    ``applied`` from ``skipped`` (stale / would-orphan / already in that
-    state), so a partial batch still lands its valid items.
-
-    Read the rows first with ``get_verdict_divergence``; to accept only the
-    high-confidence ones, filter its coverage rows by ``p_covers`` (near 1.0
-    for missing_mapping, near 0.0 for spurious_mapping) before passing them
-    here.
-
-    Args:
-        model_id: ID of the threat model.
-        items: JSON array of {"control_id", "co_id", "kind"} objects, where
-            kind is "missing_mapping" or "spurious_mapping".
-        change_reason: Why these mapping changes are appropriate (min 10
-            chars). Recorded on every affected control's version history.
-    """
-    import json as _json
-
-    try:
-        parsed = _json.loads(items)
-    except (ValueError, TypeError) as exc:
-        raise ToolError("items must be a JSON array of divergence objects.") from exc
-    if not isinstance(parsed, list) or not parsed:
-        raise ToolError("items must be a non-empty JSON array.")
-    if len(change_reason.strip()) < 10:
-        raise ToolError("change_reason must be at least 10 characters.")
-    try:
-        return _dump(await _get_client().accept_coverage_divergences(
-            model_id, parsed, change_reason.strip(),
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def dismiss_verdict_divergences(
-    server_version: str,
-    model_id: str,
+    action: Literal["accept", "dismiss"],
     items: str,
     reason: str,
 ) -> dict:
-    """Dismiss a set of divergences (the structural model was right, the LLM
-    was not) WITHOUT changing the model.
+    """Accept a batch of coverage divergences as mapping changes, or dismiss
+    a batch of divergences. Mutating.
 
-    Use for rows you have reviewed and judged not valid. A dismissal is keyed
-    to the divergence's current verdict input hash, so it auto-clears (the row
-    reappears) once the underlying control or objective changes. Works for
-    coverage AND group_sufficiency rows.
+    ``action="accept"``: each ``missing_mapping`` ADDS its CO to the
+    control, each ``spurious_mapping`` REMOVES it, one version per affected
+    control. Items are validated one by one: the answer separates
+    ``applied`` from ``skipped`` (stale, would orphan, already so). To accept
+    only confident rows, filter ``get_verdict_divergence``'s coverage rows
+    by ``p_covers`` (near 1.0 for missing, near 0.0 for spurious) first.
+    ``reason`` (min 10 chars) is recorded on each control's history.
+
+    ``action="dismiss"``: the structural model was right and the LLM was
+    not; the model does not change. A dismissal is keyed to the row's
+    current verdict input, so the row reappears once its control or
+    objective changes. Works for coverage and ``group_sufficiency`` rows.
 
     Args:
         model_id: ID of the threat model.
-        items: JSON array of {"kind", "co_id", "control_id"?, "group_id"?}
-            objects. control_id is required for coverage kinds; group_id for
-            group_sufficiency.
-        reason: Why these divergences are being set aside (min 1 char).
+        action: "accept" or "dismiss".
+        items: JSON array of rows. accept: ``{"control_id", "co_id", "kind"}``
+            with kind ``missing_mapping`` or ``spurious_mapping``. dismiss:
+            ``{"kind", "co_id", "control_id"?, "group_id"?}`` (control_id for
+            coverage kinds, group_id for group_sufficiency).
+        reason: Why (accept: min 10 chars; dismiss: non-empty).
     """
     import json as _json
 
+    if action not in ("accept", "dismiss"):
+        raise ToolError('action must be "accept" or "dismiss".')
     try:
         parsed = _json.loads(items)
     except (ValueError, TypeError) as exc:
         raise ToolError("items must be a JSON array of divergence objects.") from exc
     if not isinstance(parsed, list) or not parsed:
         raise ToolError("items must be a non-empty JSON array.")
+    if action == "accept" and len(reason.strip()) < 10:
+        raise ToolError("reason must be at least 10 characters to accept.")
     if not reason.strip():
         raise ToolError("reason must not be empty.")
     try:
-        return _dump(await _get_client().dismiss_verdict_divergences(
+        client = _get_client()
+        if action == "accept":
+            return _dump(await client.accept_coverage_divergences(
+                model_id, parsed, reason.strip(),
+            ))
+        return _dump(await client.dismiss_verdict_divergences(
             model_id, parsed, reason.strip(),
         ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def retry_verdicts(
-    server_version: str,
-    model_id: str,
-) -> dict:
-    """Re-trigger a model's parked verdict re-evals after a transient failure.
-
-    When a verdict re-evaluation fails transiently — a provider outage,
-    exhausted credits, or a timeout — it is parked and reads as "unavailable /
-    treated as unverified", recovering only after a delay. This forces an
-    immediate, non-destructive re-run of ONLY the parked/failed re-eval slots,
-    across every verdict kind (coverage, group-sufficiency, per-control
-    sufficiency, coherence). It changes no assertions, controls, or verdict
-    content, so no IDs churn. Evaluation runs in the background — re-read the
-    sufficiency or verification report shortly after to see updated verdicts.
-
-    Prefer this over ``recompute_verdicts`` when verdicts are stuck due to an
-    outage: ``recompute_verdicts`` force-enqueues coverage + group-sufficiency
-    for the whole model (metered per its estimate) and cannot un-park a job
-    whose inputs are unchanged, whereas this re-arms exactly the failed slots
-    and covers per-control sufficiency + coherence too.
-
-    Args:
-        model_id: ID of the threat model whose parked verdicts to retry.
-
-    Returns:
-        Dict with:
-        - model_id, model_version
-        - retried_slots: number of parked/failed re-eval slots re-armed
-          (0 when nothing was parked)
-        - governor: spend status — when ``governor.exhausted`` is true, re-runs
-          resume automatically at ``governor.resets_at``.
-    """
-    try:
-        return _dump(await _get_client().retry_verdicts(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4031,68 +3448,39 @@ async def import_compliance_framework(
     import, the framework is selectable on threat models exactly like
     a built-in.
 
-    Schema (top-level fields):
-        - ``name`` (required): framework display name
-        - ``version`` (optional): e.g. "1.0"
-        - ``description`` (optional): one-paragraph description
-        - ``level_definitions`` (optional, level-aware frameworks only):
-          map keyed by **stringified integer level** ("1", "2", …)
-          because the key IS the cumulative-filter ordinal
-          (``level <= target_level``) and the ``level: int`` field on
-          every requirement. Non-integer keys are rejected with
-          HTTP 400. **Human labels are decoupled** — "Baseline" /
-          "Hardened" / "SL3" / "CAL Critical" live in the ``name``
-          field, not the key. Each value is
-          ``{"name", "description", "source"}``. Ships the per-level
-          legend to the LLM prompt and the framework-target UI.
-          ``source`` is "authoritative" when paraphrased from the
-          published standard, "mipiti_convention" when you defined the
-          tiers yourself.
-        - ``requirements`` (required, non-empty list): each entry takes
-          ``id`` (required), ``description`` (required),
-          ``level`` (optional integer, default 1),
-          ``chapter_id`` / ``chapter_name`` / ``section_id`` /
-          ``section_name`` / ``title`` (optional grouping),
-          ``scope`` (optional, "component" default or "system" for
-          requirements covered if ANY model satisfies them),
-          ``level_specific_text`` (optional map of per-tier text;
-          same stringified-integer-key rule as ``level_definitions``).
+    Fields: ``name`` (required), ``version``, ``description``,
+    ``requirements`` (required, non-empty), ``level_definitions``.
 
-    Example minimal body::
+    Each requirement takes ``id`` and ``description`` (required), ``level``
+    (integer, default 1), the optional grouping ``chapter_id`` /
+    ``chapter_name`` / ``section_id`` / ``section_name`` / ``title``,
+    ``scope`` (``component``, the default, or ``system``: covered if ANY
+    model satisfies it) and ``level_specific_text`` (per-level text).
 
-        {
-          "name": "ACME Internal Baseline",
-          "version": "2026.1",
-          "requirements": [
-            {"id": "ACME-1", "description": "All endpoints authenticate", "level": 1},
-            {"id": "ACME-2", "description": "TLS 1.3 in transit", "level": 1}
-          ]
-        }
+    ``level_definitions`` and ``level_specific_text`` are keyed by the
+    level as a string integer ("1", "2"): the key is the ordinal the
+    ``level <= target_level`` filter compares, so a non-integer key is
+    refused (400). Labels ("Baseline", "SL3") go in each value's ``name``.
+    A level value is ``{"name", "description", "source"}``, where ``source``
+    is ``authoritative`` (paraphrased from the published standard) or
+    ``mipiti_convention`` (tiers you defined).
 
-    Example with per-level legend + per-requirement parameters::
+    Example::
 
         {
           "name": "ACME Tiered",
           "level_definitions": {
             "1": {"name": "Baseline", "description": "Minimum.",
-                  "source": "authoritative"},
-            "2": {"name": "Hardened", "description": "Sensitive data.",
                   "source": "mipiti_convention"}
           },
           "requirements": [
-            {"id": "ACME-PWD",
-             "description": "Passwords meet policy",
-             "level": 1,
-             "level_specific_text": {
-               "1": "Min 8 characters.",
-               "2": "Min 14 + MFA required."
-             }}
+            {"id": "ACME-PWD", "description": "Passwords meet policy",
+             "level": 1, "level_specific_text": {"1": "Min 8 characters."}}
           ]
         }
 
     Args:
-        framework_json: A JSON string containing the framework body.
-            (String not dict so the JSON shape stays explicit on the wire.)
+        framework_json: The framework body as a JSON string.
     """
     import json as _json
 
@@ -4412,7 +3800,7 @@ async def get_assertion_types(
 # survive a cut is here; the same contract in full, with per-param formats and
 # examples, is one get_assertion_types call away.
 _SUBMIT_ASSERTIONS_DOC = f"""\
-Typed claims about a control or an assumption; CI checks them later, not now.
+Typed claims about a control, assumption or functional test; CI checks later.
 get_assertion_types returns it all as data.
 
 By class, strongest first, as name(required) [opt: optional]:
@@ -4430,8 +3818,8 @@ _COVERS_IN_PARAMS = (
 )
 
 _COVERS_NOT_HERE = (
-    "covers is not carried on this submission. A binding between evidence "
-    "and a control clause is declared on submit_assertions."
+    "covers is not carried on a functional test's evidence. A binding "
+    "between evidence and a control clause is declared with control_id."
 )
 
 
@@ -4482,8 +3870,17 @@ async def submit_assertions(
     assertions_json: str,
     control_id: Optional[str] = None,
     assumption_id: Optional[str] = None,
+    functional_test_id: Optional[str] = None,
 ) -> dict:
-    """Submit machine-verifiable assertions for a control or assumption.
+    """Submit machine-verifiable assertions for a control, an assumption or
+    a functional test. Name exactly one of ``control_id``,
+    ``assumption_id`` and ``functional_test_id``.
+
+    A functional test's assertions (``test_exists``, ``test_attested``)
+    are its evidence for functional conformance; they carry no ``covers``,
+    which binds evidence to a control clause and is refused there. Read the
+    resulting state with ``get_functional_coverage`` or ``get_sufficiency``
+    (``functional_test_id``).
 
     Each object carries ``type``, ``params``, ``description``, ``repo`` and
     optionally ``covers`` (top-level, never inside ``params``): the
@@ -4511,18 +3908,22 @@ async def submit_assertions(
     than its weakest clause: one for-all clause with no sound witness
     leaves the control unproven however much evidence the others carry.
     """
-    if not control_id and not assumption_id:
-        raise ToolError("Exactly one of control_id or assumption_id must be provided.")
-    if control_id and assumption_id:
-        raise ToolError("Provide control_id OR assumption_id, not both.")
+    named = [n for n in (control_id, assumption_id, functional_test_id) if n]
+    if len(named) != 1:
+        raise ToolError(
+            "Name exactly one of control_id, assumption_id or functional_test_id.")
     try:
         assertions = json.loads(assertions_json)
     except json.JSONDecodeError:
         raise ToolError("assertions_json must be valid JSON array.")
     if not isinstance(assertions, list):
         raise ToolError("assertions_json must be a JSON array.")
-    _refuse_malformed(assertions)
+    _refuse_malformed(assertions, covers_accepted=not functional_test_id)
     try:
+        if functional_test_id:
+            return _dump(await _get_client().submit_functional_tests(
+                model_id, functional_test_id, assertions,
+            ))
         return _dump(await _get_client().submit_assertions(
             model_id, assertions,
             control_id=control_id or "",
@@ -4679,50 +4080,47 @@ async def get_verification_report(
 async def get_sufficiency(
     server_version: str,
     model_id: str,
-    control_id: str,
+    control_id: str = "",
+    functional_test_id: str = "",
 ) -> dict:
-    """Sufficiency verdict for a single control: whether its submitted assertions collectively cover every aspect of the control. Read-only.
+    """Whether the submitted assertions of one control, or of one functional
+    test, together prove it. Read-only; name exactly one id.
 
-    Returns the LLM sufficiency status and reasoning for one control, evaluated server-side from the current assertion set (no CI round-trip). Use this for a focused check on one control after submitting assertions; for the whole-model rollup with tier1/tier2 pass/fail counts and drift/misalignment details across all controls, use ``get_verification_report`` instead. A verdict carries a ``freshness`` of ``fresh`` | ``stale`` | ``pending`` beside its status: ``stale`` means the control description, the assertion set or the rules the verdict was computed under have moved since. Reading does not queue a re-evaluation: the write that changed a control queues its own, so calling again later returns the refreshed verdict. For the whole-model rollup use ``get_verification_report``.
+    For a control this explains ``verification_status:
+    "partially_verified"``. ``status`` is ``sufficient | insufficient |
+    pending``, with ``freshness`` (``fresh | stale | pending``) beside it;
+    insufficient carries ``details`` naming EACH uncovered clause and the
+    evidence that would close it. A ``soundness_tier`` is the weakest
+    clause's tier: a control is proven no more strongly than its thinnest
+    clause. Reading does not queue a re-evaluation: the write that changed a
+    control queues its own. For the whole model use
+    ``get_verification_report``.
 
-    This is the surface that explains a control stuck at
-    ``verification_status: "partially_verified"``. Returns ``status``
-    (``"sufficient" | "insufficient" | "pending"``; staleness rides in
-    ``freshness``, not in the status) and, when
-    insufficient, a ``details`` breakdown naming EACH uncovered clause of
-    the control description and what evidence would close it — a concrete
-    work list, not a score. A claim that carries a ``soundness_tier``
-    reports its weakest clause's tier: a control is proven no more strongly
-    than the thinnest clause it rests on, so the composed tier is read as
-    that bound and never as a control-level pass. Act on it by submitting
-    the named assertions with ``submit_assertions``; if a clause is
-    uncloseable because the control describes a mechanism the system does
-    not actually use, that is a signal to ``refine_control`` instead of
-    manufacturing evidence.
+    Act by submitting the named assertions; a clause describing a mechanism
+    the system does not use calls for ``refine_control``, not evidence.
+    ``get_control_work_order`` serves the per-clause list: where the order
+    names a required class for a clause, ``required_evidence`` carries the
+    clause id for ``covers`` and a ``suggested_submission`` skeleton whose
+    ``<...>`` placeholders you replace. For a for-all clause prefer
+    ``typed_boundary``, else ``sink_default_deny``. ``class_mismatch`` means
+    the bound evidence is the wrong CLASS and more of it will not help. An
+    attestation covers an existential clause, never a for-all one; that
+    clause's only other exits are a risk acceptance or a not-applicable
+    disposition.
 
-    The per-clause work list is served by ``get_control_work_order``:
-    where the order names a required class for a clause,
-    ``required_evidence`` carries the clause id to put in ``covers``, the
-    clause text and its quantifier, the ``required_class`` that closes it
-    and a ``suggested_submission`` skeleton whose ``<...>`` placeholders
-    you replace before submitting. It is stated by-construction first — for
-    a for-all clause the required class is
-    ``[by_construction, sound_over_approximation]``, so prefer
-    ``typed_boundary`` (declare the type the sinks accept and its
-    constructors), else ``sink_default_deny`` (declare the sinks that
-    realise the clause, the safe forms, a reviewed allowlist). When
-    evidence of the wrong class is bound, ``class_mismatch`` is set: the
-    evidence is the wrong CLASS, not merely incomplete, and more of it
-    will not help. An attestation covers an existential clause and never
-    a for-all one; the only legitimate non-mitigation exit for a for-all
-    clause is a risk acceptance or a not-applicable disposition.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control (e.g., "CTRL-01").
+    For a functional test it is whether the test's evidence proves the
+    objectives it is associated with, with the reasoning; computed after
+    evidence is submitted, so it can read pending or absent until then.
     """
+    if bool(control_id) == bool(functional_test_id):
+        raise ToolError("Name exactly one of control_id or functional_test_id.")
     try:
-        return await _get_client().get_sufficiency(model_id, control_id)
+        client = _get_client()
+        if functional_test_id:
+            return _dump(await client.get_functional_test_sufficiency(
+                model_id, functional_test_id,
+            ))
+        return await client.get_sufficiency(model_id, control_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4771,7 +4169,7 @@ async def list_findings(
 ) -> dict:
     """List negative findings recorded on a threat model. Read-only.
 
-    Returns finding rows with their lifecycle status; use to triage gaps or to find a ``finding_id`` for ``update_finding`` / ``preview_finding_remediation``. Each row carries an ``origin`` ("own" for findings recorded on this model, "inherited" for findings contributed through model composition, with ``inherited_from_*`` context); inherited findings are included in the listing.
+    Returns finding rows with their lifecycle status; use to triage gaps or to find a ``finding_id`` for ``update_finding`` / ``remediate_finding``. Each row carries an ``origin`` ("own" for findings recorded on this model, "inherited" for findings contributed through model composition, with ``inherited_from_*`` context); inherited findings are included in the listing.
 
     Args:
         model_id: ID of the threat model.
@@ -4803,7 +4201,7 @@ async def update_finding(
 ) -> dict:
     """Advance a finding through its lifecycle. Mutating: updates the finding's status and metadata.
 
-    Use to acknowledge, remediate, verify, or dismiss a finding previously recorded by ``submit_findings`` / ``list_findings``. This records a MANUAL status transition — the machine-set ``auto_resolved`` state is not among the statuses it accepts; for gaps whose kind has an automatic fix, ``preview_finding_remediation`` + ``apply_finding_remediation`` perform the actual cleanup instead.
+    Use to acknowledge, remediate, verify, or dismiss a finding previously recorded by ``submit_findings`` / ``list_findings``. This records a MANUAL status transition — the machine-set ``auto_resolved`` state is not among the statuses it accepts; for gaps whose kind has an automatic fix, ``remediate_finding`` performs the actual cleanup instead.
 
     Args:
         model_id: ID of the threat model.
@@ -4822,63 +4220,41 @@ async def update_finding(
 
 
 @mcp.tool()
-async def preview_finding_remediation(
+async def remediate_finding(
     server_version: str,
     finding_id: str,
-) -> dict:
-    """Preview what the platform would do to remediate a finding.
-
-    Read-only. Returns a structured diff describing the changes a
-    subsequent apply_finding_remediation call would make. Use this
-    BEFORE apply_finding_remediation to show the operator exactly
-    what cleanup will happen, and get explicit confirmation before
-    committing.
-
-    The exact shape of the diff depends on the finding's kind. For
-    kind=structural_duplicate_controls, you get back which controls
-    would be kept, which dropped, and the union of CO mappings +
-    framework refs that would land on the survivor.
-
-    Returns 404 if the finding doesn't exist; 422 if the finding's
-    kind has no automatic remediation handler.
-
-    Args:
-        finding_id: ID of the finding to preview remediation for.
-    """
-    try:
-        return _dump(await _get_client().preview_finding_remediation(finding_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def apply_finding_remediation(
-    server_version: str,
-    finding_id: str,
-    justification: str,
     ctx: Context,
+    apply: bool = False,
+    justification: str = "",
 ) -> dict:
-    """Apply the remediation for a finding. Mutates state.
+    """Preview, and on confirmation apply, the platform's remediation of a
+    finding.
 
-    Commits the changes preview_finding_remediation showed. The
-    justification is recorded in the audit trail and shown in any
-    future review of why this cleanup was run.
+    Without ``apply`` it is read-only: it returns a structured diff of what
+    the remediation would change, shaped by the finding's kind (for
+    ``structural_duplicate_controls``: which controls are kept, which
+    dropped, and the CO mappings and framework refs the survivor takes).
+    Show the operator that diff and get explicit confirmation.
 
-    DO NOT call this without first calling
-    preview_finding_remediation and showing the operator the diff.
-    The agent's role is to surface what's about to happen and get
-    explicit operator confirmation; the platform records who acted
-    but doesn't enforce the preview-then-apply norm — the agent does.
+    With ``apply=True`` it commits the change, recording ``justification``
+    (a one-line operator rationale, required) on the audit trail. Never
+    apply without having shown the preview: the platform records who acted
+    but does not enforce the preview — the agent does.
 
-    Returns 404 if the finding doesn't exist; 409 if the finding is
-    already remediated or dismissed; 400 if justification is empty;
-    422 if the finding's kind has no automatic remediation handler.
+    404 when the finding does not exist; 422 when its kind has no automatic
+    remediation (resolve those with the control tools); applying a finding
+    already remediated or dismissed is refused (409).
 
     Args:
-        finding_id: ID of the finding to remediate.
-        justification: One-line operator rationale recorded on the
-            audit trail. Must be non-empty.
+        finding_id: ID of the finding.
+        apply: False (default) previews; True applies.
+        justification: With ``apply=True``: the operator's rationale.
     """
+    if not apply:
+        try:
+            return _dump(await _get_client().preview_finding_remediation(finding_id))
+        except Exception as exc:
+            raise _api_error(exc) from exc
     if not justification or not justification.strip():
         raise ToolError(
             "justification is required and must be non-empty. Pass the "
@@ -5655,12 +5031,12 @@ async def convert_assumption_to_controls(
 # ------------------------------------------------------------------
 # Proves a feature does what it was specified to do, verified by the same
 # assertion + CI engine as security controls. Two flows:
-# (1) generate — generate_functional_objectives → get_functional_scan_prompt →
-#     write tests → add_functional_test → submit_functional_tests → CI verifies →
-#     get_functional_coverage.
+# (1) generate — generate_functional_objectives → get_scan_prompt (functional) →
+#     write tests → add_functional_test → submit_assertions (functional_test_id) →
+#     CI verifies → get_functional_coverage.
 # (2) import existing tests — import_functional_tests → suggest_functional_test_mappings
 #     → associate_functional_test → (optionally) set_functional_satisfaction_groups →
-#     get_functional_test_sufficiency.
+#     get_sufficiency (functional_test_id).
 
 
 @mcp.tool()
@@ -5690,83 +5066,52 @@ async def generate_functional_objectives(
 
 
 @mcp.tool()
-async def list_capabilities(server_version: str, model_id: str) -> dict:
-    """List every capability (a behaviour the feature must deliver) for a model.
+async def get_capabilities(
+    server_version: str, model_id: str, capability_id: str = "",
+) -> dict:
+    """A model's capabilities (behaviours the feature must deliver), or one
+    of them. Read-only.
 
-    Read-only; no side effects. Use this to enumerate a model's capabilities
-    (e.g. before reviewing functional objectives). To fetch one capability's
-    full detail use ``get_capability`` instead.
+    Without ``capability_id``: every capability, each with its id,
+    name/description and a summary of its component and asset bindings.
+    With it: that capability with its bound components and assets.
 
     Args:
-        model_id: ID of the threat model whose capabilities to list.
-
-    Returns a list of capabilities, each with its id, name/description, and a
-    summary of its component/asset bindings.
+        model_id: ID of the threat model.
+        capability_id: Optional; omit to list every capability.
     """
     try:
-        return _dump(await _get_client().list_capabilities(model_id))
+        client = _get_client()
+        cap_id = capability_id.strip()
+        if cap_id:
+            return _dump(await client.get_capability(model_id, cap_id))
+        return _dump(await client.list_capabilities(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
 
 @mcp.tool()
-async def get_capability(server_version: str, model_id: str, capability_id: str) -> dict:
-    """Get one capability with its component and asset bindings.
+async def get_functional_coverage(
+    server_version: str, model_id: str, gaps_only: bool = False,
+) -> dict:
+    """A model's functional coverage report, or just its actionable gaps.
+    Read-only.
 
-    Read-only; no side effects. Use when you already have a ``capability_id``
-    (e.g. from ``list_capabilities``) and need its full detail; to enumerate
-    all capabilities of a model, use ``list_capabilities`` instead.
-
-    Args:
-        model_id: ID of the threat model the capability belongs to.
-        capability_id: ID of the capability to fetch.
-
-    Returns the capability with its bound components and assets.
-    """
-    try:
-        return _dump(await _get_client().get_capability(model_id, capability_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_functional_coverage(server_version: str, model_id: str) -> dict:
-    """Get the full functional coverage report for a model.
-
-    Read-only; no side effects. Returns per-objective state (verified /
-    covered / failing / untested), the Capabilities × Conditions matrix, and
-    the applicable / missing-objective / not-applicable cell accounting. This
-    is the complete picture; when you only need the actionable subset (what to
-    implement or fix next), use ``check_functional_gaps`` instead.
+    By default the whole picture: per-objective state (verified / covered /
+    failing / untested), the Capabilities × Conditions matrix, and the
+    applicable / missing-objective / not-applicable cell accounting. With
+    ``gaps_only=True`` only what needs action: applicable conditions with no
+    objective yet, and objectives that are failing or have no passing test.
 
     Args:
-        model_id: ID of the threat model whose functional coverage to report.
-
-    Returns the coverage report (matrix + per-objective states + cell counts).
+        model_id: ID of the threat model.
+        gaps_only: Return only the actionable gaps (default False).
     """
     try:
-        return _dump(await _get_client().get_functional_coverage(model_id))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def check_functional_gaps(server_version: str, model_id: str) -> dict:
-    """Get the actionable functional gaps for a model.
-
-    Read-only; no side effects. Returns the subset of the coverage report that
-    needs action: applicable conditions with no objective yet, and objectives
-    that are failing or have no passing test. Use this to decide what to
-    implement or fix next; for the complete coverage matrix and all states use
-    ``get_functional_coverage`` instead.
-
-    Args:
-        model_id: ID of the threat model to analyse for functional gaps.
-
-    Returns the actionable gaps (missing objectives + failing/untested ones).
-    """
-    try:
-        return _dump(await _get_client().get_functional_gaps(model_id))
+        client = _get_client()
+        if gaps_only:
+            return _dump(await client.get_functional_gaps(model_id))
+        return _dump(await client.get_functional_coverage(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5779,7 +5124,7 @@ async def add_functional_test(
 ) -> dict:
     """Hand-author a single functional test and map it to one or more objectives. Mutating.
 
-    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_ATTESTED evidence via submit_functional_test_assertions.
+    Generation (generate_functional_objectives) already specifies the tests to implement, so use this only to register an extra test that generation did not produce; a manually-added test survives regeneration/refresh. For bulk-registering tests that already exist in your codebase, use import_functional_tests instead. This records the test at the status you claim — it does not run or verify anything; CI verification happens only when you attach TEST_EXISTS/TEST_ATTESTED evidence via submit_assertions with functional_test_id.
 
     Args:
         model_id: ID of the threat model.
@@ -5924,26 +5269,6 @@ async def set_functional_satisfaction_groups(
     try:
         return _dump(await _get_client().set_functional_satisfaction_groups(
             model_id, functional_objective_id, groups, ungrouped_ids,
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-@mcp.tool()
-async def get_functional_test_sufficiency(
-    server_version: str, model_id: str, functional_test_id: str,
-) -> dict:
-    """Read the sufficiency verdict for a functional test. Read-only; no side effects.
-
-    Reports whether the test's attached evidence adequately proves the objective(s) it is associated with, together with the reasoning behind the verdict. This is the functional-conformance analog of get_sufficiency (which covers security controls). The verdict is computed asynchronously after evidence is submitted, so it may read as pending or absent until evaluation completes.
-
-    Args:
-        model_id: ID of the threat model.
-        functional_test_id: The functional test to assess.
-    """
-    try:
-        return _dump(await _get_client().get_functional_test_sufficiency(
-            model_id, functional_test_id,
         ))
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -6618,74 +5943,33 @@ async def get_reachability_verdicts(
     page_size: int = 100,
     kind_filter: str | None = None,
 ) -> dict:
-    """Per-CO reachability verdicts for a model — flat or composed topology.
+    """Per-CO reachability verdicts, over this model alone or the composed
+    tree. Read-only; derived each time, never stored.
 
-    ``composed`` selects which topology the verdicts are derived over:
+    ``composed=False`` (default): derived from this model's own structure
+    (components, ``asset.component_ids``, ``trust_boundary.passes``, each
+    attacker's ``trust_boundary_ids`` and vector, assumption exclusion
+    predicates), deterministic, the derivation an auditor re-runs.
+    ``co_id`` returns one verdict (404 if absent or tombstoned). Returns
+    ``{model_id, model_version, verdicts: [{co_id, kind, reason, narration,
+    boundary_id?, assumption_id?}]}``; ``kind`` is ``reachable``,
+    ``unreachable`` or ``indeterminate``.
 
-      - ``composed=False`` (default) — FLAT: verdicts over THIS model's own
-        structural primitives only (components, asset.component_ids,
-        trust_boundary.passes, attacker.trust_boundary_ids + attack_vector,
-        Assumption.exclusion predicates). Pure derivation, NOT persisted on
-        the CO — re-running against the model JSON is deterministic, the
-        verification an auditor performs. Pass ``co_id`` to retrieve a
-        single verdict (skips the cross-CO loop); ``page`` / ``page_size`` /
-        ``kind_filter`` are ignored in this mode. Returns ``{model_id,
-        model_version, verdicts: [...]}`` where each verdict carries
-        ``co_id``, ``kind`` ("reachable" | "unreachable" |
-        "indeterminate"), ``reason`` (structural label:
-        ``boundary_blocks_vector`` / ``assumption_excludes`` /
-        ``attacker_unpositioned`` / ``asset_unbounded`` /
-        ``no_shared_boundary`` / ``missing_entity``), ``narration``, and
-        (when applicable) ``boundary_id`` / ``assumption_id``.
+    ``composed=True``: the same derivation over the model with everything
+    it inherits from its ancestors, for a child on the composition tree.
+    Paginated (``page``, ``page_size``); ``kind_filter`` keeps one kind;
+    ``co_id`` is ignored. Returns ``{model_id, flag_enabled, verdicts:
+    [{co_qid, asset_qid, attacker_qid, kind, reason}], total, page,
+    page_size}``, empty with ``flag_enabled: false`` where composition is
+    not available.
 
-      - ``composed=True`` — COMPOSED: the same verdict semantics evaluated
-        over the merged effective tree (own components and trust boundaries
-        combined with everything inherited from ancestors, qualified ids for
-        cross-model references). Use this when the model is a child on the
-        composition tree and you need reach state that reflects the ancestor
-        topology, not just the local model document. Paginated via ``page``
-        / ``page_size`` and filterable via ``kind_filter``; ``co_id`` is
-        ignored (the composed surface has no single-CO lookup). Returns
-        ``{model_id, flag_enabled, verdicts: [{co_qid, asset_qid,
-        attacker_qid, kind, reason}, ...], total, page, page_size}``. When
-        composition is disabled on the backend, ``verdicts`` is empty and
-        ``flag_enabled: false`` — fall back to ``composed=False`` for the
-        per-model derivation.
-
-    When a flat verdict is indeterminate, address the gap via the standard
-    model-edit affordances:
-      - ``attacker_unpositioned`` → ``edit_attacker`` setting
-        ``trust_boundary_ids``
-      - ``asset_unbounded`` → ``assign_to_components (target_type="asset")`` or
-        ``edit_asset`` with ``component_ids``
-      - ``no_shared_boundary`` → re-position attacker, re-scope asset, OR
-        ``add_assumption`` with structured exclusion
-      - ``missing_entity`` → restore the missing asset/attacker, or remove
-        the orphaned CO
-
-    Use this before relying on per-CO reach state for triage,
-    auto-remediation, or audit responses. The ``model_coherence_report``
-    tool surfaces the same gaps as actionable findings; this tool exposes
-    the raw verdicts when you need the structured data (boundary_id
-    citations, narration strings) that the findings summarize.
-
-    Args:
-        model_id: ID of the threat model.
-        composed: When False (default), derive over this model's own
-            topology (flat). When True, derive over the composed effective
-            tree (own ⊕ inherited).
-        co_id: FLAT mode only. Optional CO id — when set, returns a single
-            verdict; 404 if the CO doesn't exist or is tombstoned. Ignored
-            when ``composed=True``.
-        page: COMPOSED mode only. 1-indexed page number (default ``1``).
-            Ignored when ``composed=False``.
-        page_size: COMPOSED mode only. Verdicts per page (default ``100``).
-            Ignored when ``composed=False``.
-        kind_filter: COMPOSED mode only. Restrict verdicts to one kind —
-            one of ``"reachable" | "unreachable" | "indeterminate"``. Named
-            ``kind_filter`` (not ``kind``) to disambiguate from the verdict
-            object's own ``kind`` field. When omitted, all verdict kinds are
-            returned. Ignored when ``composed=False``.
+    An indeterminate verdict names the missing structure:
+    ``attacker_unpositioned`` (``edit_attacker`` with
+    ``trust_boundary_ids``), ``asset_unbounded``
+    (``assign_to_components(target_type="asset")``), ``no_shared_boundary``
+    (reposition the attacker, rescope the asset, or an ``add_assumption``
+    exclusion), ``missing_entity`` (restore it, or remove the CO).
+    ``model_coherence_report`` presents the same gaps as findings.
     """
     try:
         if composed:
@@ -6703,75 +5987,53 @@ async def get_reachability_verdicts(
     except Exception as exc:
         raise _api_error(exc) from exc
 
+_RECOMPUTE_MODES = ("quote", "recompute", "retry_parked")
+
+
 @mcp.tool()
 async def recompute_verdicts(
     server_version: str,
     model_id: str,
-    dry_run: bool = False,
+    mode: Literal["quote", "recompute", "retry_parked"] = "quote",
 ) -> dict:
-    """Re-run coverage and group-sufficiency verdict evaluation for a model,
-    or return the pre-flight cost estimate without enqueueing anything.
+    """Estimate, force, or retry a model's verdict evaluation.
 
-    ``dry_run`` selects between enqueueing the recompute and a cost-only
-    quote:
+    - ``mode="quote"`` (default): read-only. The cost of a recompute,
+      enqueueing nothing: ``{estimated_credits, computed_at, rate_version,
+      informational, total_enqueueable, already_evaluated, governor}``.
+      Subjects already carrying a verdict cost nothing, so it is an upper
+      bound. Show the operator this number before recomputing: on a large
+      model it runs to thousands of credits.
+    - ``mode="recompute"``: mutating. Queues a fresh evaluation of every
+      control's coverage verdict and every live objective's
+      group-sufficiency verdict, bypassing quiet-period batching; usage is
+      metered as it runs. Returns ``{model_id, model_version,
+      enqueued_coverage, enqueued_group_sufficiency, total_enqueued,
+      estimated_credits, quote, governor}``.
+    - ``mode="retry_parked"``: re-runs only the verdicts a transient failure
+      (outage, exhausted credits, timeout) parked, of every kind, including
+      per-control sufficiency and coherence; nothing else is touched.
+      Returns ``{model_id, model_version, retried_slots, governor}``.
 
-      - ``dry_run=False`` (default) — ENQUEUE: force a fresh evaluation of
-        every control's coverage verdict and every live control objective's
-        group-sufficiency verdict, bypassing the normal quiet-period
-        batching. Evaluation runs in the background; re-read the model's
-        divergence report (or coverage surfaces) shortly after to see
-        updated verdicts. The response carries ``estimated_credits`` — an
-        informational estimate; nothing is charged from it, actual usage is
-        metered as the evaluation runs, per the account's plan. Returns
-        ``{model_id, model_version, enqueued_coverage,
-        enqueued_group_sufficiency, total_enqueued, estimated_credits,
-        quote, governor}``. When ``governor.exhausted`` is true the work is
-        queued and resumes automatically at ``governor.resets_at`` — it is
-        never dropped.
+    Work runs in the background; when ``governor.exhausted`` it is queued and
+    resumes at ``governor.resets_at``, never dropped.
 
-      - ``dry_run=True`` — QUOTE ONLY: return the informational pre-flight
-        cost estimate and enqueue NOTHING. Nothing is charged from the
-        estimate. It carries ``computed_at`` and the pricing ``rate_version``
-        in force so a stale quote is detectable. Returns
-        ``{estimated_credits, computed_at, rate_version, informational,
-        total_enqueueable, already_evaluated, governor}``, where
-        ``total_enqueueable`` is the number of jobs a recompute would enqueue
-        and ``already_evaluated`` counts subjects that already carry a
-        verdict (a portion short-circuit without cost, so the estimate is an
-        upper bound). When ``governor.exhausted`` is true, new evaluation
-        would be queued until ``governor.resets_at``.
-
-    **Scope — what this does NOT do.** It evaluates control-objective
-    COVERAGE and GROUP SUFFICIENCY only. It does not evaluate per-control
-    sufficiency (whether a control's assertions cover its description) and
-    it does not evaluate assertion coherence — both of those are computed
-    on assertion write and read back with ``get_sufficiency`` /
-    ``get_verification_report``. So a control sitting at
-    ``partially_verified``, or an assertion showing
-    ``coherence_status: "pending"``, is NOT a reason to call this tool: the
-    verdict you want already exists, and recomputing spends credits without
-    changing it. Reach for this only when control-to-CO MAPPINGS look wrong
-    (see ``get_verdict_divergence``).
-
-    Cost: this fans out across every control and live control objective, so
-    on a large model the estimate can run to thousands of credits. Call it
-    with ``dry_run=True`` first and surface the number to the operator
-    before enqueueing.
-
-    Both modes return a 503-mapped error when verdict observability is
-    unavailable on the deployment. To un-park verdicts stuck by a transient
-    outage instead of force-enqueueing the whole model, use
-    ``retry_verdicts``.
-
-    Args:
-        model_id: ID of the threat model to re-evaluate (or estimate for).
-        dry_run: When True, return only the pre-flight estimate and enqueue
-            nothing. When False (default), enqueue the recompute.
+    A recompute evaluates COVERAGE and GROUP SUFFICIENCY only. A control at
+    ``partially_verified``, or ``coherence_status: "pending"`` on an
+    assertion, is not a reason to recompute: that verdict is computed on
+    assertion write and read with ``get_sufficiency``. Recompute when
+    control-to-CO mappings look wrong (``get_verdict_divergence``). One
+    objective awaiting judgement is ``judge_objective``.
     """
+    if mode not in _RECOMPUTE_MODES:
+        raise ToolError(f"mode must be one of {', '.join(_RECOMPUTE_MODES)}.")
     try:
-        if dry_run:
-            return _dump(await _get_client().get_recompute_quote(model_id))
-        return _dump(await _get_client().recompute_verdicts(model_id))
+        client = _get_client()
+        if mode == "quote":
+            return _dump(await client.get_recompute_quote(model_id))
+        if mode == "retry_parked":
+            return _dump(await client.retry_verdicts(model_id))
+        return _dump(await client.recompute_verdicts(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -6848,53 +6110,25 @@ async def list_reconciliation_candidates(
     page: int = 1,
     page_size: int = 50,
 ) -> dict:
-    """Reconciliation triage surface between this model and its ancestors.
+    """Entities a child model authored that look like ones it inherits.
+    Read-only.
 
-    When a model inherits entities (assets, attackers, components, trust
-    boundaries) from an ancestor *and* the operator has authored a
-    locally-named entity that looks like the same real-world thing, the
-    reconciliation engine pairs them so the operator can decide whether to
-    alias the local entity onto the inherited qualified id. ``disposition``
-    selects which side of the triage queue to read:
+    Use on a child model in a recursive tree to find duplicates before they
+    distort coverage; decide each with ``decide_reconciliation_candidate``.
 
-      - ``disposition="active"`` (default) — the OPEN candidate queue:
-        detected pairs the operator has not yet acted on. Tier ``certain``
-        is a deterministic match (same qid or structurally identical) and is
-        safe to auto-apply via ``apply_certain_reconciliation_match``; tier
-        ``heuristic`` is a fuzzy name/description match that needs review.
-        Previously-rejected pairs are filtered out of this queue. Paginated
-        via ``page`` / ``page_size``. Returns ``{model_id, flag_enabled,
-        total, tiers: {certain: int, heuristic: int}, page, page_size,
-        candidates: [{kind, own_qid, inherited_qid, tier:
-        "certain"|"heuristic", reasons: [str, ...]}, ...]}``. When
-        composition is disabled on the backend, ``total`` is 0,
-        ``candidates`` is empty, and ``flag_enabled: false``.
+    - ``disposition="active"`` (default): the open queue, paginated
+      (``page``, ``page_size``). ``{model_id, flag_enabled, total, tiers:
+      {certain, heuristic}, page, page_size, candidates: [{kind, own_qid,
+      inherited_qid, tier, reasons}]}``. Tier ``certain`` is a deterministic
+      match, safe to apply; ``heuristic`` is a fuzzy name/description match
+      that needs review. Rejected pairs are left out.
+    - ``disposition="rejected"``: the pairs recorded as NOT duplicates, oldest
+      first and not paginated: ``{model_id, flag_enabled, rejections: [{id,
+      model_id, kind, own_qid, inherited_qid, rejected_by, rejected_at}]}``.
+      An ``id`` is what an unreject names.
 
-      - ``disposition="rejected"`` — the operator's persisted "these are NOT
-        duplicates" decisions, in ``rejected_at`` ascending order (the same
-        set the candidate detector consults to filter the active queue). Use
-        this to render the rejected section of a triage view, or to find the
-        surrogate ``id`` needed by ``unreject_reconciliation_candidate``.
-        NOT paginated — ``page`` / ``page_size`` are ignored. Returns
-        ``{model_id, flag_enabled, rejections: [{id, model_id, kind,
-        own_qid, inherited_qid, rejected_by, rejected_at}, ...]}``. When
-        composition is disabled on the backend, ``rejections`` is empty and
-        ``flag_enabled: false``; the same empty list is returned with
-        ``flag_enabled: true`` when the rejection store is not configured on
-        the instance.
-
-    Use on child models in a recursive tree to find duplicates that should
-    be collapsed before they distort coverage.
-
-    Args:
-        model_id: ID of the descendant threat model.
-        disposition: Which side of the queue to read — ``"active"``
-            (default, open candidates) or ``"rejected"`` (persisted
-            not-a-duplicate decisions).
-        page: ACTIVE disposition only. 1-indexed page number. Default 1.
-            Ignored when ``disposition="rejected"``.
-        page_size: ACTIVE disposition only. Items per page. Default 50.
-            Ignored when ``disposition="rejected"``.
+    Where composition is not available both come back empty with
+    ``flag_enabled: false``.
     """
     if disposition not in ("active", "rejected"):
         raise ToolError("disposition must be one of 'active', 'rejected'.")
@@ -6919,131 +6153,38 @@ async def list_reconciliation_candidates(
         raise _api_error(exc) from exc
 
 @mcp.tool()
-async def preview_undo_composition(
-    server_version: str,
-    model_id: str,
-    event_type: str,
-    event_id: str,
-) -> dict:
-    """Preview the inverse plan (or divergence refusal) for a prior
-    composition event WITHOUT mutating any state. Read-only.
-
-    Read-only counterpart to ``undo_composition_event``. Used by the
-    confirmation flow so the operator sees what an undo would do before
-    committing — either the inverse state operations the apply step will
-    commit, or the enumerated reasons the divergence detector refuses the
-    undo. Same ``{plan, refusal}`` return shape for both event types.
-
-    Args:
-        model_id: The model whose composition view originated the event.
-            Must match the ``threat_model_id`` carried by the cited
-            activity event; the server rejects with 404 when a caller
-            tries to undo a sibling model's event through a different
-            model's URL.
-        event_type: Which forward composition event to preview undoing.
-            One of:
-              - ``"lift"``: preview undo of a ``lift_applied`` event. The
-                plan block carries the lift inverse operations — tombstone
-                the lifted LCA entity, restore the source descendants'
-                copies, rewrite CO references.
-              - ``"split"``: preview undo of a ``split_applied`` event.
-                The plan block carries the split inverse operations —
-                restore at the ancestor, tombstone the duplicated copies
-                on every target descendant.
-        event_id: Either the surrogate id of the forward
-            ``lift_applied`` / ``split_applied`` activity event, or the
-            structured ``lift_id`` / ``split_id`` carried in the event's
-            payload — both lookups are supported.
-
-    Returns::
-
-        {"plan": <UndoPlan> | null,
-         "refusal": <UndoRefusal> | null}
-
-    Exactly one of ``plan`` / ``refusal`` is non-null. The plan block
-    carries the inverse state operations; the refusal block carries the
-    enumerated divergence reasons when state has materially evolved since
-    the forward event.
-
-    Errors: 404 if the cited event doesn't exist or belongs to a different
-    model; 503 if composition is not available on the backend.
-    """
-    if not model_id or not model_id.strip():
-        raise ToolError("model_id is required and must be non-empty.")
-    if not event_id or not event_id.strip():
-        raise ToolError("event_id is required and must be non-empty.")
-    kind = (event_type or "").strip().lower()
-    if kind not in ("lift", "split"):
-        raise ToolError("event_type must be one of: 'lift', 'split'.")
-    try:
-        client = _get_client()
-        if kind == "lift":
-            result = await client.preview_lift_undo(model_id, event_id)
-        else:
-            result = await client.preview_split_undo(model_id, event_id)
-        return _dump(result)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-@mcp.tool()
 async def undo_composition_event(
     server_version: str,
     model_id: str,
     event_type: str,
     event_id: str,
+    dry_run: bool = True,
 ) -> dict:
-    """Apply the inverse of a previous composition event. Mutating —
-    persists inverse state across multiple models.
+    """Preview, and on confirmation apply, the undo of a lift or split.
 
-    Re-runs the divergence detector immediately before applying and
-    refuses with 409 + the structured refusal block when state has
-    materially evolved since the forward event (assertions submitted on
-    the affected entity, downstream COs added that reference it, the
-    entity edited, etc.). On success, persists the inverse state
-    operations across every affected model and emits a structured
-    ``lift_undone`` / ``split_undone`` activity event citing
-    ``original_event_id`` so the audit pack can chain undo to its forward.
+    ``event_type`` is ``lift`` or ``split``; ``event_id`` is the forward
+    ``lift_applied`` / ``split_applied`` activity event's id, or the
+    ``lift_id`` / ``split_id`` in its payload. ``model_id`` is the model the
+    event was raised on (another model's event is 404).
 
-    Args:
-        model_id: The model whose composition view originated the event.
-            Must match the cited event's ``threat_model_id`` — the server
-            rejects cross-model citations with 404.
-        event_type: Which forward composition event to undo. One of:
-              - ``"lift"``: undo a ``lift_applied`` event. On success,
-                persists the inverse across the LCA + every affected
-                source descendant and emits a ``lift_undone`` event. The
-                returned ``models`` block carries ``lca_model`` and
-                ``source_descendant_models``.
-              - ``"split"``: undo a ``split_applied`` event. On success,
-                restores the ancestor's entity, tombstones the duplicated
-                copies on every target descendant, persists across all
-                affected models, and emits a ``split_undone`` event. The
-                returned ``models`` block carries ``ancestor_model`` and
-                ``descendant_models``.
-        event_id: Either the surrogate id of the forward
-            ``lift_applied`` / ``split_applied`` activity event, or the
-            structured ``lift_id`` / ``split_id`` carried in the event
-            payload.
+    By default (``dry_run=True``) it is read-only: ``{plan, refusal}``, exactly
+    one non-null. ``plan`` lists the inverse operations an undo would commit
+    (lift: tombstone the LCA entity, restore the source copies, rewrite CO
+    references; split: restore at the ancestor, tombstone the target
+    copies). ``refusal`` lists why it cannot: state has moved since the event
+    (assertions submitted on the entity, objectives referencing it, an
+    edit). Show it to the operator.
 
-    Returns::
+    With ``dry_run=False`` it is mutating, after explicit confirmation: the
+    divergence check runs again (409 with ``detail.refusal.reasons`` when it
+    refuses), the inverse is persisted across every affected model, and a
+    ``lift_undone`` / ``split_undone`` event citing ``original_event_id`` is
+    recorded. Returns ``{undone_event_id, original_event_id,
+    applied_state_ops, models}``; ``models`` is ``{lca_model,
+    source_descendant_models}`` for a lift and ``{ancestor_model,
+    descendant_models}`` for a split.
 
-        {"undone_event_id": str,
-         "original_event_id": str,
-         "applied_state_ops": [...],
-         "models": {...}}
-
-    The ``models`` block keys depend on ``event_type`` (see above):
-    ``{lca_model, source_descendant_models}`` for ``"lift"``,
-    ``{ancestor_model, descendant_models}`` for ``"split"``.
-
-    Errors: 409 with ``detail = {message, refusal: {reasons: [...]}}``
-    when the divergence detector refuses; 404 if the cited event doesn't
-    exist or belongs to a different model; 400 on payload / event-type
-    mismatch; 503 if composition is not available for this deployment.
-
-    Operator pattern: call ``preview_undo_composition`` first with the
-    same ``event_type`` / ``event_id``, surface the plan or refusal to the
-    operator, and only call this tool after explicit confirmation.
+    503 where composition is not available.
     """
     if not model_id or not model_id.strip():
         raise ToolError("model_id is required and must be non-empty.")
@@ -7054,6 +6195,10 @@ async def undo_composition_event(
         raise ToolError("event_type must be one of: 'lift', 'split'.")
     try:
         client = _get_client()
+        if dry_run:
+            if kind == "lift":
+                return _dump(await client.preview_lift_undo(model_id, event_id))
+            return _dump(await client.preview_split_undo(model_id, event_id))
         if kind == "lift":
             result = await client.undo_lift(model_id, event_id)
         else:
@@ -7078,8 +6223,8 @@ async def get_functional_objectives(
       current test state.
 
     For pass/fail coverage state across all objectives use
-    ``get_functional_coverage``; for the actionable gaps use
-    ``check_functional_gaps``.
+    ``get_functional_coverage``; for the actionable gaps pass it
+    ``gaps_only=True``.
 
     Args:
         model_id: ID of the threat model whose functional objective(s) to read.
@@ -7099,45 +6244,6 @@ async def get_functional_objectives(
         raise _api_error(exc) from exc
 
 @mcp.tool()
-async def submit_functional_test_assertions(
-    server_version: str, model_id: str, functional_test_id: str,
-    assertions_json: str,
-) -> dict:
-    """Attach machine-verifiable evidence assertions to one already-existing functional test so CI can verify it. Mutating.
-
-    This submits EVIDENCE for a test that already exists (identified by
-    functional_test_id) — it does not create or register the test. It is the
-    functional-conformance analog of submit_assertions (which covers security
-    controls): it binds assertions such as "the test exists" and "the test
-    passes" to the functional test, and an independent CI run against the named
-    repo is what turns an operator's "verified" claim into verified state.
-
-    To bulk-register test DEFINITIONS from your codebase instead, use
-    import_functional_tests; to hand-author a single test use
-    add_functional_test. Call this after the test is implemented (e.g. following
-    get_scan_prompt (kind="functional")), then read the resulting state via
-    get_functional_coverage or get_functional_test_sufficiency.
-
-    Args:
-        model_id: ID of the threat model.
-        functional_test_id: The already-existing functional test the assertions prove.
-        assertions_json: JSON array of assertion objects, each {"type": "test_attested" | "test_exists" | ..., "params": {...}, "description": "...", "repo": "<owner>/<repo>"}. Every assertion must carry an explicit repo, or the "no_repo" sentinel when the check is not tied to a repository. These assertions count toward functional conformance; a ``covers`` declaration is refused here, because a binding to a control clause is declared on ``submit_assertions``.
-    """
-    try:
-        assertions = json.loads(assertions_json)
-    except json.JSONDecodeError:
-        raise ToolError("assertions_json must be a valid JSON array.")
-    if not isinstance(assertions, list):
-        raise ToolError("assertions_json must be a JSON array.")
-    _refuse_malformed(assertions, covers_accepted=False)
-    try:
-        return _dump(await _get_client().submit_functional_tests(
-            model_id, functional_test_id, assertions,
-        ))
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-@mcp.tool()
 async def get_controls(
     server_version: str,
     model_id: str,
@@ -7153,101 +6259,38 @@ async def get_controls(
     include_orphaned: bool = False,
     summary_only: bool = False,
 ) -> dict:
-    """Get implementation controls for a threat model — list or single-control detail. Read-only; no side effects.
+    """A model's controls, or one control. Read-only.
 
-    Two modes, selected by whether ``control_id`` is set:
+    Without ``control_id``: ``{controls, total, returned}``, the published
+    set, filtered by ``status``, ``co_id`` and ``component_id`` and paged by
+    ``offset`` / ``limit``. Orphaned controls (every mapped CO tombstoned)
+    are left out unless ``include_orphaned=True``, soft-deleted ones unless
+    ``include_deleted=True``. ``summary_only=True`` returns only id,
+    description, status, verification_status, assertion_count, co_ids,
+    assumption_groups and attestation_dependency. An empty list on a new
+    model means its proposed build was never started
+    (``get_control_generation_status``); while a build holds the model the
+    list is the last published set, with a ``building`` marker.
 
-    - **List mode** (``control_id`` omitted) — returns the controls that
-      should be implemented to satisfy the model's control objectives, as
-      ``{"controls": [...], "total": N, "returned": M}``. Reading builds
-      nothing: a model's controls are built only by a control build someone
-      starts, so an empty list on a new model means its proposed build has
-      not been started (``get_control_generation_status`` shows the
-      ``proposal``; ``start_control_build`` starts it). While a started
-      build holds the model, the list is the last published set and carries
-      a ``building`` marker; read again once the build reports
-      ``complete``. The filters (``status``, ``co_id``, ``component_id``),
-      pagination (``offset``/``limit``), and the ``include_deleted`` /
-      ``include_orphaned`` / ``summary_only`` toggles apply only in this
-      mode. By default list mode excludes ORPHANED controls (controls
-      whose every mapped CO is tombstoned because its asset/attacker pair
-      was removed in a later version); pass ``include_orphaned=True`` to
-      include them — each returned control carries a boolean ``orphaned``
-      field so callers can render the distinction.
+    With ``control_id``: that control, with an ``orphaned`` flag; ``version``
+    reads it as of a model version (0 = latest).
 
-    - **Detail mode** (``control_id`` set) — returns a single control
-      directly (NOT wrapped in an array) with verified-status enrichment
-      and an ``orphaned`` flag derived from the live CO set. 404 if the
-      control doesn't exist on the requested version. Pass ``version`` to
-      read the control as of a specific model version. The list-mode
-      filters, pagination, and toggles are ignored in this mode.
+    An objective id on a control is an ATTACHMENT, not credit: only a member
+    of a required mitigation group earns any, and a control that is
+    defense-in-depth everywhere can be implemented and verified without
+    moving an objective. Read ``get_mitigation_groups`` before evidence work.
 
-    **Objective mapping is not coverage credit.** The control-objective ids a
-    control carries record which objectives it is ATTACHED to, not which ones
-    it is required to satisfy. Within an objective, a control is either a
-    member of a required mitigation group or it is defense-in-depth, which is
-    tracked but earns no mitigation credit. A control that is defense-in-depth
-    on every objective it touches can be fully implemented and fully verified
-    without moving a single objective out of at-risk. Read
-    ``get_mitigation_groups`` for the per-objective role before deciding a
-    control is worth evidence work — the id list alone will not tell you
-    whether proving it changes anything.
-
-    **Two different status fields — do not conflate them.** ``status`` is the
-    operator-set implementation state (``not_implemented`` / ``implemented``
-    / ``verified``). ``verification_status`` is the EVIDENCE state, derived
-    from the control's assertions:
-
-    - ``"verified"`` — every assertion passes both tiers AND they
-      collectively cover the whole control description.
-    - ``"partially_verified"`` — deliberately covers three distinct
-      situations, so it does not by itself tell you what to fix: some
-      assertion FAILED a tier, or all passed but leave clauses of the
-      description UNPROVEN, or the control leaned on an operator
-      attestation that has since EXPIRED. Call ``get_sufficiency`` on the
-      control to find out which.
-    - ``"pending"`` — assertions exist, some still awaiting evaluation.
-    - ``"unverified"`` — no assertions submitted at all.
-
-    A control with ``assertion_count`` well above zero and every tier
-    passing can still read ``partially_verified``; that is the normal state
-    for evidence narrower than the description promises, and the fix is
-    more assertions (or a narrower description), never a verdict recompute.
-
-    A for-all clause — one that ranges over every entry of a surface — is
-    credited only by a sound type bound to it with ``covers``; an
-    attestation never substitutes. What each clause still needs is served
-    per clause by ``get_control_work_order`` in ``required_evidence``.
-
-    Filtering ``status="implemented"`` returns controls the operator marked
-    implemented that have NOT been promoted to verified — the right filter
-    for "what still needs evidence work". It reads this model's OWN stored
-    controls; controls inherited through composition are counted by
-    ``assess_model`` but are managed on their source model.
-
-    Args:
-        model_id: ID of the threat model.
-        control_id: If set, detail mode — return this one control's full
-            record directly (e.g. ``CTL-12``). If omitted, list mode.
-        version: Detail mode only — model version to read the control
-            from. 0 (default) uses the latest. Ignored in list mode.
-        status: List-mode filter — "implemented", "not_implemented", or
-            "verified".
-        co_id: List-mode filter — control objective ID.
-        component_id: List-mode filter — component ID (e.g., "CMP1").
-        offset: List mode — skip the first N controls (pagination).
-        limit: List mode — max controls to return (0 = all).
-        include_deleted: List mode — include soft-deleted controls
-            (default False).
-        include_orphaned: List mode — include controls mapped only to
-            tombstoned COs (default False).
-        summary_only: List mode — if True, returns only id, description,
-            status, verification_status, assertion_count, co_ids,
-            assumption_groups and attestation_dependency per control (much
-            smaller response).
-
-    Returns a single control dict in detail mode, or a dict with
-    ``controls`` plus ``total`` and ``returned`` counts in list mode.
+    ``status`` is the operator's (``not_implemented`` / ``implemented`` /
+    ``verified``); ``verification_status`` is the EVIDENCE: ``verified``
+    (both tiers pass and the assertions cover the whole description),
+    ``partially_verified`` (a tier failed, clauses are unproven, or an
+    attestation EXPIRED — ``get_sufficiency`` says which; the fix is more
+    assertions or a narrower description, never a recompute), ``pending``,
+    ``unverified`` (none submitted). A for-all clause is credited only by a
+    sound type bound with ``covers``; ``get_control_work_order`` lists what
+    each clause needs. ``status="implemented"`` finds what still needs
+    evidence. Only this model's own controls are listed; inherited ones are
+    counted by ``assess_model``.
     """
     try:
         if control_id:
@@ -7410,7 +6453,7 @@ async def get_scan_prompt(
       ``objectives_without_tests`` (regenerate or add a test) and
       ``missing_objectives`` (applicable conditions with no objective
       yet). Drive test implementation from it, then call
-      ``submit_functional_test_assertions`` with TEST_EXISTS + TEST_ATTESTED
+      ``submit_assertions`` (``functional_test_id``) with TEST_EXISTS + TEST_ATTESTED
       assertions so CI verifies each test; read the resulting pass/fail
       state via ``get_functional_coverage``. ``control_id`` does not
       apply to this kind and is ignored.
@@ -7552,60 +6595,36 @@ async def get_control_work_order(
     model_id: str,
     control_id: str,
 ) -> dict:
-    """Get the work order for one control. Call this BEFORE implementing a
-    control: it is the ticket. Read-only; no side effects.
+    """The work order for one control: the ticket to read BEFORE
+    implementing it. Read-only.
 
-    The work order bundles everything an implementing agent needs in one
-    read: the scan brief (where to look and what to look for), what counts
-    as proof (the ``assertion_contract``: which assertion types apply
-    grouped by soundness class, the evidence rule, the universal rule,
-    what to submit with, and when the control counts as verified), the
-    ``acceptance_criteria`` and ``steps``, the ``reconcile_rules`` to
-    follow when the code disagrees with the model, the ``delegation``
-    block (what this agent may decide on its own and what must be
-    escalated), any ``open_proposals`` on the control, and the model's
-    ``provenance`` (whether the code or the description is authoritative).
+    Returns ``{model_id, model_version, control, objectives, max_tier,
+    scan_brief, assertion_contract, acceptance_criteria, required_evidence,
+    steps, reconcile_rules, delegation, open_proposals, provenance}``:
+    where to look, what counts as proof (``assertion_contract``: the types
+    by soundness class, the evidence and ``universal_rule``, the
+    ``sound_types`` the platform takes, what to submit with, when the
+    control counts as verified), what to do when the code disagrees with
+    the model, what this agent may decide alone (``delegation``), and
+    whether code or description is authoritative (``provenance``).
 
-    The proof the order asks for is stated by-construction first. Where
-    the order names a required class for a clause, ``required_evidence[]``
-    carries one entry per such clause: the ``clause`` text, its
-    ``clause_id`` (the value to put in ``covers``), its ``quantifier``,
-    the ``required_class`` that closes it, what is ``missing``, and a
-    ``suggested_submission`` skeleton (type, ``params_template``,
-    ``covers``). The skeleton is a fill-in, not a submission: its
-    ``<...>`` placeholders are values only you can supply, and one left
-    unreplaced is refused — before the submission leaves this client and
-    again when it arrives — by the same format rule, because a placeholder
-    that validated would be recorded as a claim about your code that
-    nothing backs. For a for-all clause the required class is ``[by_construction, sound_over_approximation]`` and
-    the suggestion prefers ``typed_boundary`` — declare the type the sinks
-    accept and its constructors — else ``sink_default_deny`` — declare the
-    sinks that realise the clause, the safe forms, a reviewed allowlist.
-    When evidence of the wrong class is already bound, ``missing`` says so:
-    the evidence is the wrong CLASS, not merely incomplete.
-    ``acceptance_criteria[]`` is GENERATED from those entries — a clause
-    that has to hold at every site the attacker reaches is named as such,
-    so no number of tests reads as closing it. ``steps[]`` reads: for each
-    clause, submit the class the order names, bound with ``covers``.
+    Where the order names a required class for a clause,
+    ``required_evidence`` holds one entry per such clause: its ``clause``,
+    the ``clause_id`` to put in ``covers``, its ``quantifier``, the
+    ``required_class``, what is ``missing``, and a ``suggested_submission``
+    skeleton. The skeleton is a fill-in, not a submission: replace its
+    ``<...>`` placeholders; one left unfilled is refused, by this client and
+    again by the platform, since it would record a claim nothing backs. A
+    for-all clause takes ``[by_construction, sound_over_approximation]``:
+    prefer ``typed_boundary`` (the type the sinks accept, its
+    constructors), else ``sink_default_deny`` (the sinks, the safe forms, a
+    reviewed allowlist). When the bound evidence is the wrong CLASS,
+    ``missing`` says so. ``acceptance_criteria`` is GENERATED from those
+    entries, so a clause that must hold at every site reads as such and no
+    number of tests closes it.
 
-    Args:
-        model_id: ID of the threat model.
-        control_id: ID of the control to implement (e.g. "CTRL-03").
-
-    Returns the work order verbatim: ``{model_id, model_version,
-    control{id, description, status, verification_status, orphaned,
-    component_ids, implementation_notes, open_assumptions[],
-    verification_oracle, assertion_count}, objectives[{co_id, statement,
-    risk_tier, asset_id, attacker_id, mitigation_group, defense_in_depth}],
-    max_tier, scan_brief, assertion_contract{types[{name, description,
-    required_params, soundness, behavioral}], evidence_rule,
-    universal_rule, sound_types[], submit_with, verified_when},
-    acceptance_criteria[], required_evidence[], steps[], reconcile_rules,
-    delegation{agent, permitted_rules[], note}, open_proposals[],
-    provenance}``.
-    ``behavioral`` is a compatibility field for readers written before
-    the classes; ``soundness`` is the class of the fact a type reports and
-    is the one to branch on.
+    A type's ``soundness`` is the class to branch on; ``behavioral`` is a
+    compatibility field for readers written before the classes.
     """
     try:
         return await _get_client().get_control_work_order(model_id, control_id)
@@ -7924,56 +6943,6 @@ async def get_design_leverage(
     try:
         return await _get_client().get_design_leverage(
             model_id, include_design_moves=include_design_moves, top=top,
-        )
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-
-_PROVENANCE_KINDS = ("code", "ticket", "document", "manual", "mixed")
-
-
-@mcp.tool()
-async def set_model_provenance(
-    server_version: str,
-    model_id: str,
-    kind: str,
-    repo_url: str = "",
-    commit_sha: str = "",
-    ref: str = "",
-    source_ref: str = "",
-    source_url: str = "",
-) -> dict:
-    """Record where a model's description came from. Call this right after
-    generating a model from a repository (or pass the ``provenance_*``
-    params to ``generate_threat_model``), and again whenever the source
-    changes. Mutating: bumps the model version.
-
-    ``kind="code"`` with a ``commit_sha`` means the code is authoritative
-    and the model follows it: ``reconcile_model`` measures the model
-    against the code, and component changes observed in the code are
-    applied and queued for review. Any other kind (``ticket``,
-    ``document``, ``manual``, ``mixed``) means the description is intent
-    and the code is measured against it.
-
-    Args:
-        model_id: ID of the threat model.
-        kind: One of ``code``, ``ticket``, ``document``, ``manual``, ``mixed``.
-        repo_url: Repository URL (``code``).
-        commit_sha: Commit the description was gathered at (``code``).
-        ref: Branch or tag at that commit (optional).
-        source_ref: Ticket key or document identifier (``ticket`` /
-            ``document``).
-        source_url: URL of the ticket or document.
-
-    Returns ``{id, version, description_provenance}``.
-    """
-    if kind not in _PROVENANCE_KINDS:
-        raise ToolError(f"kind must be one of {', '.join(_PROVENANCE_KINDS)}.")
-    try:
-        return await _get_client().set_model_provenance(
-            model_id, kind,
-            repo_url=repo_url, commit_sha=commit_sha, ref=ref,
-            source_ref=source_ref, source_url=source_url,
         )
     except Exception as exc:
         raise _api_error(exc) from exc

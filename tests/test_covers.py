@@ -118,8 +118,8 @@ async def test_a_binding_on_a_functional_test_submission_is_refused(monkeypatch)
     monkeypatch.setattr(server, "_get_client", lambda: called.append(1))
     body = json.dumps([{"type": "test_attested", "params": {"test": "t"}, "repo": "o/r",
                         "covers": ["CO-1"]}])
-    with pytest.raises(ToolError, match="declared on submit_assertions"):
-        await server.submit_functional_test_assertions(
+    with pytest.raises(ToolError, match="declared with control_id"):
+        await server.submit_assertions(
             server_version="x", model_id="m", functional_test_id="f", assertions_json=body,
         )
     assert called == []
@@ -129,7 +129,7 @@ async def test_functional_test_assertions_forward_the_rest_verbatim():
     client = _client(submit_functional_tests={"functional_test_id": "FT-1", "assertions": []})
     payload = [{"type": "test_attested", "params": {"test": "t"}, "repo": "o/r"}]
     with patch("mipiti_mcp.server._get_client", return_value=client):
-        await server.submit_functional_test_assertions(
+        await server.submit_assertions(
             server_version="x", model_id="m", functional_test_id="FT-1",
             assertions_json=json.dumps(payload),
         )
@@ -150,7 +150,7 @@ async def test_a_binding_hidden_inside_params_is_refused(monkeypatch):
             server_version="x", model_id="m", assertions_json=body, control_id="c",
         )
     with pytest.raises(ToolError, match="never a param"):
-        await server.submit_functional_test_assertions(
+        await server.submit_assertions(
             server_version="x", model_id="m", functional_test_id="f", assertions_json=body,
         )
     assert called == []

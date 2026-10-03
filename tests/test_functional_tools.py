@@ -9,18 +9,16 @@ from fastmcp.exceptions import ToolError
 from mipiti_mcp.server import (
     add_functional_test,
     associate_functional_test,
-    check_functional_gaps,
     generate_functional_objectives,
-    get_capability,
+    get_capabilities,
     get_functional_coverage,
     get_functional_objectives,
     get_functional_satisfaction_groups,
     get_scan_prompt,
-    get_functional_test_sufficiency,
+    get_sufficiency,
     import_functional_tests,
-    list_capabilities,
     set_functional_satisfaction_groups,
-    submit_functional_test_assertions,
+    submit_assertions,
     suggest_functional_test_mappings,
 )
 
@@ -67,13 +65,17 @@ async def test_generate_forwards_refresh():
 async def test_read_tools_passthrough():
     c = _client()
     with _patch(c):
-        assert (await list_capabilities(server_version="0", model_id="tm-1"))["capabilities"][0]["id"] == "CAP-1"
-        assert (await get_capability(server_version="0", model_id="tm-1", capability_id="CAP-1"))["id"] == "CAP-1"
+        assert (await get_capabilities(server_version="0", model_id="tm-1"))["capabilities"][0]["id"] == "CAP-1"
+        assert (await get_capabilities(server_version="0", model_id="tm-1", capability_id="CAP-1"))["id"] == "CAP-1"
         assert (await get_functional_objectives(server_version="0", model_id="tm-1"))["functional_objectives"][0]["id"] == "FO-1"
         assert (await get_functional_objectives(server_version="0", model_id="tm-1", functional_objective_id="FO-1"))["id"] == "FO-1"
         assert (await get_functional_coverage(server_version="0", model_id="tm-1"))["summary"]["percent_verified"] == 50
-        assert "gaps" in await check_functional_gaps(server_version="0", model_id="tm-1")
+        assert "gaps" in await get_functional_coverage(server_version="0", model_id="tm-1", gaps_only=True)
         assert "instructions" in await get_scan_prompt(server_version="0", model_id="tm-1", kind="functional")
+    c.list_capabilities.assert_awaited_once_with("tm-1")
+    c.get_capability.assert_awaited_once_with("tm-1", "CAP-1")
+    c.get_functional_coverage.assert_awaited_once_with("tm-1")
+    c.get_functional_gaps.assert_awaited_once_with("tm-1")
 
 
 @pytest.mark.asyncio
@@ -104,26 +106,42 @@ async def test_submit_functional_tests_parses_json():
     c = _client()
     payload = [{"type": "test_attested", "params": {"test": "x"}, "description": "d", "repo": "o/r"}]
     with _patch(c):
-        await submit_functional_test_assertions(
+        await submit_assertions(
             server_version="0", model_id="tm-1", functional_test_id="FT-1",
             assertions_json=json.dumps(payload),
         )
     c.submit_functional_tests.assert_awaited_once_with("tm-1", "FT-1", payload)
+    c.submit_assertions.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_submit_functional_tests_rejects_bad_json():
     with _patch(_client()):
         with pytest.raises(ToolError):
-            await submit_functional_test_assertions(
+            await submit_assertions(
                 server_version="0", model_id="tm-1", functional_test_id="FT-1",
                 assertions_json="{not json",
             )
         with pytest.raises(ToolError):
-            await submit_functional_test_assertions(
+            await submit_assertions(
                 server_version="0", model_id="tm-1", functional_test_id="FT-1",
                 assertions_json='{"not": "a list"}',
             )
+
+
+@pytest.mark.asyncio
+async def test_a_submission_names_exactly_one_target():
+    c = _client()
+    payload = json.dumps([{"type": "test_exists", "params": {"pattern": "t"}, "repo": "o/r"}])
+    with _patch(c):
+        with pytest.raises(ToolError, match="exactly one"):
+            await submit_assertions(server_version="0", model_id="tm-1",
+                                    assertions_json=payload)
+        with pytest.raises(ToolError, match="exactly one"):
+            await submit_assertions(server_version="0", model_id="tm-1",
+                                    assertions_json=payload, control_id="CTRL-01",
+                                    functional_test_id="FT-1")
+    c.submit_functional_tests.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -248,8 +266,19 @@ async def test_set_satisfaction_groups_rejects_non_object():
 async def test_get_test_sufficiency_passthrough():
     c = _client()
     with _patch(c):
-        out = await get_functional_test_sufficiency(
+        out = await get_sufficiency(
             server_version="0", model_id="tm-1", functional_test_id="FT-1",
         )
     assert out["verdict"] == "sufficient"
     c.get_functional_test_sufficiency.assert_awaited_once_with("tm-1", "FT-1")
+    c.get_sufficiency.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sufficiency_names_exactly_one_subject():
+    with _patch(_client()):
+        with pytest.raises(ToolError, match="exactly one"):
+            await get_sufficiency(server_version="0", model_id="tm-1")
+        with pytest.raises(ToolError, match="exactly one"):
+            await get_sufficiency(server_version="0", model_id="tm-1",
+                                  control_id="CTRL-01", functional_test_id="FT-1")

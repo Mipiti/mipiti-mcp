@@ -22,7 +22,7 @@ from mipiti_mcp.types import (
 from mipiti_mcp.server import (
     add_asset,
     add_attacker,
-    add_evidence,
+    edit_evidence,
     add_model_to_group,
     assess_model,
     auto_remediate_compliance,
@@ -71,22 +71,16 @@ from mipiti_mcp.server import (
     start_control_build,
     discard_control_build,
     list_control_revisions,
-    undo_control_change,
-    revert_model_version,
+    undo_model_change,
     judge_imported_controls,
     remove_entity,
-    remove_evidence,
     remove_model_from_group,
-    rename_threat_model,
-    set_threat_model_parent,
+    update_threat_model,
     attach_foundation,
-    confirm_reliance,
-    create_reliance,
+    manage_reliance,
     declare_foundation,
     delete_group,
-    delete_reliance,
     list_reliance,
-    propose_attach_foundation,
     select_compliance_frameworks,
     submit_assertions,
     submit_findings,
@@ -94,8 +88,7 @@ from mipiti_mcp.server import (
     remap_control,
     apply_control_changeset,
     get_verdict_divergence,
-    accept_coverage_divergences,
-    dismiss_verdict_divergences,
+    resolve_verdict_divergences,
     reevaluate_threat_model_factors,
     revalidate_entity_quality,
     restore_entity,
@@ -103,18 +96,11 @@ from mipiti_mcp.server import (
     update_finding,
     model_coherence_report,
     get_reachability_verdicts,
-    get_composition_overview,
-    list_effective_entities,
-    list_effective_control_objectives,
-    get_effective_coverage,
-    list_effective_attack_paths,
+    get_composition,
     list_reconciliation_candidates,
-    apply_certain_reconciliation_match,
-    reject_reconciliation_candidate,
-    unreject_reconciliation_candidate,
+    decide_reconciliation_candidate,
     lift_composition_entity,
     split_composition_entity,
-    preview_undo_composition,
     undo_composition_event,
     add_trust_boundary,
     edit_trust_boundary,
@@ -127,7 +113,6 @@ from mipiti_mcp.server import (
     list_proposals,
     decide_proposal,
     get_design_leverage,
-    set_model_provenance,
     list_decisions,
 )
 
@@ -1155,40 +1140,78 @@ class TestListThreatModels:
         assert "13 controls" in item["assessment_summary"]["message"]
 
 
-class TestRenameThreatModel:
+class TestUpdateThreatModel:
     @pytest.mark.asyncio
     async def test_rename(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await rename_threat_model(server_version="0", model_id="tm-001", name="New Name")
-        assert result["title"] == "New"
+            result = await update_threat_model(server_version="0", model_id="tm-001", name="New Name")
+        assert result["name"]["title"] == "New"
         mock.rename_model.assert_awaited_once_with("tm-001", "New Name")
+        mock.set_parent.assert_not_awaited()
+        mock.set_model_provenance.assert_not_awaited()
 
-
-class TestSetThreatModelParent:
     @pytest.mark.asyncio
     async def test_sets_parent(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await set_threat_model_parent(
+            result = await update_threat_model(
                 server_version="0",
                 model_id="tm-001",
                 parent_id="tm-parent",
             )
-        assert result["id"] == "tm-001"
+        assert result["parent"]["id"] == "tm-001"
         mock.set_parent.assert_awaited_once_with("tm-001", "tm-parent")
+        mock.rename_model.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_clears_parent_with_none(self) -> None:
+    async def test_clears_parent(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await set_threat_model_parent(
+            result = await update_threat_model(
                 server_version="0",
                 model_id="tm-001",
-                parent_id=None,
+                clear_parent=True,
             )
-        assert result["id"] == "tm-001"
+        assert result["parent"]["id"] == "tm-001"
         mock.set_parent.assert_awaited_once_with("tm-001", None)
+
+    @pytest.mark.asyncio
+    async def test_sets_provenance(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await update_threat_model(
+                server_version="0", model_id="tm-001", provenance_kind="code",
+                provenance_repo_url="https://github.com/org/repo",
+                provenance_commit_sha="abc123", provenance_ref="main")
+        assert result["provenance"]["version"] == 4
+        mock.set_model_provenance.assert_awaited_once_with(
+            "tm-001", "code", repo_url="https://github.com/org/repo",
+            commit_sha="abc123", ref="main", source_ref="", source_url="")
+
+    @pytest.mark.asyncio
+    async def test_applies_every_change_named_in_order(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            result = await update_threat_model(
+                server_version="0", model_id="tm-001", name="New Name",
+                parent_id="tm-parent", provenance_kind="manual")
+        assert set(result) == {"model_id", "name", "parent", "provenance"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kwargs, message", [
+        ({}, "Nothing to change"),
+        ({"parent_id": "tm-parent", "clear_parent": True}, "not both"),
+        ({"provenance_kind": "guess"}, "provenance_kind must be one of"),
+    ])
+    async def test_refused_before_any_call(self, kwargs, message) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match=message):
+                await update_threat_model(server_version="0", model_id="tm-001", **kwargs)
+        mock.rename_model.assert_not_awaited()
+        mock.set_parent.assert_not_awaited()
+        mock.set_model_provenance.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_surfaces_api_error(self) -> None:
@@ -1204,11 +1227,26 @@ class TestSetThreatModelParent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await set_threat_model_parent(
+                await update_threat_model(
                     server_version="0",
                     model_id="tm-001",
                     parent_id="tm-descendant",
                 )
+
+    @pytest.mark.asyncio
+    async def test_a_failure_names_what_was_already_applied(self) -> None:
+        """A rename that landed before a refused parent is a change the caller
+        has to know about, or it reads the whole call as having done nothing."""
+        import httpx
+        request = httpx.Request("PUT", "https://api/x")
+        response = httpx.Response(409, request=request, text="cycle detected")
+        mock = _mock_client(set_parent=AsyncMock(side_effect=httpx.HTTPStatusError(
+            "409", request=request, response=response)))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="already applied: name"):
+                await update_threat_model(
+                    server_version="0", model_id="tm-001", name="New Name",
+                    parent_id="tm-descendant")
 
 
 class TestReliance:
@@ -1231,8 +1269,8 @@ class TestReliance:
             create_reliance=AsyncMock(return_value={"id": "rel_1", "status": "draft"}),
         )
         with _patch_client(mock):
-            result = await create_reliance(
-                server_version="0", model_id="tm-001",
+            result = await manage_reliance(
+                server_version="0", action="create", model_id="tm-001",
                 provider_model_id="prov", provider_control_id="CTRL-A",
                 mode="delegated", source_objective_id="CO1",
             )
@@ -1247,8 +1285,10 @@ class TestReliance:
             confirm_reliance=AsyncMock(return_value={"id": "rel_1", "status": "active"}),
         )
         with _patch_client(mock):
-            result = await confirm_reliance(server_version="0", edge_id="rel_1")
+            result = await manage_reliance(
+                server_version="0", action="confirm", edge_id="rel_1")
         assert result["status"] == "active"
+        mock.confirm_reliance.assert_awaited_once_with("rel_1", False)
 
     @pytest.mark.asyncio
     async def test_list_and_delete_reliance(self) -> None:
@@ -1258,26 +1298,54 @@ class TestReliance:
         )
         with _patch_client(mock):
             listed = await list_reliance(server_version="0", model_id="tm-001")
-            deleted = await delete_reliance(server_version="0", edge_id="rel_1")
+            deleted = await manage_reliance(
+                server_version="0", action="delete", edge_id="rel_1")
         assert listed["model_id"] == "tm-001"
-        assert deleted["deleted"] is True
+        assert deleted == {"deleted": True, "edge_id": "rel_1"}
 
     @pytest.mark.asyncio
-    async def test_propose_and_attach_foundation(self) -> None:
+    @pytest.mark.parametrize("kwargs, message", [
+        ({"action": "create", "model_id": "tm-001"}, "requires provider_model_id"),
+        ({"action": "confirm"}, "requires edge_id"),
+        ({"action": "delete", "edge_id": "  "}, "requires edge_id"),
+        ({"action": "pause", "edge_id": "rel_1"}, "action must be one of"),
+    ])
+    async def test_an_incomplete_action_is_refused_before_the_call(
+            self, kwargs, message) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match=message):
+                await manage_reliance(server_version="0", **kwargs)
+        mock.create_reliance.assert_not_awaited()
+        mock.confirm_reliance.assert_not_awaited()
+        mock.delete_reliance.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_attach_foundation_proposes_without_selections(self) -> None:
         mock = _mock_client(
             propose_attach_foundation=AsyncMock(return_value={"proposals": [{"source_objective_id": "CO1"}]}),
-            attach_foundation=AsyncMock(return_value={"created": [{"id": "rel_1"}], "failed": []}),
         )
         with _patch_client(mock):
-            proposals = await propose_attach_foundation(
+            proposals = await attach_foundation(
                 server_version="0", model_id="tm-001", foundation_model_id="prov",
-            )
-            attached = await attach_foundation(
-                server_version="0", model_id="tm-001", foundation_model_id="prov",
-                selections=[{"source_objective_id": "CO1", "provider_control_id": "CTRL-A"}],
             )
         assert proposals["proposals"][0]["source_objective_id"] == "CO1"
+        mock.attach_foundation.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_attach_foundation_attaches_the_selections(self) -> None:
+        mock = _mock_client(
+            attach_foundation=AsyncMock(return_value={"created": [{"id": "rel_1"}], "failed": []}),
+        )
+        selections = [{"source_objective_id": "CO1", "provider_control_id": "CTRL-A"}]
+        with _patch_client(mock):
+            attached = await attach_foundation(
+                server_version="0", model_id="tm-001", foundation_model_id="prov",
+                selections=selections,
+            )
         assert len(attached["created"]) == 1
+        mock.attach_foundation.assert_awaited_once_with("tm-001", "prov", selections)
+        mock.propose_attach_foundation.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_surfaces_api_error(self) -> None:
@@ -1291,8 +1359,8 @@ class TestReliance:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await create_reliance(
-                    server_version="0", model_id="tm-001",
+                await manage_reliance(
+                    server_version="0", action="create", model_id="tm-001",
                     provider_model_id="other", provider_control_id="CTRL-X",
                     mode="delegated", source_objective_id="CO1",
                 )
@@ -1779,19 +1847,34 @@ class TestControlSetHistory:
     async def test_undo_passes_through(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await undo_control_change(
-                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+            result = await undo_model_change(
+                server_version="0", model_id="tm-001", target="controls",
+                ctx=_mock_ctx())
         assert result["applied"] is True and result["undone"] == 7
         mock.undo_control_change.assert_awaited_once_with("tm-001")
+        mock.revert_model_version.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_revert_passes_through(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await revert_model_version(
-                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+            result = await undo_model_change(
+                server_version="0", model_id="tm-001", target="version",
+                ctx=_mock_ctx())
         assert result["model_version"] == 5 and result["discarded"] == 4
         mock.revert_model_version.assert_awaited_once_with("tm-001")
+        mock.undo_control_change.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_target_is_refused(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="target must be"):
+                await undo_model_change(
+                    server_version="0", model_id="tm-001", target="model",
+                    ctx=_mock_ctx())
+        mock.undo_control_change.assert_not_awaited()
+        mock.revert_model_version.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("code", ["nothing_to_undo", "set_diverged",
@@ -1801,8 +1884,9 @@ class TestControlSetHistory:
                    "message": "m"}
         mock = _mock_client(undo_control_change=AsyncMock(return_value=refusal))
         with _patch_client(mock):
-            result = await undo_control_change(
-                server_version="0", model_id="tm-001", ctx=_mock_ctx())
+            result = await undo_model_change(
+                server_version="0", model_id="tm-001", target="controls",
+                ctx=_mock_ctx())
         assert result == refusal
 
 
@@ -2070,13 +2154,15 @@ class TestAddEvidence:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await add_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", type="code", label="bcrypt usage")
+            result = await edit_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", action="add", type="code", label="bcrypt usage")
         assert result["evidence_count"] == 2
+        mock.add_evidence.assert_awaited_once_with("tm-001", "CTRL-01", "code", "bcrypt usage", "")
+        mock.remove_evidence.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_empty_label(self) -> None:
         with pytest.raises(ToolError, match="label is required"):
-            await add_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", type="code", label="  ")
+            await edit_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", action="add", type="code", label="  ")
 
 
 class TestRemoveEvidence:
@@ -2084,8 +2170,15 @@ class TestRemoveEvidence:
     async def test_success(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await remove_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", evidence_index=0)
+            result = await edit_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", action="remove", evidence_index=0)
         assert result["evidence_count"] == 0
+        mock.remove_evidence.assert_awaited_once_with("tm-001", "CTRL-01", 0)
+        mock.add_evidence.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_action_is_refused(self) -> None:
+        with pytest.raises(ToolError, match="action must be"):
+            await edit_evidence(server_version="0", model_id="tm-001", control_id="CTRL-01", action="replace")
 
 
 class TestImportControls:
@@ -3477,7 +3570,7 @@ class TestGetCompositionOverview:
     async def test_flag_on(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_composition_overview(
+            result = await get_composition(
                 server_version="0", model_id="tm-001",
             )
         assert result["flag_enabled"] is True
@@ -3491,8 +3584,8 @@ class TestGetCompositionOverview:
             composition_index=AsyncMock(return_value=_FLAG_OFF_INDEX),
         )
         with _patch_client(mock):
-            result = await get_composition_overview(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="overview",
             )
         assert result["flag_enabled"] is False
         assert result["counts"]["control_objectives"]["total"] == 0
@@ -3505,10 +3598,20 @@ class TestGetCompositionOverview:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError) as exc_info:
-                await get_composition_overview(
+                await get_composition(
                     server_version="0", model_id="tm-missing",
                 )
         assert "404" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_view_is_refused(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="view must be one of"):
+                await get_composition(
+                    server_version="0", model_id="tm-001", view="reachability",
+                )
+        mock.composition_index.assert_not_awaited()
 
 
 class TestListEffectiveEntities:
@@ -3516,8 +3619,8 @@ class TestListEffectiveEntities:
     async def test_flag_on(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await list_effective_entities(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="entities",
             )
         assert result["flag_enabled"] is True
         assert result["kinds"]["assets"][0]["qualified_id"] == "tm-001::A1"
@@ -3532,8 +3635,8 @@ class TestListEffectiveEntities:
             composition_entities=AsyncMock(return_value=_FLAG_OFF_ENTITIES),
         )
         with _patch_client(mock):
-            result = await list_effective_entities(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="entities",
             )
         assert result["flag_enabled"] is False
         assert result["kinds"]["assets"] == []
@@ -3546,17 +3649,18 @@ class TestListEffectiveEntities:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await list_effective_entities(
-                    server_version="0", model_id="tm-missing",
+                await get_composition(
+                    server_version="0", model_id="tm-missing", view="entities",
                 )
 
     @pytest.mark.asyncio
     async def test_forwards_pagination_and_kind(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            await list_effective_entities(
+            await get_composition(
                 server_version="0",
                 model_id="tm-001",
+                view="entities",
                 page=3,
                 page_size=25,
                 kind="attackers",
@@ -3571,8 +3675,8 @@ class TestListEffectiveControlObjectives:
     async def test_flag_on(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await list_effective_control_objectives(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="objectives",
             )
         assert result["flag_enabled"] is True
         assert len(result["control_objectives"]) == 1
@@ -3585,8 +3689,8 @@ class TestListEffectiveControlObjectives:
             composition_control_objectives=AsyncMock(return_value=_FLAG_OFF_COS),
         )
         with _patch_client(mock):
-            result = await list_effective_control_objectives(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="objectives",
             )
         assert result["flag_enabled"] is False
         assert result["control_objectives"] == []
@@ -3598,8 +3702,8 @@ class TestListEffectiveControlObjectives:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await list_effective_control_objectives(
-                    server_version="0", model_id="tm-missing",
+                await get_composition(
+                    server_version="0", model_id="tm-missing", view="objectives",
                 )
 
 
@@ -3608,8 +3712,8 @@ class TestGetEffectiveCoverage:
     async def test_flag_on(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await get_effective_coverage(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="coverage",
             )
         assert result["flag_enabled"] is True
         row = result["coverage"][0]
@@ -3627,8 +3731,8 @@ class TestGetEffectiveCoverage:
             composition_coverage=AsyncMock(return_value=_FLAG_OFF_COVERAGE),
         )
         with _patch_client(mock):
-            result = await get_effective_coverage(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="coverage",
             )
         assert result["flag_enabled"] is False
         assert result["coverage"] == []
@@ -3640,17 +3744,18 @@ class TestGetEffectiveCoverage:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await get_effective_coverage(
-                    server_version="0", model_id="tm-missing",
+                await get_composition(
+                    server_version="0", model_id="tm-missing", view="coverage",
                 )
 
     @pytest.mark.asyncio
     async def test_forwards_pagination_and_origin(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            await get_effective_coverage(
+            await get_composition(
                 server_version="0",
                 model_id="tm-001",
+                view="coverage",
                 page=2,
                 page_size=50,
                 origin="inherited",
@@ -3721,8 +3826,8 @@ class TestListEffectiveAttackPaths:
     async def test_flag_on(self) -> None:
         mock = _mock_client()
         with _patch_client(mock):
-            result = await list_effective_attack_paths(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="attack_paths",
             )
         assert result["flag_enabled"] is True
         assert "effective_paths" in result
@@ -3735,8 +3840,8 @@ class TestListEffectiveAttackPaths:
             composition_attack_paths=AsyncMock(return_value=_FLAG_OFF_ATTACK_PATHS),
         )
         with _patch_client(mock):
-            result = await list_effective_attack_paths(
-                server_version="0", model_id="tm-001",
+            result = await get_composition(
+                server_version="0", model_id="tm-001", view="attack_paths",
             )
         assert result["flag_enabled"] is False
         assert result["effective_paths"] == []
@@ -3750,8 +3855,8 @@ class TestListEffectiveAttackPaths:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await list_effective_attack_paths(
-                    server_version="0", model_id="tm-missing",
+                await get_composition(
+                    server_version="0", model_id="tm-missing", view="attack_paths",
                 )
 
 
@@ -3823,6 +3928,37 @@ class TestListReconciliationCandidates:
                 )
 
 
+def _apply_match(**kwargs):
+    return decide_reconciliation_candidate(decision="apply", **kwargs)
+
+
+def _reject_match(**kwargs):
+    return decide_reconciliation_candidate(decision="reject", **kwargs)
+
+
+def _unreject_match(**kwargs):
+    return decide_reconciliation_candidate(decision="unreject", **kwargs)
+
+
+def _apply_undo(**kwargs):
+    return undo_composition_event(dry_run=False, **kwargs)
+
+
+class TestDecideReconciliationCandidate:
+    @pytest.mark.asyncio
+    async def test_an_unknown_decision_is_refused(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="decision must be one of"):
+                await decide_reconciliation_candidate(
+                    server_version="0", model_id="tm-001", decision="merge",
+                    kind="assets", own_qid="child:A1", inherited_qid="parent:A1",
+                )
+        mock.apply_certain_reconciliation_match.assert_not_awaited()
+        mock.reject_reconciliation_candidate.assert_not_awaited()
+        mock.unreject_reconciliation_candidate.assert_not_awaited()
+
+
 class TestApplyCertainReconciliationMatch:
     @pytest.mark.asyncio
     async def test_happy_path_returns_envelope_unchanged(self) -> None:
@@ -3836,7 +3972,7 @@ class TestApplyCertainReconciliationMatch:
             apply_certain_reconciliation_match=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await apply_certain_reconciliation_match(
+            result = await _apply_match(
                 server_version="0",
                 model_id="tm-001",
                 kind="assets",
@@ -3856,7 +3992,7 @@ class TestApplyCertainReconciliationMatch:
         structural divergence."""
         mock = _mock_client()
         with _patch_client(mock):
-            await apply_certain_reconciliation_match(
+            await _apply_match(
                 server_version="0",
                 model_id="tm-001",
                 kind="attackers",
@@ -3874,7 +4010,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         for kind in ("assets", "attackers", "components"):
             with _patch_client(mock):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind=kind,
@@ -3887,7 +4023,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="kind must be one of"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assumptions",
@@ -3904,7 +4040,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="kind must be one of"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="trust_boundaries",
@@ -3918,7 +4054,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="own_qid is required"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -3932,7 +4068,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="inherited_qid is required"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -3946,7 +4082,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="own_qid must be a qualified id"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -3960,7 +4096,7 @@ class TestApplyCertainReconciliationMatch:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="inherited_qid must be a qualified id"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -3984,7 +4120,7 @@ class TestApplyCertainReconciliationMatch:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="400"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4001,7 +4137,7 @@ class TestApplyCertainReconciliationMatch:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-missing",
                     kind="assets",
@@ -4022,7 +4158,7 @@ class TestApplyCertainReconciliationMatch:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await apply_certain_reconciliation_match(
+                await _apply_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4047,7 +4183,7 @@ class TestRejectReconciliationCandidate:
             reject_reconciliation_candidate=AsyncMock(return_value=persisted),
         )
         with _patch_client(mock):
-            result = await reject_reconciliation_candidate(
+            result = await _reject_match(
                 server_version="0",
                 model_id="tm-001",
                 kind="assets",
@@ -4064,7 +4200,7 @@ class TestRejectReconciliationCandidate:
         mock = _mock_client()
         for kind in ("assets", "attackers", "components"):
             with _patch_client(mock):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind=kind,
@@ -4077,7 +4213,7 @@ class TestRejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="kind must be one of"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assumptions",
@@ -4091,7 +4227,7 @@ class TestRejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="own_qid is required"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4105,7 +4241,7 @@ class TestRejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="inherited_qid is required"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4119,7 +4255,7 @@ class TestRejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="own_qid must be a qualified id"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4133,7 +4269,7 @@ class TestRejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="inherited_qid must be a qualified id"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4157,7 +4293,7 @@ class TestRejectReconciliationCandidate:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="400"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4174,7 +4310,7 @@ class TestRejectReconciliationCandidate:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-missing",
                     kind="assets",
@@ -4195,7 +4331,7 @@ class TestRejectReconciliationCandidate:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await reject_reconciliation_candidate(
+                await _reject_match(
                     server_version="0",
                     model_id="tm-001",
                     kind="assets",
@@ -4211,7 +4347,7 @@ class TestUnrejectReconciliationCandidate:
             unreject_reconciliation_candidate=AsyncMock(return_value={"ok": True}),
         )
         with _patch_client(mock):
-            result = await unreject_reconciliation_candidate(
+            result = await _unreject_match(
                 server_version="0",
                 model_id="tm-001",
                 rejection_id="rej-001",
@@ -4226,7 +4362,7 @@ class TestUnrejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await unreject_reconciliation_candidate(
+                await _unreject_match(
                     server_version="0",
                     model_id="",
                     rejection_id="rej-001",
@@ -4238,7 +4374,7 @@ class TestUnrejectReconciliationCandidate:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="rejection_id is required"):
-                await unreject_reconciliation_candidate(
+                await _unreject_match(
                     server_version="0",
                     model_id="tm-001",
                     rejection_id="",
@@ -4256,7 +4392,7 @@ class TestUnrejectReconciliationCandidate:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await unreject_reconciliation_candidate(
+                await _unreject_match(
                     server_version="0",
                     model_id="tm-001",
                     rejection_id="rej-missing",
@@ -4275,7 +4411,7 @@ class TestUnrejectReconciliationCandidate:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await unreject_reconciliation_candidate(
+                await _unreject_match(
                     server_version="0",
                     model_id="tm-001",
                     rejection_id="rej-001",
@@ -4828,7 +4964,7 @@ class TestPreviewUndoLiftComposition:
             preview_lift_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_composition(
+            result = await undo_composition_event(
                 server_version="0",
                 model_id="tm-lca",
                 event_type="lift", event_id="lift-XYZ",
@@ -4855,7 +4991,7 @@ class TestPreviewUndoLiftComposition:
             preview_lift_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_composition(
+            result = await undo_composition_event(
                 server_version="0",
                 model_id="tm-lca",
                 event_type="lift", event_id="lift-XYZ",
@@ -4868,7 +5004,7 @@ class TestPreviewUndoLiftComposition:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="",
                     event_type="lift", event_id="lift-XYZ",
@@ -4880,7 +5016,7 @@ class TestPreviewUndoLiftComposition:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="event_id is required"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="",
@@ -4898,7 +5034,7 @@ class TestPreviewUndoLiftComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="lift-missing",
@@ -4917,7 +5053,7 @@ class TestPreviewUndoLiftComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="lift-XYZ",
@@ -4945,7 +5081,7 @@ class TestUndoLiftCompositionEvent:
             undo_lift=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await undo_composition_event(
+            result = await _apply_undo(
                 server_version="0",
                 model_id="tm-lca",
                 event_type="lift", event_id="lift-XYZ",
@@ -4958,7 +5094,7 @@ class TestUndoLiftCompositionEvent:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="",
                     event_type="lift", event_id="lift-XYZ",
@@ -4970,7 +5106,7 @@ class TestUndoLiftCompositionEvent:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="event_id is required"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="   ",
@@ -5008,7 +5144,7 @@ class TestUndoLiftCompositionEvent:
         mock = _mock_client(undo_lift=AsyncMock(side_effect=err))
         with _patch_client(mock):
             with pytest.raises(ToolError) as excinfo:
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="lift-XYZ",
@@ -5031,7 +5167,7 @@ class TestUndoLiftCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="lift-missing",
@@ -5050,7 +5186,7 @@ class TestUndoLiftCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-lca",
                     event_type="lift", event_id="lift-XYZ",
@@ -5075,7 +5211,7 @@ class TestPreviewUndoSplitComposition:
             preview_split_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_composition(
+            result = await undo_composition_event(
                 server_version="0",
                 model_id="tm-anc",
                 event_type="split", event_id="split-XYZ",
@@ -5099,7 +5235,7 @@ class TestPreviewUndoSplitComposition:
             preview_split_undo=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await preview_undo_composition(
+            result = await undo_composition_event(
                 server_version="0",
                 model_id="tm-anc",
                 event_type="split", event_id="split-XYZ",
@@ -5111,7 +5247,7 @@ class TestPreviewUndoSplitComposition:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="",
                     event_type="split", event_id="split-XYZ",
@@ -5123,7 +5259,7 @@ class TestPreviewUndoSplitComposition:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="event_id is required"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="",
@@ -5141,7 +5277,7 @@ class TestPreviewUndoSplitComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="split-missing",
@@ -5160,7 +5296,7 @@ class TestPreviewUndoSplitComposition:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await preview_undo_composition(
+                await undo_composition_event(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="split-XYZ",
@@ -5192,7 +5328,7 @@ class TestUndoSplitCompositionEvent:
             undo_split=AsyncMock(return_value=envelope),
         )
         with _patch_client(mock):
-            result = await undo_composition_event(
+            result = await _apply_undo(
                 server_version="0",
                 model_id="tm-anc",
                 event_type="split", event_id="split-XYZ",
@@ -5205,7 +5341,7 @@ class TestUndoSplitCompositionEvent:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="model_id is required"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="",
                     event_type="split", event_id="split-XYZ",
@@ -5217,7 +5353,7 @@ class TestUndoSplitCompositionEvent:
         mock = _mock_client()
         with _patch_client(mock):
             with pytest.raises(ToolError, match="event_id is required"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="",
@@ -5250,7 +5386,7 @@ class TestUndoSplitCompositionEvent:
         mock = _mock_client(undo_split=AsyncMock(side_effect=err))
         with _patch_client(mock):
             with pytest.raises(ToolError) as excinfo:
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="split-XYZ",
@@ -5270,7 +5406,7 @@ class TestUndoSplitCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="404"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="split-missing",
@@ -5289,7 +5425,7 @@ class TestUndoSplitCompositionEvent:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="503"):
-                await undo_composition_event(
+                await _apply_undo(
                     server_version="0",
                     model_id="tm-anc",
                     event_type="split", event_id="split-XYZ",
@@ -5797,52 +5933,69 @@ class TestVerdictDivergenceTools:
             {"control_id": "CTRL-03", "co_id": "CO-1", "kind": "missing_mapping"},
         ])
         with _patch_client(mock):
-            out = await accept_coverage_divergences(
-                server_version="0", model_id="tm-001", items=items,
-                change_reason="accept high-confidence coverage divergences",
+            out = await resolve_verdict_divergences(
+                server_version="0", model_id="tm-001", action="accept", items=items,
+                reason="accept high-confidence coverage divergences",
             )
         assert out["controls_updated"] == ["CTRL-03"]
         args = mock.accept_coverage_divergences.await_args.args
         assert args[1][0]["kind"] == "missing_mapping"
+        assert args[2] == "accept high-confidence coverage divergences"
 
     @pytest.mark.asyncio
     async def test_accept_rejects_bad_json_and_short_reason(self) -> None:
-        with _patch_client(_mock_client()):
+        mock = _mock_client()
+        mock.accept_coverage_divergences = AsyncMock()
+        with _patch_client(mock):
             with pytest.raises(ToolError):
-                await accept_coverage_divergences(
-                    server_version="0", model_id="tm-001",
-                    items="{bad", change_reason="a valid reason here",
+                await resolve_verdict_divergences(
+                    server_version="0", model_id="tm-001", action="accept",
+                    items="{bad", reason="a valid reason here",
                 )
-            with pytest.raises(ToolError):
-                await accept_coverage_divergences(
-                    server_version="0", model_id="tm-001",
+            with pytest.raises(ToolError, match="at least 10"):
+                await resolve_verdict_divergences(
+                    server_version="0", model_id="tm-001", action="accept",
                     items=json.dumps([{"control_id": "C", "co_id": "CO", "kind": "missing_mapping"}]),
-                    change_reason="short",
+                    reason="short",
                 )
+        mock.accept_coverage_divergences.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_dismiss_forwards_items_and_reason(self) -> None:
         mock = _mock_client()
         mock.dismiss_verdict_divergences = AsyncMock(
             return_value={"dismissed": [{"co_id": "CO-2"}], "skipped": []})
+        mock.accept_coverage_divergences = AsyncMock()
         items = json.dumps([
             {"kind": "spurious_mapping", "co_id": "CO-2", "control_id": "CTRL-04"},
         ])
         with _patch_client(mock):
-            out = await dismiss_verdict_divergences(
-                server_version="0", model_id="tm-001", items=items,
-                reason="structural model is correct here",
+            out = await resolve_verdict_divergences(
+                server_version="0", model_id="tm-001", action="dismiss", items=items,
+                reason="ok",
             )
         assert out["dismissed"][0]["co_id"] == "CO-2"
         mock.dismiss_verdict_divergences.assert_awaited_once()
+        mock.accept_coverage_divergences.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_dismiss_rejects_empty_reason(self) -> None:
         items = json.dumps([{"kind": "spurious_mapping", "co_id": "CO-2", "control_id": "C"}])
         with _patch_client(_mock_client()):
             with pytest.raises(ToolError):
-                await dismiss_verdict_divergences(
-                    server_version="0", model_id="tm-001", items=items, reason="  ",
+                await resolve_verdict_divergences(
+                    server_version="0", model_id="tm-001", action="dismiss",
+                    items=items, reason="  ",
+                )
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_action_is_refused(self) -> None:
+        items = json.dumps([{"kind": "spurious_mapping", "co_id": "CO-2", "control_id": "C"}])
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError, match="action must be"):
+                await resolve_verdict_divergences(
+                    server_version="0", model_id="tm-001", action="reject",
+                    items=items, reason="a valid reason here",
                 )
 
 
@@ -6065,27 +6218,6 @@ class TestGetDesignLeverage:
         assert result["ranked"][0]["kind"] == "attacker"
         mock.get_design_leverage.assert_awaited_once_with(
             "tm-001", include_design_moves=True, top=3)
-
-
-class TestSetModelProvenance:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await set_model_provenance(
-                server_version="0", model_id="tm-001", kind="code",
-                repo_url="https://github.com/org/repo", commit_sha="abc123", ref="main")
-        assert result["version"] == 4
-        mock.set_model_provenance.assert_awaited_once_with(
-            "tm-001", "code", repo_url="https://github.com/org/repo",
-            commit_sha="abc123", ref="main", source_ref="", source_url="")
-
-    @pytest.mark.asyncio
-    async def test_bad_kind_raises(self) -> None:
-        with _patch_client(_mock_client()):
-            with pytest.raises(ToolError):
-                await set_model_provenance(
-                    server_version="0", model_id="tm-001", kind="guess")
 
 
 class TestGenerateThreatModelProvenance:
