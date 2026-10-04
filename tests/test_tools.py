@@ -16,7 +16,6 @@ from mipiti_mcp.types import (
     ModelRiskView,
     ModelSummary,
     RenameResult,
-    SystemRiskView,
     ThreatModel,
 )
 from mipiti_mcp.server import (
@@ -51,6 +50,7 @@ from mipiti_mcp.server import (
     get_entity,
     get_findings_risks,
     get_group,
+    get_group_dependencies,
     get_review_queue,
     get_risk_view,
     get_scan_prompt,
@@ -308,8 +308,6 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "auto_map_controls": {"job_id": "job_automap"},
         "auto_remediate": {"job_id": "job_auto_rem"},
         "get_operation": {"status": "completed", "result": {}},
-        "select_system_compliance_frameworks": {"selected": 1},
-        "get_system_compliance_report": {"coverage": 0.9},
         "submit_assertions": {"count": 2},
         "list_assertions": {"assertions": []},
         "delete_assertion": None,
@@ -367,35 +365,6 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                 "coverage_ratio": 0.66,
             }],
         ),
-        "get_system_risk_view": SystemRiskView(
-            system_id="sys-1", system_name="Customer Platform", total=2,
-            models=[
-                {"id": "tm-001", "title": "Login Service"},
-                {"id": "tm-002", "title": "Payments Service"},
-            ],
-            rows=[
-                {
-                    "model_id": "tm-001", "model_title": "Login Service",
-                    "co_id": "CO1", "co_statement": "Protect session tokens",
-                    "asset_id": "A1", "asset_name": "Session Token",
-                    "attacker_id": "T1", "attacker_capability": "Network adversary",
-                    "impact": "H", "likelihood": "M", "risk_tier": "high",
-                    "total_controls": 3, "implemented_controls": 2,
-                    "verified_controls": 1, "open_findings": 1,
-                    "coverage_ratio": 0.66,
-                },
-                {
-                    "model_id": "tm-002", "model_title": "Payments Service",
-                    "co_id": "CO9", "co_statement": "Protect data at rest",
-                    "asset_id": "A4", "asset_name": "Card Token Store",
-                    "attacker_id": "T3", "attacker_capability": "Insider",
-                    "impact": "H", "likelihood": "M", "risk_tier": "high",
-                    "total_controls": 4, "implemented_controls": 2,
-                    "verified_controls": 1, "open_findings": 0,
-                    "coverage_ratio": 0.5,
-                },
-            ],
-        ),
         "list_risk_acceptances": [
             {
                 "id": "RA-1", "model_id": "tm-001",
@@ -407,10 +376,6 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
                 "review_by": "2026-09-01T00:00:00Z",
             },
         ],
-        "list_systems": {"systems": []},
-        "get_system": {"id": "sys-1", "name": "Platform"},
-        "create_system": {"id": "sys-2", "name": "New"},
-        "add_model_to_system": {"added": True},
         "refine_control": {"accepted": True, "reason": "Coverage maintained.", "control": {"id": "CTRL-01"}},
         "remap_control": {
             "control": {"id": "CTRL-01", "control_objective_ids": ["CO1", "CO3"]},
@@ -659,6 +624,9 @@ def _mock_client(**overrides: AsyncMock) -> AsyncMock:
         "attach_foundation": {"created": [], "failed": []},
         # Tags (Affiliation primitive)
         "list_tags": {"tags": []},
+        "get_tag": {"id": "tag1", "name": "Scope", "model_ids": ["tm-001"]},
+        "get_tag_dependencies": {"tag_id": "tag1", "tag_name": "Scope",
+                                 "models": [], "edges": [], "total": 0},
         "create_tag": {"id": "tag1", "name": "Scope"},
         "delete_tag": None,
         "add_model_to_tag": {"id": "tag1", "model_ids": ["tm-001"]},
@@ -1464,8 +1432,8 @@ class TestTags:
             list_tags=AsyncMock(return_value={"tags": [{"id": "tag1"}]}),
         )
         with _patch_client(mock):
-            created = await create_group(server_version="0", kind="tag", name="Scope")
-            listed = await list_groups(server_version="0", kind="tag")
+            created = await create_group(server_version="0", name="Scope")
+            listed = await list_groups(server_version="0")
         assert created["id"] == "tag1"
         assert len(listed["tags"]) == 1
         mock.create_tag.assert_awaited_once_with("Scope", "", [])
@@ -1478,13 +1446,15 @@ class TestTags:
         )
         with _patch_client(mock):
             added = await add_model_to_group(
-                server_version="0", kind="tag", group_id="tag1", model_id="m1",
+                server_version="0", group_id="tag1", model_id="m1",
             )
             removed = await remove_model_from_group(
-                server_version="0", tag_id="tag1", model_id="m1",
+                server_version="0", group_id="tag1", model_id="m1",
             )
         assert "m1" in added["model_ids"]
-        assert removed["removed"] is True
+        assert removed == {"removed": True, "group_id": "tag1", "model_id": "m1"}
+        mock.add_model_to_tag.assert_awaited_once_with("tag1", "m1")
+        mock.remove_model_from_tag.assert_awaited_once_with("tag1", "m1")
 
     @pytest.mark.asyncio
     async def test_delete_and_views(self) -> None:
@@ -1494,12 +1464,34 @@ class TestTags:
             get_tag_risk_view=AsyncMock(return_value={"tag_id": "tag1", "total": 0}),
         )
         with _patch_client(mock):
-            deleted = await delete_group(server_version="0", tag_id="tag1")
+            deleted = await delete_group(server_version="0", group_id="tag1")
             mtags = await list_model_groups(server_version="0", model_id="m1")
             rv = await get_risk_view(server_version="0", scope="tag", scope_id="tag1")
-        assert deleted["deleted"] is True
+        assert deleted == {"deleted": True, "group_id": "tag1"}
         assert mtags["model_id"] == "m1"
         assert rv["tag_id"] == "tag1"
+
+    @pytest.mark.asyncio
+    async def test_get_one_and_its_dependencies(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            tag = await get_group(server_version="0", group_id="tag1")
+            deps = await get_group_dependencies(server_version="0", group_id="tag1")
+        assert tag["model_ids"] == ["tm-001"]
+        assert deps["edges"] == [] and deps["tag_id"] == "tag1"
+        mock.get_tag.assert_awaited_once_with("tag1")
+        mock.get_tag_dependencies.assert_awaited_once_with("tag1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool, kwargs", [
+        (get_risk_view, {"scope_id": "s-1"}),
+        (get_compliance_report, {"scope_id": "s-1", "framework_id": "f"}),
+        (select_compliance_frameworks, {"scope_id": "s-1", "framework_ids": "f"}),
+    ])
+    async def test_a_scope_other_than_model_or_tag_is_refused(self, tool, kwargs) -> None:
+        with _patch_client(_mock_client()):
+            with pytest.raises(ToolError, match="scope must be 'model' or 'tag'"):
+                await tool(server_version="0", scope="system", **kwargs)
 
     @pytest.mark.asyncio
     async def test_surfaces_api_error(self) -> None:
@@ -1513,7 +1505,7 @@ class TestTags:
         )
         with _patch_client(mock):
             with pytest.raises(ToolError):
-                await create_group(server_version="0", kind="tag", name="Dup")
+                await create_group(server_version="0", name="Dup")
 
     @pytest.mark.asyncio
     async def test_compliance_and_export(self) -> None:
@@ -2927,70 +2919,6 @@ class TestAwaitBackendJob:
 
 
 # ------------------------------------------------------------------
-# Workspaces & Systems
-# ------------------------------------------------------------------
-
-
-class TestListSystems:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await list_groups(server_version="0", kind="system")
-        assert "systems" in result
-
-
-class TestGetSystem:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await get_group(server_version="0", system_id="sys-1")
-        assert result["id"] == "sys-1"
-
-
-class TestCreateSystem:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await create_group(server_version="0", kind="system", name="Platform")
-        assert result["id"] == "sys-2"
-
-
-class TestAddModelToSystem:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await add_model_to_group(server_version="0", kind="system", group_id="sys-1", model_id="tm-001")
-        assert result["added"] is True
-
-
-# ------------------------------------------------------------------
-# System Compliance
-# ------------------------------------------------------------------
-
-
-class TestSelectSystemComplianceFrameworks:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await select_compliance_frameworks(server_version="0", scope="system", scope_id="sys-1", framework_ids="owasp-asvs")
-        assert result["selected"] == 1
-
-
-class TestGetSystemComplianceReport:
-    @pytest.mark.asyncio
-    async def test_success(self) -> None:
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await get_compliance_report(server_version="0", scope="system", scope_id="sys-1", framework_id="owasp-asvs")
-        assert result["coverage"] == 0.9
-
-
-# ------------------------------------------------------------------
 # Assertions & Verification
 # ------------------------------------------------------------------
 
@@ -3427,24 +3355,6 @@ class TestGetModelRiskView:
                 server_version="0", scope="model", scope_id="tm-xyz",
             )
         mock.get_model_risk_view.assert_awaited_once_with("tm-xyz")
-
-
-class TestGetSystemRiskView:
-    @pytest.mark.asyncio
-    async def test_rows_carry_model_context(self) -> None:
-        """System-level view must attach model_id / model_title per row
-        so callers can group by source model without an extra lookup."""
-        mock = _mock_client()
-        with _patch_client(mock):
-            result = await get_risk_view(
-                server_version="0", scope="system", scope_id="sys-1",
-            )
-        assert result["system_id"] == "sys-1"
-        assert result["total"] == 2
-        assert all(
-            "model_id" in r and "model_title" in r for r in result["rows"]
-        )
-        mock.get_system_risk_view.assert_awaited_once_with("sys-1")
 
 
 class TestListRiskAcceptances:

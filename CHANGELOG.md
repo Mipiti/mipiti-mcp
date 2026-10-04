@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — systems are gone; the group tools act on tags.** A system was
+  a named, exclusive grouping of models; every one is now a tag with the same
+  id, name, members, framework selections and exclusions, and the system
+  endpoints answer 410. The tool surface is 128 tools.
+  - `list_groups`, `create_group` and `add_model_to_group` take no `kind`;
+    `get_group`, `delete_group` and `remove_model_from_group` take
+    `group_id`. `get_group` reads a tag with its members.
+  - `get_group_dependencies` replaces `get_system_dependencies`: the
+    reliance edges among a tag's members, with each one's status and whether
+    it credits its objective.
+  - `link_system_dependency` is removed. A model that relies on another
+    model's control declares it with `manage_reliance` or
+    `attach_foundation`, which name the control and validate it before it
+    credits anything.
+  - `get_risk_view`, `get_compliance_report` and
+    `select_compliance_frameworks` take `scope="model"` or `scope="tag"`.
+  - A model added to a tag takes on the frameworks the tag selected.
+
+- `decide_reconciliation_candidate(decision="apply")` is described as what it
+  does: it records that the descendant's own entity is the inherited one,
+  leaves the own entity in the model and out of its composed view, and the
+  record is dropped when the pair stops matching. It does not delete the own
+  entity.
+
 - **BREAKING — the tool surface is 129 tools, down from 150.** Tools that
   act on one subject with a choice of mode fold behind a parameter naming
   it, and only tools of the same class fold together (a read never joins a
