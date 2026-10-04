@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->129<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->128<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -206,7 +206,7 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 | `assess_model` | Deterministic assessment of all COs. Returns mitigated/at_risk/unassessed with `risk_reason` (missing_controls, pending_attestation, expired_attestation, coverage_gap, insufficient_by_design). For per-CO reachability state call `get_reachability_verdicts`. |
 | `get_findings_risks` | Workspace-scoped triage dashboard: open findings, active risk acceptances, and at-risk COs across every model the workspace can access. Entry point when asked "what's open?". |
 | `get_risk_view (scope="model")` | Per-model Prioritized Risk View: one row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage, and open-finding count. |
-| `get_risk_view (scope="system")` | Cross-model variant of `get_risk_view (scope="model")`: same shape, aggregated across every model in a System (model_id + model_title attached per row). |
+| `get_risk_view (scope="tag")` | Cross-model variant of `get_risk_view (scope="model")`: same shape, aggregated across every member of a tag (model_id + model_title attached per row), and delegation-aware. |
 | `get_remediation_leverage` | Per-model remediation plan: the not-yet-satisfied controls ranked by how many COs each one closes, plus a greedy minimal fix order (`summary` / `ranked` / `greedy_plan`). Use to prioritize which controls to implement first for the shortest path to coverage. |
 | `list_risk_acceptances` | All risk acceptances on a model — risks explicitly accepted instead of mitigated. Includes CO id, owner, justification, status, review deadline. |
 | `create_co_disposition` | Record that a control objective does not apply to this system (owner, justification, review deadline). The sibling of a risk acceptance: an acceptance says the exposure is real and is being carried, a disposition says the objective does not apply here at all. The objective stays in the matrix and in every coverage count, reported in its own class — what is suppressed is work (no controls generated, no coverage gap raised), never the accounting. |
@@ -241,7 +241,7 @@ Views over the *effective* model — own entities composed with everything inher
 | `get_reachability_verdicts (composed=True)` | Per-CO reachability verdicts over the composed effective topology — same kinds (`reachable` / `unreachable` / `indeterminate`) as `get_reachability_verdicts`, but evaluated against the merged tree. Use on child models when ancestor topology matters. |
 | `get_composition (view="attack_paths")` | Effective AttackPath set + lifted missing/dangling suggestions computed against the composed reach surface. |
 | `list_reconciliation_candidates` | Paginated reconciliation candidates between this model and its ancestors. Tier `certain` is a deterministic match safe to auto-apply; tier `heuristic` is fuzzy and needs review. With `disposition="rejected"`, the persisted rejections instead, oldest first, each with the surrogate id an unreject names. |
-| `decide_reconciliation_candidate` | Mutating. `decision="apply"` soft-deletes the descendant's own duplicate so the inherited entity becomes canonical; the server re-validates against current live state and refuses a heuristic-tier candidate unless `confirm_heuristic=True`; bumps the model version and returns `{model, controls_carried, controls_orphaned, orphaned_control_ids}`. `decision="reject"` persists "these are NOT duplicates" at org scope, so the detector leaves the pair out of the active queue; idempotent on `(model_id, kind, own_qid, inherited_qid)`, no new version, returns the record (keep its `id`). `decision="unreject"` removes a rejection by `rejection_id`, returning `{ok: true}`. |
+| `decide_reconciliation_candidate` | Mutating. `decision="apply"` records that the descendant's own entity is the inherited one: the own entity stays in the model and the composed view leaves it out, so the inherited entity is canonical (the record is dropped when the pair stops matching); the server re-validates against current live state and refuses a heuristic-tier candidate unless `confirm_heuristic=True`; bumps the model version and returns `{model, controls_carried, controls_orphaned, orphaned_control_ids}`. `decision="reject"` persists "these are NOT duplicates" at org scope, so the detector leaves the pair out of the active queue; idempotent on `(model_id, kind, own_qid, inherited_qid)`, no new version, returns the record (keep its `id`). `decision="unreject"` removes a rejection by `rejection_id`, returning `{ok: true}`. |
 | `lift_composition_entity` | Mutating. Promote a shared-anchor entity from two sibling descendants to their lowest common ancestor: each source's copy is soft-deleted and the inherited entity becomes canonical for every descendant of the LCA. Server re-detects field-level and attached-state conflicts against current live state; pass `field_resolutions` / `attached_state_resolutions` keyed by the conflict keys returned in the 400 detail. Server also runs an over-application gate against the LCA's descendant set; pass `acknowledged_third_party_subtrees` to acknowledge extra reach or `skip_overapplication_gate=true` to override after explicit operator confirmation. Bumps version on the LCA + both source descendants; returns `{lift_id, lca_model, descendant_a_model, descendant_b_model, applied_migrations, lift_event}` — the `lift_event` block matches the audit pack's `lift_history` entry. |
 | `split_composition_entity` | Mutating. Inverse of `lift_composition_entity`: push an ancestor-owned entity down to one or more target descendants and soft-delete the ancestor's copy. A new local id is minted on each target; attached state (assertions, jira mappings, risk acceptances) on the ancestor's entity is duplicated to every target. Bumps version on the ancestor + every target descendant; returns `{split_id, ancestor_model, descendant_models, applied_duplications, split_event}` — the `split_event` block matches the audit pack's `split_history` entry. |
 | `undo_composition_event` | Undo a prior lift or split (`event_type="lift"` or `"split"`). By default (`dry_run=True`) read-only: the inverse plan or the divergence refusal, as `{plan, refusal}` with exactly one non-null — surface it to the operator. With `dry_run=False`, mutating: re-runs the divergence detector and refuses with 409 + `detail.refusal.reasons` when state has materially evolved since the forward event; on success persists the inverse across every affected model and emits a `lift_undone` / `split_undone` activity event citing `original_event_id`, so the audit pack chains undo to its forward. Returns `{undone_event_id, original_event_id, applied_state_ops, models}`, `models` being `{lca_model, source_descendant_models}` for a lift and `{ancestor_model, descendant_models}` for a split. |
@@ -259,17 +259,18 @@ Declared reliance edges (distinct from the parent/composition tree, which is con
 
 ### Tags (grouping)
 
-Overlapping, semantics-free grouping of models (the Affiliation primitive) — for audit scopes, ad-hoc selections, or portfolios. A model may carry many tags; a tag never affects posture or credit.
+Overlapping, semantics-free grouping of models (the Affiliation primitive) — for audit scopes, products, ad-hoc selections, or portfolios. A model may carry many tags; a tag never affects posture or credit. The group tools act on tags.
 
 | Tool | Description |
 |------|-------------|
-| `create_group (kind="tag")` / `delete_group` | Create or remove a tag (deleting affects the grouping only, not the member models). |
-| `add_model_to_group (kind="tag")` / `remove_model_from_group` | Manage membership; a model can belong to many tags at once. |
-| `list_groups (kind="tag")` / `list_model_groups` | Browse the workspace's tags, or a model's tags. |
+| `create_group` / `delete_group` | Create or remove a tag (deleting affects the grouping only, not the member models). |
+| `add_model_to_group` / `remove_model_from_group` | Manage membership; a model can belong to many tags at once. A model added to a tag takes on the frameworks the tag selected. |
+| `list_groups` / `get_group` / `list_model_groups` | Browse the workspace's tags, read one with its members, or list a model's tags. |
+| `get_group_dependencies` | The reliance edges among a tag's members, each with its status and whether it credits its objective. |
 | `get_risk_view (scope="tag")` | Aggregate per-CO risk across a tag's members. Delegation-aware (a CO mitigated via a verified cross-model delegation reads as covered). |
-| `select_compliance_frameworks (scope="tag")` | Make a tag a compliance/audit scope: select frameworks for the tag, propagated to its members. |
-| `get_compliance_report (scope="tag")` | Cross-model compliance coverage report scoped to a tag's members (the tag equivalent of the system compliance report). |
-| `export_report (scope="tag")` | Signed auditor HTML for a tag — member reports + cross-model dependency graph + attestation status (the tag equivalent of the system auditor export). |
+| `select_compliance_frameworks (scope="tag")` | Make a tag a compliance/audit scope: select frameworks for the tag, propagated to its members and to every model added later. |
+| `get_compliance_report (scope="tag")` | Cross-model compliance coverage report scoped to a tag's members. |
+| `export_report (scope="tag")` | Signed auditor HTML for a tag: every member's report, after the reliance edges among the members with their status. |
 
 ### Compliance
 
@@ -277,7 +278,7 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 |------|-------------|
 | `list_compliance_frameworks` | Available frameworks: the built-ins (among them OWASP ASVS, ISO 27001, SOC 2, NIST CSF, IEC 62443, ISO/SAE 21434, PCI DSS, GDPR) and any imported. |
 | `import_compliance_framework` | Import a customer-specific framework (JSON: `name`, `requirements`, optional `level_definitions`). |
-| `select_compliance_frameworks` | Select frameworks for a model. |
+| `select_compliance_frameworks` | Select frameworks for a model, or for a tag (`scope="tag"`). |
 | `get_compliance_report` | Coverage report for a selected framework. |
 | `auto_map_controls` | AI-powered semantic mapping of controls to framework requirements. |
 | `map_control_to_requirement` | Manual control-to-requirement mapping. |
@@ -289,16 +290,11 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 |------|-------------|
 | `add_component` / `edit_component` / `remove_entity (entity_type="component")` | Components bridge trust boundaries (security architecture) to repositories (code organization). `Component(id, name, repo_url, path, trust_boundary_ids)` scopes controls to the codebase that implements them. Used for multi-repo systems and per-repo threat models. `edit_component` also accepts optional per-component level grades: `target_sl` (IEC 62443 Security Level, 1-4), `eal` (Common Criteria Evaluation Assurance Level, 1-7), `fips_level` (FIPS 140-3 Security Level, 1-4). |
 
-### Systems and Workspaces
+### Organizations
 
 | Tool | Description |
 |------|-------------|
 | `update_organization` | Set per-organization level grades: `target_ml` (IEC 62443-4-1 Maturity Level, 1-5), `csf_tier` (NIST CSF Tier, 1-4). Admin-only. Use `clear_target_ml` / `clear_csf_tier` to explicitly reset to NULL. |
-| `list_groups (kind="system")` / `get_group` / `create_group (kind="system")` | Manage systems (groups of related models). |
-| `add_model_to_group (kind="system")` | Add a model to a system. |
-| `get_system_dependencies` | Cross-model dependency graph with satisfaction status for assumptions linked to other models. |
-| `link_system_dependency` | Link a cross-model assumption to a target model — dual-path satisfaction (controls OR manual attestation). |
-| `select_compliance_frameworks (scope="system")` / `get_compliance_report (scope="system")` | System-level compliance aggregation. |
 
 ### Setup and Operations
 

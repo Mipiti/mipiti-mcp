@@ -41,16 +41,12 @@ from .types import (
     ImportConfirmResult,
     ModelRiskView,
     ModelSummary,
-    OkResult,
     RemediationApplyResult,
     RenameResult,
     ReviewQueueResponse,
     ScanPromptResult,
     SelectFrameworksResult,
     SubmitAssertionsResult,
-    System,
-    SystemRiskView,
-    SystemSelectFrameworksResult,
     ThreatModel,
     VerificationReport,
     _Base,
@@ -505,6 +501,10 @@ class MipitiClient:
         """List the workspace's tags."""
         return await self._get("/api/tags")
 
+    async def get_tag(self, tag_id: str) -> dict:
+        """One tag with its member model ids."""
+        return await self._get(f"/api/tags/{tag_id}")
+
     async def create_tag(
         self, name: str, description: str = "", model_ids: list[str] | None = None,
     ) -> dict:
@@ -533,10 +533,14 @@ class MipitiClient:
         """Aggregate per-CO risk rows across a tag's member models."""
         return await self._get(f"/api/tags/{tag_id}/risk-view")
 
+    async def get_tag_dependencies(self, tag_id: str) -> dict:
+        """The reliance edges among a tag's member models."""
+        return await self._get(f"/api/tags/{tag_id}/dependencies")
+
     async def select_tag_compliance_frameworks(
         self, tag_id: str, framework_ids: list[str],
     ) -> dict:
-        """Select compliance frameworks for a tag (scope-level), propagating to members."""
+        """Select compliance frameworks for a tag, propagating them to its members."""
         return await self._post(
             f"/api/tags/{tag_id}/compliance/frameworks",
             {"framework_ids": framework_ids},
@@ -1195,10 +1199,10 @@ class MipitiClient:
     ) -> dict:
         """POST /api/models/{model_id}/composition/reconciliation/apply-match.
 
-        Mutating. Soft-deletes the descendant's own duplicate entity so
-        the inherited entity becomes the canonical surface for the
-        effective-model resolver. The server re-validates the candidate
-        against current live state.
+        Mutating. Records that the descendant's own entity is the
+        inherited one: the own entity stays in the model and the composed
+        view leaves it out, so the inherited entity is canonical. The
+        server re-validates the candidate against current live state.
 
         By default heuristic-tier matches are refused; pass
         ``confirm_heuristic=True`` to acknowledge the structural
@@ -1649,24 +1653,6 @@ class MipitiClient:
             f"/api/models/{model_id}/controls/{control_id}/assumption-groups-job",
             body,
         )
-
-    async def link_assumption(
-        self, model_id: str, assumption_id: str, target_model_id: str,
-    ) -> dict:
-        resp = await self._request_with_idempotency(
-            "POST",
-            f"/api/models/{model_id}/assumptions/{assumption_id}/link",
-            json={"target_model_id": target_model_id},
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    async def get_system_dependencies(self, system_id: str) -> dict:
-        resp = await self._get_client().get(
-            f"/api/systems/{system_id}/dependencies",
-        )
-        resp.raise_for_status()
-        return resp.json()
 
     async def add_evidence(
         self,
@@ -2312,43 +2298,6 @@ class MipitiClient:
         return await self._put(f"/api/organizations/{org_id}", body)
 
     # ------------------------------------------------------------------
-    # System Compliance
-    # ------------------------------------------------------------------
-
-    async def select_system_compliance_frameworks(
-        self, system_id: str, framework_ids: list[str],
-    ) -> SystemSelectFrameworksResult:
-        data = await self._post(
-            f"/api/systems/{system_id}/compliance/frameworks",
-            {"framework_ids": framework_ids},
-        )
-        return SystemSelectFrameworksResult.model_validate(data)
-
-    async def get_system_compliance_report(
-        self,
-        system_id: str,
-        framework_id: str,
-        level: int | None = None,
-        status: str = "",
-        offset: int = 0,
-        limit: int = 0,
-    ) -> ComplianceReport:
-        params: dict[str, Any] = {}
-        if level is not None:
-            params["level"] = level
-        if status:
-            params["status"] = status
-        if offset:
-            params["offset"] = offset
-        if limit:
-            params["limit"] = limit
-        data = await self._get(
-            f"/api/systems/{system_id}/compliance/{framework_id}/report",
-            params=params,
-        )
-        return ComplianceReport.model_validate(data)
-
-    # ------------------------------------------------------------------
     # Assertions & Verification
     # ------------------------------------------------------------------
 
@@ -2576,14 +2525,6 @@ class MipitiClient:
         """
         return await self._get(f"/api/models/{model_id}/remediation")
 
-    async def get_system_risk_view(self, system_id: str) -> SystemRiskView:
-        """System-level cross-model Prioritized Risk View: one row per
-        live Control Objective across every model in the system, with
-        model context attached to each row.
-        """
-        data = await self._get(f"/api/systems/{system_id}/risk-view")
-        return SystemRiskView.model_validate(data)
-
     async def list_risk_acceptances(self, model_id: str) -> list[dict[str, Any]]:
         """List all risk acceptances on a specific threat model.
 
@@ -2635,31 +2576,8 @@ class MipitiClient:
         return list(data) if isinstance(data, list) else data
 
     # ------------------------------------------------------------------
-    # Systems
+    # Onboarding
     # ------------------------------------------------------------------
-
-    async def list_systems(self) -> list[System]:
-        data = await self._get("/api/systems")
-        return [System.model_validate(s) for s in data]
-
-    async def get_system(self, system_id: str) -> System:
-        data = await self._get(f"/api/systems/{system_id}")
-        return System.model_validate(data)
-
-    async def create_system(
-        self, name: str, description: str = "",
-    ) -> System:
-        body: dict[str, Any] = {"name": name}
-        if description:
-            body["description"] = description
-        data = await self._post("/api/systems", body)
-        return System.model_validate(data)
-
-    async def add_model_to_system(self, system_id: str, model_id: str) -> OkResult:
-        data = await self._post(
-            f"/api/systems/{system_id}/models", {"model_id": model_id},
-        )
-        return OkResult.model_validate(data)
 
     async def complete_setup_step(self, step_id: str) -> dict:
         return await self._patch("/api/onboarding", {"check": step_id})

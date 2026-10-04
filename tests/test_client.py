@@ -526,39 +526,6 @@ _SAMPLE_MODEL_RISK_VIEW = {
 }
 
 
-_SAMPLE_SYSTEM_RISK_VIEW = {
-    "system_id": "sys-1",
-    "system_name": "Customer Platform",
-    "models": [
-        {"id": "tm-001", "title": "Login Service"},
-        {"id": "tm-002", "title": "Payments Service"},
-    ],
-    "total": 2,
-    "rows": [
-        {
-            "model_id": "tm-001", "model_title": "Login Service",
-            "co_id": "CO1", "co_statement": "Protect session tokens",
-            "asset_id": "A1", "asset_name": "Session Token",
-            "attacker_id": "T1", "attacker_capability": "Network adversary",
-            "impact": "H", "likelihood": "M", "risk_tier": "high",
-            "total_controls": 3, "implemented_controls": 2,
-            "verified_controls": 1, "open_findings": 1,
-            "coverage_ratio": 0.66,
-        },
-        {
-            "model_id": "tm-002", "model_title": "Payments Service",
-            "co_id": "CO9", "co_statement": "Protect cardholder data at rest",
-            "asset_id": "A4", "asset_name": "Card Token Store",
-            "attacker_id": "T3", "attacker_capability": "Insider",
-            "impact": "H", "likelihood": "M", "risk_tier": "high",
-            "total_controls": 4, "implemented_controls": 2,
-            "verified_controls": 1, "open_findings": 0,
-            "coverage_ratio": 0.5,
-        },
-    ],
-}
-
-
 _SAMPLE_RISK_ACCEPTANCES = [
     {
         "id": "RA-1", "model_id": "tm-001",
@@ -651,22 +618,6 @@ async def test_get_model_risk_view(mock_env: None) -> None:
     assert view.total == 1
     assert view.rows[0]["co_id"] == "CO1"
     assert view.rows[0]["coverage_ratio"] == 0.66
-    await client.close()
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_system_risk_view(mock_env: None) -> None:
-    route = respx.get(
-        "https://test.api.mipiti.io/api/systems/sys-1/risk-view"
-    ).mock(return_value=httpx.Response(200, json=_SAMPLE_SYSTEM_RISK_VIEW))
-    client = MipitiClient()
-    view = await client.get_system_risk_view("sys-1")
-    assert route.called
-    assert view.system_id == "sys-1"
-    assert view.total == 2
-    # Every row carries model context.
-    assert all("model_id" in r and "model_title" in r for r in view.rows)
     await client.close()
 
 
@@ -1909,6 +1860,23 @@ async def test_tag_crud_and_membership(mock_env: None) -> None:
     await client.remove_model_from_tag("tag1", "m1")
     rv = await client.get_tag_risk_view("tag1")
     assert rv["tag_id"] == "tag1"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_tag_and_its_dependencies(mock_env: None) -> None:
+    respx.get(f"{_BASE}/api/tags/tag1").mock(
+        return_value=httpx.Response(200, json={"id": "tag1", "model_ids": ["m1"]}),
+    )
+    respx.get(f"{_BASE}/api/tags/tag1/dependencies").mock(
+        return_value=httpx.Response(200, json={"tag_id": "tag1", "edges": [], "total": 0}),
+    )
+    client = MipitiClient()
+    tag = await client.get_tag("tag1")
+    assert tag["model_ids"] == ["m1"]
+    deps = await client.get_tag_dependencies("tag1")
+    assert deps["edges"] == []
     await client.close()
 
 

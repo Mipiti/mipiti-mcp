@@ -296,8 +296,7 @@ class SelectFrameworksResult(_Base):
 
 
 class ComplianceReport(_Base):
-    """A model's or a system's report on one framework (the scope's id is
-    ``model_id`` or ``system_id``)."""
+    """A model's report on one framework."""
     framework_id: str = ""
     framework_name: str = ""
     total_requirements: int = 0
@@ -346,7 +345,7 @@ class RemediationApplyResult(_Base):
 
 
 # ------------------------------------------------------------------
-# Workspaces & Systems
+# Workspaces
 # ------------------------------------------------------------------
 
 
@@ -355,23 +354,6 @@ class Workspace(_Base):
     name: str = ""
     description: str = ""
     is_personal: bool = False
-
-
-class System(_Base):
-    """A system. The listing gives each one's ``model_count``; creating or
-    reading one gives its ``model_ids`` (and, read, its ``models``)."""
-    id: str = ""
-    workspace_id: str = ""
-    name: str = ""
-    description: str = ""
-    model_count: int | None = None
-    model_ids: list[str] | None = None
-
-
-class SystemSelectFrameworksResult(_Base):
-    """The frameworks selected, and how many member models they reached."""
-    selected: list[str] = []
-    propagated_to_models: int = 0
 
 
 # ------------------------------------------------------------------
@@ -456,18 +438,6 @@ class ModelRiskView(_Base):
     rows: list[dict[str, Any]] = []
 
 
-class SystemRiskView(_Base):
-    """System-level cross-model Prioritized Risk View. One row per live
-    Control Objective across every model in the system, with model
-    context attached to each row."""
-
-    system_id: str = ""
-    system_name: str = ""
-    total: int = 0
-    models: list[dict[str, Any]] = []
-    rows: list[dict[str, Any]] = []
-
-
 # ------------------------------------------------------------------
 # Generic action results
 # ------------------------------------------------------------------
@@ -476,7 +446,3 @@ class SystemRiskView(_Base):
 class RenameResult(_Base):
     id: str = ""
     title: str = ""
-
-
-class OkResult(_Base):
-    ok: bool = False

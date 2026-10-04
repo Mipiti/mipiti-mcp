@@ -97,7 +97,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `list_threat_models` — browse existing models.
 - `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
 - `delete_threat_model` — permanently delete a model and all its data.
-- `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces the group/tag auditor report (see Tags).
+- `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces a tag's auditor report (see Tags).
 - `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
 
 ## Controls and assertions
@@ -184,7 +184,7 @@ For controls with status not_implemented, determine whether the code already imp
 - `submit_findings` — report confirmed gaps where controls are missing.
 - `list_findings` / `update_finding` — track finding lifecycle.
 - `get_findings_risks` — workspace-wide dashboard: open findings, active risk acceptances, and at-risk Control Objectives in one call. Use as the triage entry point when the operator asks "what's open?" / "what should I work on next?".
-- `get_risk_view` — Prioritized Risk View rows for a specific target (pass the scope — a model, a system, or a tag/group) with risk dimensions, control coverage counts, and open-finding counts per CO. Use when narrowing from workspace-wide to a specific target.
+- `get_risk_view` — Prioritized Risk View rows for a specific target (pass the scope — a model, or a tag) with risk dimensions, control coverage counts, and open-finding counts per CO. Use when narrowing from workspace-wide to a specific target.
 - `get_remediation_leverage` — for one model, the not-yet-satisfied controls ranked by how many control objectives each closes, plus a greedy minimal fix order. Use to prioritize implementation: which controls to build first for the shortest path to coverage; each entry names its owning model, so a high-leverage control inherited from a parent model is clear.
 - `list_risk_acceptances` — see which risks have been explicitly accepted on a model (with owner, justification, review deadline) so you can separate intentional acceptances from genuinely unaddressed gaps.
 - `create_risk_acceptance` — record a deliberate acceptance of a control objective's residual risk (owner, justification, review deadline) so a known-and-accepted decision is explicit and auditable rather than an implicit gap.
@@ -299,14 +299,15 @@ A delegated objective is credited only while the provider control stays verified
 
 ## Tags (grouping)
 
-A *tag* is an overlapping, semantics-free grouping of models — for audit scopes, ad-hoc selections, or portfolios. It is a label, not a relationship: a model may carry MANY tags, and a tag never affects posture or credit (that's what delegation and composition are for). Use tags to organize and to get an aggregate risk view across a chosen set of models. Tags and systems are both *groups*; the `kind` param on the group tools selects which kind.
+A *tag* is an overlapping, semantics-free grouping of models — for audit scopes, ad-hoc selections, products or portfolios. It is a label, not a relationship: a model may carry MANY tags, and a tag never affects posture or credit (that's what delegation and composition are for). Use tags to organize and to get an aggregate view across a chosen set of models. The group tools act on tags.
 
-- `create_group(kind="tag")` / `delete_group` — create or remove a tag (deleting affects the grouping only, never the member models).
-- `add_model_to_group(kind="tag")` / `remove_model_from_group` — manage membership; a model can be in many tags at once.
-- `list_groups(kind="tag")` / `list_model_groups` — browse tags, or a model's tags.
-- `get_risk_view` — aggregate per-CO risk across a tag's members (pass the tag/group as scope). Delegation-aware, so a CO mitigated via a verified cross-model delegation reads as covered, consistent with the per-model assessment.
+- `create_group` / `delete_group` — create or remove a tag (deleting affects the grouping only, never the member models).
+- `add_model_to_group` / `remove_model_from_group` — manage membership; a model can be in many tags at once. A model added to a tag takes on the frameworks the tag selected.
+- `list_groups` / `get_group` / `list_model_groups` — browse tags, read one with its members, or list a model's tags.
+- `get_group_dependencies` — the reliance edges among a tag's members, each with its status and whether it credits its objective.
+- `get_risk_view` — aggregate per-CO risk across a tag's members (`scope="tag"`). Delegation-aware, so a CO mitigated via a verified cross-model delegation reads as covered, consistent with the per-model assessment.
 
-A tag can also be a **compliance / audit scope** spanning several models: `select_compliance_frameworks` scoped to the tag selects frameworks for the tag and propagates them to its members; `get_compliance_report` scoped to the tag gives cross-model requirement coverage; `export_report` scoped to the tag produces the signed auditor HTML (member reports + cross-model dependency graph + attestation status) — the tag equivalents of the system-level compliance report and auditor export.
+A tag can also be a **compliance / audit scope** spanning several models: `select_compliance_frameworks` scoped to the tag selects frameworks for the tag and propagates them to its members; `get_compliance_report` scoped to the tag gives cross-model requirement coverage; `export_report` scoped to the tag produces the signed auditor HTML (every member's report, after the reliance edges among the members with their status).
 
 ## Functional conformance
 
@@ -328,8 +329,8 @@ _INSTRUCTIONS_COMPLIANCE = """\
 
 1. `list_compliance_frameworks` — available frameworks (SOC 2, ISO 27001, etc.).
 2. `import_compliance_framework` — import a customer-specific framework (regulatory, contractual, or internal program not covered by the built-ins). Accepts a JSON body with `name`, `requirements`, and the optional `level_definitions` per-level legend.
-3. `select_compliance_frameworks` — activate frameworks for a model (or, by scope, for a system or tag/group). **Automatically triggers auto-remediation**: maps existing controls, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for remaining gaps. Returns `auto_remediate_jobs` with job IDs for polling.
-4. `get_compliance_report` — coverage report for a model, system, or tag/group by scope (run after auto-remediation completes).
+3. `select_compliance_frameworks` — activate frameworks for a model (or, by scope, for a tag). **Automatically triggers auto-remediation** for a model: maps existing controls, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for remaining gaps. Returns `auto_remediate_jobs` with job IDs for polling.
+4. `get_compliance_report` — coverage report for a model, or for a tag by scope (run after auto-remediation completes).
 5. `auto_remediate_compliance` — re-trigger auto-remediation manually (e.g. after model changes).
 6. `auto_map_controls` — map controls to framework requirements (runs automatically during auto-remediation, but can be triggered independently).
 7. `map_control_to_requirement` — manually map a specific control to a specific requirement (use when auto-mapping misses or misassigns).
@@ -342,14 +343,9 @@ Some frameworks (IEC 62443, ISO/SAE 21434, NIST CSF, FIPS 140-3, Common Criteria
 - `set_control_objective_cal` — set per-CO ISO/SAE 21434 Cybersecurity Assurance Level (1-4). Lives on the CO identity table; survives soft-delete.
 - `update_organization` — set per-org IEC 62443-4-1 Maturity Level (1-5) and NIST CSF Tier (1-4). Admin-only.
 
-## Systems and workspaces
+## Workspaces
 
 - Every MCP credential is bound to one workspace when it is issued (an API key by its scope, an OAuth token by the workspace chosen on the consent screen), and every tool operates in that workspace. To work in another workspace, connect with a credential issued for it; there is no tool that lists or switches workspaces.
-- `list_groups(kind="system")` / `get_group` — browse and retrieve system groups. Systems and tags are both *groups*; the `kind` param selects which kind.
-- `create_group(kind="system")` / `add_model_to_group(kind="system")` — group related models into a system.
-- `get_system_dependencies` — view cross-model dependency graph. Shows which assumptions are linked to other models and whether they are satisfied.
-- `link_system_dependency` — link an external assumption to a target model in the same system. Makes it a cross-model dependency that appears as a compliance requirement on the target model. Two independent satisfaction paths: auto-attestation from target controls (no manual action needed), or manual attestation via `submit_attestation`. Either alone suffices.
-- `select_compliance_frameworks` / `get_compliance_report` (both scoped to the system) — cross-model compliance reporting.
 
 ## Components
 
@@ -2214,8 +2210,11 @@ async def decide_reconciliation_candidate(
     ``inherited_qid`` are the pair's qualified ids (``"child:A1"``,
     ``"parent:A1"``).
 
-    - ``decision="apply"`` soft-deletes the descendant's own duplicate so the
-      inherited entity becomes canonical. A ``heuristic``-tier candidate is
+    - ``decision="apply"`` records that the descendant's own entity IS the
+      inherited one: the own entity stays in the model and is left out of its
+      composed view, so the inherited entity is canonical and credit keys on
+      it. The record is dropped when the pair stops matching (an edit, a
+      re-parent). A ``heuristic``-tier candidate is
       refused unless ``confirm_heuristic=True`` acknowledges its structural
       divergence. The server re-validates the pair (400 when the model has
       moved since: refresh the list). Bumps the model version; returns
@@ -3726,26 +3725,31 @@ async def edit_component(
 
 
 @mcp.tool()
-async def get_system_dependencies(
+async def get_group_dependencies(
     server_version: str,
-    system_id: str,
+    group_id: str,
 ) -> dict:
-    """Get the cross-model dependency graph for a system. Read-only; no side effects.
+    """The reliance edges among a tag's member models. Read-only; no side effects.
 
-    Returns every assumption in the system's member models that is linked to another member model (a cross-model dependency), with its satisfaction status. A dependency is satisfied when either the target model's mapped controls are implemented or a valid manual attestation exists.
+    Returns ``{tag_id, tag_name, models, edges, total}``: one row per edge a
+    member declared on another model's control (``manage_reliance`` /
+    ``attach_foundation``), with both models' titles, the ``mode``
+    (``delegated`` or ``relied_upon``), the source objective or control, the
+    provider control, its ``status`` (``draft``, ``active``, ``broken``,
+    ``rejected``), ``validation_verdict`` and ``credit_state`` (whether it
+    credits its objective now). Empty when no member relies on another.
 
-    Use to see which assumptions are met by other models' controls, find unsatisfied dependencies, or check system-level completeness. Create these links with link_system_dependency.
+    Use it to review the cross-model dependencies of a product or audit
+    scope before an auditor export, or to find broken edges. A model's own
+    edges, in both directions, are ``list_reliance``.
 
     Args:
-        system_id: ID of the system.
+        group_id: ID of the tag.
     """
     try:
-        return _dump(await _get_client().get_system_dependencies(system_id))
+        return await _get_client().get_tag_dependencies(group_id)
     except Exception as exc:
         raise _api_error(exc) from exc
-
-
-# === System Compliance ===
 
 
 # === Assertions & Verification ===
@@ -5362,7 +5366,7 @@ async def get_entity(
     - ``assumption`` — the assumption with its override applied (mirrors
       ``list_assumptions``' merge for one entity: typed fields, the
       structured ``exclusion`` predicate when present, and the override
-      layer — status / justification / linked CO IDs / target model).
+      layer — status / justification / linked CO IDs).
       Soft-deleted assumptions carry ``deleted: true``. ``entity_id``
       e.g. ``AS-01``.
 
@@ -5510,7 +5514,7 @@ async def restore_entity(
 @mcp.tool()
 async def get_risk_view(
     server_version: str,
-    scope: Literal["model", "system", "tag"],
+    scope: Literal["model", "tag"],
     scope_id: str,
 ) -> dict:
     """Prioritized Risk View — one row per live Control Objective — at a chosen scope. Read-only; no side effects.
@@ -5518,21 +5522,18 @@ async def get_risk_view(
     ``scope`` selects the aggregation boundary and how ``scope_id`` is interpreted:
 
     - ``"model"`` — a single threat model (``scope_id`` = model id). One row per live CO with derived risk tier, asset impact, attacker likelihood, control coverage counts (``coverage_ratio``), and open-finding count (``open_findings``). Tombstoned COs are excluded; pair with ``get_threat_model`` if historical context is needed. Use to triage which COs need attention on one model — a single call ranks the work, no per-CO fan-out.
-    - ``"system"`` — every model in a System, a group of related threat models (``scope_id`` = system id). Same row shape as ``model`` with ``model_id`` and ``model_title`` added per row, so rows can be grouped/filtered by source model without an extra lookup. Use for posture queries spanning multiple models in the same product or service.
-    - ``"tag"`` — every member model of a tag, a freely-composed cohort (``scope_id`` = tag id). One delegation-aware row per CO across members (``delegation_mitigated`` / ``delegating_controls``): a CO mitigated via a verified cross-model delegation reads as covered, consistent with each model's own assessment. Use for a portfolio/audit-scope posture rollup.
+    - ``"tag"`` — every member model of a tag (``scope_id`` = tag id). The same row shape with ``model_id`` and ``model_title`` added per row, so rows can be grouped by source model without an extra lookup, and delegation-aware (``delegation_mitigated`` / ``delegating_controls``): a CO mitigated via a verified cross-model delegation reads as covered, consistent with each model's own assessment. Use for a product, portfolio or audit-scope posture rollup.
 
     Args:
-        scope: aggregation boundary — "model", "system", or "tag".
-        scope_id: id of the model, system, or tag selected by ``scope``.
+        scope: aggregation boundary — "model" or "tag".
+        scope_id: id of the model or tag selected by ``scope``.
     """
-    if scope not in ("model", "system", "tag"):
-        raise ToolError("scope must be 'model', 'system', or 'tag'.")
+    if scope not in ("model", "tag"):
+        raise ToolError("scope must be 'model' or 'tag'.")
     try:
         client = _get_client()
         if scope == "model":
             return _dump(await client.get_model_risk_view(scope_id))
-        if scope == "system":
-            return _dump(await client.get_system_risk_view(scope_id))
         return _dump(await client.get_tag_risk_view(scope_id))
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -5540,7 +5541,7 @@ async def get_risk_view(
 @mcp.tool()
 async def get_compliance_report(
     server_version: str,
-    scope: Literal["model", "system", "tag"],
+    scope: Literal["model", "tag"],
     scope_id: str,
     framework_id: str,
     level: Optional[int] = None,
@@ -5548,48 +5549,43 @@ async def get_compliance_report(
     offset: int = 0,
     limit: int = 0,
 ) -> dict:
-    """Compliance gap-analysis report for one framework at a chosen scope. Read-only; no side effects. System/tag scopes require PRO tier.
+    """Compliance gap-analysis report for one framework at a chosen scope. Read-only; no side effects. Requires PRO tier.
 
     Evaluates every framework requirement against the mapped controls in scope and classifies each as covered, partial, uncovered, unmapped, or excluded, then returns coverage counts plus per-requirement rows. The framework must first be activated at the same scope via ``select_compliance_frameworks`` (with the matching ``scope``), otherwise there is nothing to report on.
 
     ``scope`` selects the boundary and how ``scope_id`` is read:
 
     - ``"model"`` — a single threat model (``scope_id`` = model id).
-    - ``"system"`` — rolled up across every model in a System, a group of related threat models (``scope_id`` = system id).
-    - ``"tag"`` — rolled up across every member model of a tag cohort, a freely-composed set of models (``scope_id`` = tag id).
+    - ``"tag"`` — rolled up across every member model of a tag (``scope_id`` = tag id).
 
     Filtering / pagination:
 
     - ``level`` — level filter for level-aware frameworks; returns only requirements at or below this level (e.g. 1 for L1 only). Omit (or 0) for all levels. Honored for all scopes.
-    - ``status`` — one of "covered", "partial", "uncovered", "unmapped", "excluded"; empty = all statuses. **Model and system scopes only.**
-    - ``offset`` / ``limit`` — per-requirement row pagination; offset skips the first N rows, limit caps rows returned (0 = no explicit limit). **Model and system scopes only.**
+    - ``status`` — one of "covered", "partial", "uncovered", "unmapped", "excluded"; empty = all statuses. **Model scope only.**
+    - ``offset`` / ``limit`` — per-requirement row pagination; offset skips the first N rows, limit caps rows returned (0 = no explicit limit). **Model scope only.**
 
     A tag report is neither paginated nor status-filtered; passing ``status``, ``offset``, or ``limit`` with ``scope="tag"`` raises an error rather than silently returning unfiltered rows.
 
     Args:
-        scope: report boundary — "model", "system", or "tag".
-        scope_id: id of the model, system, or tag selected by ``scope``.
+        scope: report boundary — "model" or "tag".
+        scope_id: id of the model or tag selected by ``scope``.
         framework_id: framework to report on (already selected at this scope; see ``list_compliance_frameworks``).
         level: optional level filter; omit for all levels.
-        status: optional per-requirement status filter (model/system scopes only).
-        offset: skip the first N requirement rows, pagination (model/system scopes only). Default 0.
-        limit: max requirement rows to return, 0 = no explicit limit (model/system scopes only).
+        status: optional per-requirement status filter (model scope only).
+        offset: skip the first N requirement rows, pagination (model scope only). Default 0.
+        limit: max requirement rows to return, 0 = no explicit limit (model scope only).
     """
-    if scope not in ("model", "system", "tag"):
-        raise ToolError("scope must be 'model', 'system', or 'tag'.")
+    if scope not in ("model", "tag"):
+        raise ToolError("scope must be 'model' or 'tag'.")
     if scope == "tag" and (status or offset or limit):
         raise ToolError(
-            "status/offset/limit are supported only for scope='model' or 'system'; "
+            "status/offset/limit are supported only for scope='model'; "
             "tag compliance reports are not paginated or status-filtered."
         )
     try:
         client = _get_client()
         if scope == "model":
             return _dump(await client.get_compliance_report(
-                scope_id, framework_id, level, status or "", offset, limit,
-            ))
-        if scope == "system":
-            return _dump(await client.get_system_compliance_report(
                 scope_id, framework_id, level, status or "", offset, limit,
             ))
         return _dump(await client.get_tag_compliance_report(
@@ -5601,7 +5597,7 @@ async def get_compliance_report(
 @mcp.tool()
 async def select_compliance_frameworks(
     server_version: str,
-    scope: Literal["model", "system", "tag"],
+    scope: Literal["model", "tag"],
     scope_id: str,
     framework_ids: str,
 ) -> dict:
@@ -5612,23 +5608,20 @@ async def select_compliance_frameworks(
     ``scope`` selects the target and how ``scope_id`` is read:
 
     - ``"model"`` — a single threat model (``scope_id`` = model id). Activating a framework also kicks off background auto-remediation: it auto-maps existing controls to requirements, excludes non-applicable requirements by taxonomy, and suggests/applies new entities for the remaining gaps. The response includes ``auto_remediate_jobs``, which run and complete on their own; re-trigger later with ``auto_remediate_compliance`` if the model changes.
-    - ``"system"`` — a System, i.e. a group of related threat models (``scope_id`` = system id). Sets the system's active frameworks for portfolio-level compliance reporting.
-    - ``"tag"`` — a tag cohort (``scope_id`` = tag id). Records the frameworks against the tag AND propagates them to every member model, making the tag a compliance scope (e.g. an audit boundary) spanning several models.
+    - ``"tag"`` — a tag (``scope_id`` = tag id). Records the frameworks against the tag AND propagates them to every member model, and to every model added to the tag later, making the tag a compliance scope (e.g. an audit boundary) spanning several models.
 
     Args:
-        scope: target boundary — "model", "system", or "tag".
-        scope_id: id of the model, system, or tag selected by ``scope``.
+        scope: target boundary — "model" or "tag".
+        scope_id: id of the model or tag selected by ``scope``.
         framework_ids: comma-separated framework ids (e.g. "asvs-4.0,nist-csf").
     """
-    if scope not in ("model", "system", "tag"):
-        raise ToolError("scope must be 'model', 'system', or 'tag'.")
+    if scope not in ("model", "tag"):
+        raise ToolError("scope must be 'model' or 'tag'.")
     parsed_ids = [f.strip() for f in framework_ids.split(",") if f.strip()]
     try:
         client = _get_client()
         if scope == "model":
             return _dump(await client.select_compliance_frameworks(scope_id, parsed_ids))
-        if scope == "system":
-            return _dump(await client.select_system_compliance_frameworks(scope_id, parsed_ids))
         return _dump(await client.select_tag_compliance_frameworks(scope_id, parsed_ids))
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -5641,7 +5634,7 @@ async def export_report(
     ctx: Context,
     format: Literal["csv", "pdf", "html", "archive"] = "csv",
 ) -> dict:
-    """Export a threat model or a tag cohort as a downloadable document. Read-only; no side effects on the source.
+    """Export a threat model or a tag as a downloadable document. Read-only; no side effects on the source.
 
     ``scope`` selects what is exported and how ``scope_id`` is read; ``format`` selects the representation:
 
@@ -5649,7 +5642,7 @@ async def export_report(
         - ``csv`` — the model's current state rendered as CSV; returned inline as UTF-8 text in ``content``.
         - ``pdf`` / ``html`` — rendered document returned base64-encoded in ``content_b64`` (with ``content_type``). Runs as a server-side job; progress is reported automatically while it completes, which may take time for large models.
         - ``archive`` — the self-contained, independently-verifiable JSON audit bundle of the model's current state: its latest version and controls, live assertions (with Tier 1 / Tier 2 verdicts and attested flags) and the runs behind them, open findings and those a person closed, risk acceptances and other decisions in force, assumption overrides, attestations, and instance sufficiency signatures; each control's per-clause evidence basis travels with it. Earlier versions, activity and chat are not in it. Those verdicts are the origin's record of what it claimed, which is what a third party checks against the signatures; an importing workspace credits what its own verification establishes (see ``import_threat_model_archive``). Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
-    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, aggregating every member model's report plus the cross-model dependency graph and attestation status into one HTML document, returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
+    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, every member model's report after the reliance edges among the members (each with its status and whether it credits its objective), in one HTML document returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
 
     Args:
         scope: export boundary — "model" or "tag".
@@ -5712,224 +5705,134 @@ async def export_report(
         raise _api_error(exc) from exc
 
 @mcp.tool()
-async def list_groups(server_version: str, kind: str) -> dict:
-    """List the workspace's groups of a given kind. Read-only; no side effects.
+async def list_groups(server_version: str) -> dict:
+    """List the workspace's tags. Read-only; no side effects.
 
-    A \"group\" is a named collection of threat models. Two kinds, with distinct
-    semantics and DIFFERENT response shapes:
+    A tag is a named, overlapping grouping of threat models, for audit
+    scopes, products, ad-hoc selections or portfolios. A model may carry many
+    tags, and a tag never affects posture or credit. Returns ``{"tags": [...]}``,
+    each with ``id``, ``name``, ``description`` and ``model_ids``.
 
-    ``kind`` values:
-      - ``\"tag\"``: overlapping, semantics-free groupings — for audit scopes,
-        ad-hoc selections, or portfolios. A model may carry many tags, and a
-        tag never affects posture or credit. Returns ``{\"tags\": [...]}``.
-      - ``\"system\"``: named groupings of threat models for portfolio-level
-        risk and compliance reporting; unlike tags these drive system-scoped
-        risk/compliance rollups. Returns ``{\"items\": [<system>, ...]}`` where
-        each system carries ``id``, ``name``, ``description``, ``model_count``.
-
-    Discover group IDs here before the group risk/compliance/export tools or
-    before adding/removing members. For a single model's tag memberships use
-    ``list_model_groups``.
-
-    Args:
-        kind: ``\"tag\"`` or ``\"system\"``.
+    Discover tag IDs here before the tag risk, compliance, dependency or
+    export tools, or before adding/removing members. For a single model's
+    tags use ``list_model_groups``.
     """
-    if kind not in ("tag", "system"):
-        raise ToolError("kind must be 'tag' or 'system'.")
     try:
-        client = _get_client()
-        if kind == "tag":
-            return await client.list_tags()
-        return _dump(await client.list_systems())
+        return await _get_client().list_tags()
     except Exception as exc:
         raise _api_error(exc) from exc
 
 @mcp.tool()
 async def create_group(
     server_version: str,
-    kind: str,
     name: str,
     description: str = "",
     model_ids: list[str] | None = None,
 ) -> dict:
-    """Create a group (tag or system), optionally seeding tag members. Mutating.
+    """Create a tag, optionally with its first members. Mutating.
 
-    A \"group\" is a named collection of threat models. Group names are unique
-    per workspace within their kind.
-
-    ``kind`` values:
-      - ``\"tag\"``: an overlapping, semantics-free grouping — for viewing/
-        reporting without asserting any relationship between members and
-        without moving credit. Honors ``model_ids`` as an initial member seed.
-        Returns the created tag.
-      - ``\"system\"``: a named grouping for portfolio-level risk and compliance
-        reporting. Systems are NOT seeded at creation — ``model_ids`` must be
-        omitted/empty for ``kind=\"system\"`` (passing members raises); add them
-        afterward with ``add_model_to_group(kind=\"system\", ...)``. Returns the
-        created system with its new ID.
+    A tag groups models for viewing and reporting without asserting any
+    relationship between them and without moving credit. Names are unique
+    within the workspace (409 on a clash). Every model named in ``model_ids``
+    must be one the caller can access in this workspace.
 
     Args:
-        kind: ``\"tag\"`` or ``\"system\"``.
-        name: the group name (unique within the workspace for its kind).
+        name: the tag name (unique within the workspace).
         description: optional description.
-        model_ids: optional initial member model ids — ``\"tag\"`` only.
+        model_ids: optional initial member model ids.
+
+    Returns the created tag.
     """
-    if kind not in ("tag", "system"):
-        raise ToolError("kind must be 'tag' or 'system'.")
-    if kind == "system" and model_ids:
-        raise ToolError(
-            "model_ids seeding is only supported for kind='tag'. Create the "
-            "system first, then add members with "
-            "add_model_to_group(kind='system', ...).",
-        )
     try:
-        client = _get_client()
-        if kind == "tag":
-            return await client.create_tag(name, description, model_ids or [])
-        return _dump(await client.create_system(name, description))
+        return await _get_client().create_tag(name, description, model_ids or [])
     except Exception as exc:
         raise _api_error(exc) from exc
 
 @mcp.tool()
 async def add_model_to_group(
-    server_version: str, kind: str, group_id: str, model_id: str,
+    server_version: str, group_id: str, model_id: str,
 ) -> dict:
-    """Add a threat model to a group as a member. Mutating.
+    """Add a threat model to a tag. Mutating.
 
-    Links the model into the group without moving or copying it — the model
-    stays independently editable. Both the group and the model must already
-    exist.
-
-    ``kind`` values:
-      - ``\"tag\"``: add the model to a tag. Membership is overlapping — a model
-        may belong to many tags. Returns the updated tag payload.
-      - ``\"system\"``: add the model to a system container for portfolio-level
-        risk and compliance reporting. Returns an ok result.
-
-    Note: member REMOVAL is tag-only (see ``remove_model_from_group``); the
-    API has no remove-member endpoint for systems.
+    Links the model into the tag without moving or copying it; the model
+    stays independently editable, and may belong to many tags. The model
+    takes on the compliance frameworks the tag selected, marked as the
+    tag's, so removing a framework from the tag removes it from the model
+    again; a framework the model selected itself is left as it is.
 
     Args:
-        kind: ``\"tag\"`` or ``\"system\"``.
-        group_id: ID of the tag or system.
+        group_id: ID of the tag.
         model_id: ID of the threat model to add.
+
+    Returns the updated tag.
     """
-    if kind not in ("tag", "system"):
-        raise ToolError("kind must be 'tag' or 'system'.")
     try:
-        client = _get_client()
-        if kind == "tag":
-            return await client.add_model_to_tag(group_id, model_id)
-        return _dump(await client.add_model_to_system(group_id, model_id))
+        return await _get_client().add_model_to_tag(group_id, model_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 
 @mcp.tool()
-async def get_group(server_version: str, system_id: str) -> dict:
-    """Get a system group by ID, including summaries of its member threat models. Read-only; no side effects.
+async def get_group(server_version: str, group_id: str) -> dict:
+    """Get one tag by ID, with its member model ids. Read-only; no side effects.
 
-    Single-group fetch is supported for SYSTEMS ONLY — tags have no
-    fetch-by-id endpoint; enumerate tags with ``list_groups(kind=\"tag\")`` and
-    a single model's tag memberships with ``list_model_groups``. A system is a
-    named grouping of threat models for portfolio-level risk and compliance
-    reporting. Discover system IDs with ``list_groups(kind=\"system\")``; add
-    members with ``add_model_to_group(kind=\"system\", ...)``.
+    Returns ``{id, workspace_id, name, description, created_at, model_ids}``.
+    Discover tag IDs with ``list_groups``.
 
     Args:
-        system_id: ID of the system to retrieve.
+        group_id: ID of the tag.
     """
     try:
-        return _dump(await _get_client().get_system(system_id))
+        return await _get_client().get_tag(group_id)
     except Exception as exc:
         raise _api_error(exc) from exc
 
 @mcp.tool()
-async def delete_group(server_version: str, tag_id: str) -> dict:
-    """Delete a tag group (the grouping only; member models are not affected).
+async def delete_group(server_version: str, group_id: str) -> dict:
+    """Delete a tag. Mutating; the member models are not affected.
 
-    Deletion is supported for TAGS ONLY — systems have no delete endpoint on
-    this API. A tag is an overlapping, semantics-free grouping; removing it
-    leaves its member models untouched.
+    The tag's framework selections, requirement exclusions and relevance
+    data are deleted with it. Frameworks it propagated to its members stay
+    selected on them.
 
     Args:
-        tag_id: ID of the tag to delete.
+        group_id: ID of the tag to delete.
     """
     try:
-        await _get_client().delete_tag(tag_id)
-        return {"deleted": True, "tag_id": tag_id}
+        await _get_client().delete_tag(group_id)
+        return {"deleted": True, "group_id": group_id}
     except Exception as exc:
         raise _api_error(exc) from exc
 
 @mcp.tool()
 async def remove_model_from_group(
-    server_version: str, tag_id: str, model_id: str,
+    server_version: str, group_id: str, model_id: str,
 ) -> dict:
-    """Remove a model from a tag group (the model itself is not deleted).
+    """Remove a model from a tag. Mutating; the model itself is not deleted.
 
-    Member removal is supported for TAGS ONLY — systems have no remove-member
-    endpoint on this API (a model added to a system via
-    ``add_model_to_group(kind=\"system\", ...)`` cannot be detached through
-    this client). Removing a model from a tag leaves the model untouched.
+    The frameworks the tag propagated to the model stay selected on it.
 
     Args:
-        tag_id: the tag.
+        group_id: the tag.
         model_id: the model to remove.
     """
     try:
-        await _get_client().remove_model_from_tag(tag_id, model_id)
-        return {"removed": True, "tag_id": tag_id, "model_id": model_id}
+        await _get_client().remove_model_from_tag(group_id, model_id)
+        return {"removed": True, "group_id": group_id, "model_id": model_id}
     except Exception as exc:
         raise _api_error(exc) from exc
 
 @mcp.tool()
 async def list_model_groups(server_version: str, model_id: str) -> dict:
-    """List the groups a given model belongs to. Read-only; no side effects.
+    """List the tags a given model belongs to. Read-only; no side effects.
 
-    Returns the model's TAG memberships (``/api/models/{id}/tags``) — tags are
-    the overlapping grouping kind, so a model may appear under many. There is
-    no per-model listing for systems; enumerate systems with
-    ``list_groups(kind=\"system\")`` and inspect membership via each system's
-    ``get_group``. Use ``list_groups(kind=\"tag\")`` for all tags in the
-    workspace.
+    A model may belong to many tags. Returns ``{model_id, tags: [...]}``. Use
+    ``list_groups`` for every tag in the workspace.
 
     Args:
-        model_id: the model whose groups (tags) to list.
+        model_id: the model whose tags to list.
     """
     try:
         return await _get_client().list_model_tags(model_id)
-    except Exception as exc:
-        raise _api_error(exc) from exc
-
-@mcp.tool()
-async def link_system_dependency(
-    server_version: str,
-    model_id: str,
-    assumption_id: str,
-    target_model_id: str = "",
-) -> dict:
-    """Link an external assumption to a target model in the same system.
-
-    Makes the assumption a cross-model (system-scoped) dependency: it becomes a
-    compliance requirement on the target model. Two independent satisfaction
-    paths: auto-attestation when the target model's controls satisfy the
-    requirement (no manual action needed), or manual attestation via
-    submit_attestation. Either path alone suffices.
-
-    The assumption must already be linked to control objectives (via
-    add_assumption or edit_assumption with linked_co_ids). Pass empty
-    target_model_id to unlink. Inspect the resulting dependency graph with
-    get_system_dependencies.
-
-    Args:
-        model_id: ID of the threat model containing the assumption.
-        assumption_id: ID of the assumption (e.g., \"AS1\").
-        target_model_id: ID of the target model in the same system.
-            Pass \"\" to unlink.
-    """
-    try:
-        return _dump(await _get_client().link_assumption(
-            model_id, assumption_id, target_model_id,
-        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
