@@ -86,13 +86,14 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `generate_threat_model` — creates a new model with trust boundaries, assets, attackers, and control objectives. Automatically detects similar existing models and routes accordingly. Progress reported automatically.
 - `refine_threat_model` — updates an existing model when you already have a model ID and want to change it. Progress reported automatically.
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
-- `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it attests it and requires `change_reason` on either tool; it is audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
+- `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
+- **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
 - **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving, and both return the entity-change result with the model as it now stands.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
 - `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
-- `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them).
+- `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them). `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and the fields to send).
 - `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
 - `list_threat_models` — browse existing models.
 - `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
@@ -138,7 +139,7 @@ A threat model produces control objectives. Controls are derived from these and 
 
 Sufficiency is evaluated automatically server-side when assertions are submitted — no manual trigger needed.
 
-Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
+Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
 **Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
@@ -224,7 +225,7 @@ Trust boundaries and assumptions are versioned (CRUD creates new model versions 
 **Decision rule — control or assumption?** If a security requirement can be implemented and machine-verified in the codebase → it is a **control**. If it describes a property that must be upheld by an external party (customer, vendor, operator) and cannot be implemented by the system owner → it is an **assumption**. The trust boundary is the dividing line. When in doubt: if you cannot write a codebase assertion that proves it, it is an assumption.
 
 - `get_threat_model` — returns existing trust boundaries (along with assets, attackers, and assumptions). Use this to review current boundaries before adding or modifying them.
-- `add_trust_boundary` / `edit_trust_boundary` — create or edit trust boundaries (defines where trust transitions occur); soft-delete one with `remove_entity(entity_type="trust_boundary")`. `sealed=True` on its own is a suggestion; only an attested seal (`edit_trust_boundary` with `seal_source="attested"` and a `change_reason`) lets reachability decisively drop an objective past the boundary.
+- `add_trust_boundary` / `edit_trust_boundary` — create or edit trust boundaries (defines where trust transitions occur); soft-delete one with `remove_entity(entity_type="trust_boundary")`. `sealed=True` on its own is a suggestion; only an attested seal (`edit_trust_boundary` with `seal_source="attested"` and a `change_reason`, by a person or a program the workspace delegates `seal_attested` to) lets reachability decisively drop an objective past the boundary. A change to the boundary's `passes`, `crosses`, `neighbors` or `sealed` voids the attestation.
 - `add_assumption` — add an assumption, optionally linking it to COs it covers via `linked_co_ids`. Linked assumptions can mitigate COs when attested.
 - `edit_assumption` — update description and/or linked COs.
 - `remove_entity(entity_type="assumption")` — soft-delete an assumption (preserved for audit). Its CO links are cleared and its attestations retired; controls whose `assumption_groups` name it keep their groups, which credit nothing through it while it is deleted.
@@ -376,7 +377,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 `generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
 
-**Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits`, and the `model_version` and `set_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, confirm_estimate=True)`. A `review_stale` refusal means the model or its controls changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
+**Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits` with its basis, and the `model_version`, `set_revision` and `scope_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. The proposal also names what to review first: `flagged_entities` (a judge's warning, a rating nobody chose, a suspected duplicate) and `pending_attestations` (a seal, position or privileges that, once attested, would remove objectives from the build); neither blocks a start. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, scope_revision, confirm_estimate=True)`. A `review_stale` refusal means the model, its controls or the objectives the build would author changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
 **Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_model_change(target="controls")` undoes the latest change (latest first, no redo); `undo_model_change(target="version")` replaces the latest model version with a copy of the latest earlier version not already discarded, keeping the replaced one in the history as discarded.
 
@@ -802,10 +803,10 @@ async def generate_threat_model(
         only by a build someone starts, so generation builds none itself:
         ``proposed`` means a control build is proposed, and ``proposal``
         (with ``controls_expected``, its objective count) says what it would
-        build, its ``estimated_credits``, and the ``model_version`` and
-        ``set_revision`` a start must name. Review the model with the user,
-        then call ``start_control_build`` with those values and
-        ``confirm_estimate=True``. ``none_owed`` means nothing is owed;
+        build, its ``estimated_credits``, and the ``model_version``,
+        ``set_revision`` and ``scope_revision`` a start must name. Review the
+        model with the user, then call ``start_control_build`` with those
+        values and ``confirm_estimate=True``. ``none_owed`` means nothing is owed;
         ``unavailable`` / ``error`` mean the proposal could not be recorded
         (read ``get_control_generation_status``, which carries any proposal).
 
@@ -1332,11 +1333,24 @@ async def get_threat_model(
     model_id: str,
     version: Optional[int] = None,
     include_cos: bool = False,
+    include_inventory_completeness: bool = False,
 ) -> dict:
     """Get a specific threat model by ID.
 
     Returns the full threat model including trust boundaries, assets,
     attackers, control objectives, and assumptions.
+
+    ``include_inventory_completeness=True`` (latest version only) adds
+    ``inventory_completeness``: how much of the inventory the claims rest on,
+    with ``bounded_by`` (the entities holding the tier down) and
+    ``grounding_gaps``, keyed by entity id. Each gap names a ``ground`` the
+    entity lacks (``position``, ``privileges``, ``extent``, ``components``,
+    ``flagged``, ``inherited``), a ``detail``, and ``acts``: each act's
+    ``mcp_tool`` and the ``fields`` to send, a value in angle brackets being
+    yours to fill. Taking every listed act grounds the entity; a gap with no
+    act says no act can supply it on this deployment. An attestation an act
+    names is a judgment (see ``edit_attacker``). ``null`` when the record
+    could not be read.
 
     **Important for agents reading model state:**
 
@@ -1356,9 +1370,18 @@ async def get_threat_model(
         include_cos: Include control objectives inline (default False:
             the answer carries no ``control_objectives`` key; read them
             with ``get_control_objectives``).
+        include_inventory_completeness: Add the completeness record and
+            its ``grounding_gaps`` (default False).
     """
+    if include_inventory_completeness and version is not None:
+        raise ToolError(
+            "include_inventory_completeness reads the latest version; omit version.")
     try:
-        model = await _get_client().get_model(model_id, version)
+        if include_inventory_completeness:
+            model = await _get_client().get_model(
+                model_id, version, include="inventory_completeness")
+        else:
+            model = await _get_client().get_model(model_id, version)
         if include_cos:
             return model.model_dump()
         return model.model_dump(exclude={"control_objectives"})
@@ -1435,41 +1458,39 @@ async def get_control_generation_status(
     model_id: str,
     ctx: Context,
 ) -> dict:
-    """Read a model's control build: the one proposed, and the last one
-    started. Read-only.
+    """A model's proposed control build and its last started one. Read-only.
 
-    A build runs only when someone starts it; a write that owes controls
-    PROPOSES one. ``proposal`` (or null) carries ``mode``,
-    ``objective_count``, ``estimated_credits`` and the ``model_version`` /
-    ``set_revision`` that ``start_control_build`` must name. Poll until
-    ``terminal``; ``hint`` names the next action.
+    A build runs only when started. ``proposal`` (or null): ``mode``,
+    ``objective_count``, ``estimated_credits`` (``estimate_basis``
+    history|bootstrap), the ``model_version`` / ``set_revision`` /
+    ``scope_revision`` ``start_control_build`` names, and what to review:
+    ``flagged_entities``, ``pending_attestations`` (attestations that would
+    remove objectives from the build); ``flags_evaluated`` /
+    ``attestations_evaluated`` false when not computed. Poll until
+    ``terminal``; ``hint`` names the next act.
 
     ``status``: ``queued | generating | deferred | pausing | paused |
     blocked | complete | failed | skipped | discarded | none``. ``deferred``
-    waits for the daily budget reset. ``pausing`` is stopping; ``paused``
-    keeps its staged work until ``resume_control_generation`` (or
-    ``discard_control_build``). ``blocked`` carries ``code``
-    (``dependency_unavailable`` or ``analysis_incomplete``), ``message`` and
-    ``retry_after_seconds``: relay the message and retry with
-    ``resume_control_generation``, never ``regenerate_controls``, which
-    redoes and re-bills the work.
+    waits for the budget reset; ``paused`` keeps its work until
+    ``resume_control_generation`` or ``discard_control_build``. ``blocked``
+    has ``code`` (``dependency_unavailable`` or ``analysis_incomplete``),
+    ``message``, ``retry_after_seconds``: relay it and retry with
+    ``resume_control_generation``, never ``regenerate_controls`` (re-bills).
 
-    While running: ``ready_cos`` / ``target_cos`` count progress, never
-    coverage; ``stage`` names the stage; ``elapsed_seconds`` is the time
-    since the last progress (large means it may be stuck).
-    ``selfheal_activity`` is a SAMPLE of what a strengthening round works
-    on: read ``refining_total`` / ``authoring_total`` / ``set_aside_total``
-    for the counts; ``set_aside`` objectives wait for a person and are
-    NOT a failure.
+    Running: ``ready_cos`` / ``target_cos`` are progress, not coverage.
+    ``selfheal_activity`` is a SAMPLE of a strengthening round: read
+    ``refining_total`` / ``authoring_total`` / ``set_aside_total``;
+    ``set_aside`` waits for a person, NOT a failure.
 
-    Once ``complete``: ``covered_cos`` of ``judged_cos`` objectives would be
-    mitigated by their controls; ``awaiting_judgement_cos`` have no answer
-    yet. ``diagnosis`` counts ``covered``, ``uncovered`` and ``undecided``
-    (what ``strengthen_controls`` works on), ``judging`` (queued: wait),
-    ``not_judged`` (none queued: ``judge_objectives``) and
-    ``awaiting_assumption`` (in the review queue). ``strengthening`` says
-    whether that pass has run. ``analysis_pending`` means the figures may
-    still move; ``duration_seconds`` is the runtime.
+    ``complete``: figures come from ``diagnosis``: ``covered``,
+    ``uncovered``, ``undecided`` (``strengthen_controls``), ``judging``
+    (wait), ``not_judged`` (``judge_objectives``), ``no_group`` (group),
+    ``grouping``, ``no_control`` (start the build), ``awaiting_attestation``
+    (attest), ``awaiting_assumption`` (review queue), ``mitigated_elsewhere``
+    (nothing owed). ``covered_cos`` of ``judged_cos``;
+    ``awaiting_judgement_cos`` = ``not_judged`` + ``judging``;
+    ``excluded_cos``, ``dispositioned_cos`` the rest. ``analysis_pending``:
+    figures may still move.
     """
     try:
         return _dump(
@@ -1685,7 +1706,8 @@ async def regenerate_controls(
     This tool records the regeneration as the model's PROPOSED build and
     returns at once with ``status: "proposed"`` and ``proposal`` (``mode``,
     ``objective_ids``, ``objective_count``, ``estimated_credits``, and the
-    ``model_version`` and ``set_revision`` a start must name). A proposal
+    ``model_version``, ``set_revision`` and ``scope_revision`` a start must
+    name). A proposal
     merges with any already proposed for the model, the broader one winning.
     Show the user what it would build and cost; once they agree, call
     ``start_control_build`` with those values and ``confirm_estimate=True``.
@@ -1727,6 +1749,7 @@ async def start_control_build(
     model_version: Optional[int] = None,
     set_revision: Optional[int] = None,
     confirm_estimate: bool = False,
+    scope_revision: Optional[str] = None,
 ) -> dict:
     """Start the model's proposed control build. Mutating only with
     ``confirm_estimate=True``; consumes credits then.
@@ -1739,9 +1762,10 @@ async def start_control_build(
     1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
        nothing is charged; the answer is ``{started: false, proposal,
        message}``, the proposal carrying a fresh ``estimated_credits`` and
-       the ``model_version`` and ``set_revision`` the model stands at. Show
-       the user what it would build and cost.
-    2. Call again with ``confirm_estimate=True`` and those two values once
+       the ``model_version``, ``set_revision`` and ``scope_revision`` the
+       model stands at. Show the user what it would build and cost, and
+       what it lists to review.
+    2. Call again with ``confirm_estimate=True`` and those three values once
        they have reviewed the model. The build starts (``{started: true,
        job_id, model_version, status: "queued", status_detail}``) and holds
        the model until it publishes, fails or is discarded: other writers of
@@ -1754,9 +1778,10 @@ async def start_control_build(
     - ``{started: false, http_status: 404, code: "no_proposal"}`` — nothing
       is proposed for the model.
     - ``{started: false, http_status: 409, code: "review_stale", proposal,
-      model_version, set_revision, estimated_credits}`` — the model or its
-      controls changed since the values were read (or none were named).
-      Review again and start with the values returned.
+      model_version, set_revision, scope_revision, estimated_credits}`` —
+      the model, its controls or the objectives the build would author
+      changed since the values were read (or none were named). Review again
+      and start with the values returned.
     - ``{started: false, http_status: 409, code: "generation_active",
       status}`` — a build already holds the model.
     - ``{started: false, http_status: 402, ...}`` — the balance this
@@ -1770,11 +1795,14 @@ async def start_control_build(
             ``set_revision``.
         confirm_estimate: False (default) returns the proposal and its
             estimate and starts nothing; True starts the build.
+        scope_revision: With ``confirm_estimate=True``: the proposal's
+            ``scope_revision``.
     """
+    pin = {"scope_revision": scope_revision} if scope_revision is not None else {}
     try:
         return _dump(await _get_client().start_control_build(
             model_id, model_version=model_version, set_revision=set_revision,
-            confirm_estimate=confirm_estimate))
+            confirm_estimate=confirm_estimate, **pin))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3089,9 +3117,8 @@ async def add_attacker(
     control objectives derived from it may be under-specified.
 
     The caller supplies identity-bearing fields (capability, position,
-    archetype, trust_boundary_ids); the backend LLM-reasons the factor
-    decomposition. Override any factor post-create via ``edit_attacker``
-    with a ``change_reason``. Mirror of ``add_asset`` semantics.
+    archetype, trust_boundary_ids); the backend reasons the factors.
+    Override one later via ``edit_attacker`` with a ``change_reason``.
 
     Three outcomes (normal create / auto-restore / similar-rejection)
     mirror ``add_asset``. 503 on factor-reasoning or restore-candidate
@@ -3101,9 +3128,12 @@ async def add_attacker(
     attacker's operations range over. An attacker ranging over the whole
     interface makes the objectives it appears in for-all obligations,
     which only a sound witness (``typed_boundary`` /
-    ``sink_default_deny``) can credit. Declaring it here is an operator
-    statement about the attacker's reach, recorded attested with its
-    ``change_reason``, so a create takes the two together. Only ``whole``
+    ``sink_default_deny``) can credit. Declaring it here is a statement about
+    the attacker's reach, taken with its ``change_reason``: a person's is
+    recorded attested; a program's only under a workspace rule delegating
+    ``extent_attested``, otherwise the attacker is added, the extent lands
+    unattested and the attestation waits for a person (the answer's
+    ``attestation.escalation_id``). Only ``whole``
     is declarable on a create: narrowing to one named entry is a statement
     about the objectives the attacker anchors, and a create has none yet —
     add the attacker, then narrow it with ``edit_attacker`` and a
@@ -3118,9 +3148,9 @@ async def add_attacker(
         trust_boundary_ids: Comma-separated trust boundary IDs.
         surface_extent: ``"whole"`` when, from its position, the attacker's
             operations range over ANY entry of the interface it reaches
-            (any endpoint, request, row, file, message or frame). Recorded
-            as attested by this call and requires ``change_reason``. Omit
-            to leave it undeclared, which is the ordinary case.
+            (any endpoint, request, row, file, message or frame). Requires
+            ``change_reason``. Omit to leave it undeclared, which is the
+            ordinary case.
         change_reason: Required when ``surface_extent`` is supplied —
             documents the declaration for the audit trail.
     """
@@ -3178,65 +3208,47 @@ async def edit_attacker(
     attest_position: Optional[bool] = None,
     surface_extent: Optional[str] = None,
     attest_surface_extent: Optional[bool] = None,
+    attest_privileges: Optional[bool] = None,
     change_reason: Optional[str] = None,
 ) -> dict:
-    """Edit an existing attacker. Only provided fields changed.
+    """Edit an attacker; only the fields given change.
 
-    When changing identity fields, hold to the attacker authoring
-    contract: ``capability`` names the *operations performable from
-    the position* ("From [position], the attacker can [operations] …"),
-    not just access — otherwise the result is flagged with a
-    ``quality_warning`` (see ``add_attacker``).
+    ``capability`` names the operations performable from the position
+    ("From [position], the attacker can …"), else it gets a
+    ``quality_warning``. Identity fields are LLM-gated. The composed
+    ``likelihood`` comes from the factors. An edit of ``attack_vector`` or
+    ``privileges_required`` creates a model version (reachability reads
+    both); other factor edits are recorded as rating revisions.
 
-    The composed ``likelihood`` is server-derived from the factor
-    fields; to change the rating, set factor values and supply
-    ``change_reason`` for the audit trail.
+    Attesting is a judgment: a person's edit attests what it writes
+    (``trust_boundary_ids``, ``privileges_required``, ``surface_extent``)
+    and ``attest_*`` attests the value as it stands. A program attests
+    only under a workspace rule for that attestation; otherwise its edit
+    lands unattested and the answer's ``attestation`` names the parked
+    ``escalation_id`` (never a 403). A refused program's extent never
+    lowers an attested one. ``"point"`` is REFUSED where an asset of the
+    attacker's objectives sits on several components and is not
+    split-knowledge, and never makes a universal clause existential.
 
-    LLM-gated on identity-bearing fields (capability, archetype,
-    position). Factor and trust_boundary edits skip the gate.
-
-    503 on evaluator outage, 502 on malformed response, 400 when
-    factor fields, ``surface_extent`` or ``attest_surface_extent`` are
-    sent without ``change_reason``.
-
-    Attesting ``surface_extent`` is a person's audited structural
-    declaration, ledgered like a factor override and forking a model
-    version: ``"whole"`` makes every objective the attacker appears in a
-    for-all obligation. ``"point"`` is REFUSED where an asset on one of
-    those objectives is implemented by several components and is not
-    split-knowledge — reaching any one of them reaches the asset, so a
-    narrowing to one named entry would not be true of it — and it never
-    makes a clause whose own text is universal existential.
+    400 when factor fields, ``surface_extent``, ``attest_surface_extent``
+    or ``attest_privileges`` come without ``change_reason``; 503/502 on an
+    evaluator outage or malformed answer.
 
     Args:
-        model_id: ID of the threat model.
-        attacker_id: ID of the attacker (e.g., "T1").
-        capability: New capability (optional).
-        position: New position (optional).
-        archetype: New archetype (optional).
-        attack_vector: "Network" | "Adjacent" | "Local" | "Physical".
-        privileges_required: "None" | "Low" | "High".
-        attack_complexity: "Low" | "High".
-        user_interaction: "None" | "Required".
-        capability_prevalence: "Commodity" | "Targeted" | "Rare".
-        likelihood_rationale: New rationale (optional).
-        trust_boundary_ids: Comma-separated trust boundary IDs — the boundaries
-            this attacker has crossed (its position). Replaces the existing set.
-            Changing it operator-attests the position, which lets reachability
-            trust it for a decisive verdict.
-        attest_position: Operator-attest the attacker's current position without
-            changing it — e.g. to confirm a fully external attacker's empty
-            crossed set so an objective blocked on an unpositioned attacker can
-            be resolved. Pass ``true`` to attest.
-        surface_extent: ``"whole"`` (operations range over ANY entry of the
-            interface reached) or ``"point"`` (one named entry). Supplying
-            it attests it; requires ``change_reason``.
-        attest_surface_extent: Record the extent already on the attacker as
-            attested, without changing its value. Pass ``true`` to attest;
-            requires ``change_reason``.
-        change_reason: Required when any factor field, ``surface_extent``
-            or ``attest_surface_extent`` is supplied — documents the
-            operator override for the audit trail.
+        attack_vector: Network | Adjacent | Local | Physical.
+        privileges_required: None | Low | High.
+        attack_complexity: Low | High.
+        user_interaction: None | Required.
+        capability_prevalence: Commodity | Targeted | Rare.
+        trust_boundary_ids: Comma-separated ids of the boundaries the
+            attacker has crossed; replaces the set.
+        attest_position: true attests the current position.
+        surface_extent: ``whole`` (any entry of the interface reached) or
+            ``point`` (one named entry).
+        attest_surface_extent: true attests the current extent.
+        attest_privileges: true attests the current ``privileges_required``,
+            whatever its value.
+        change_reason: Why; required as above.
     """
     _validate_surface_extent(surface_extent)
     body: dict[str, Any] = {}
@@ -3265,16 +3277,18 @@ async def edit_attacker(
         body["surface_extent"] = surface_extent
     if attest_surface_extent is not None:
         body["attest_surface_extent"] = attest_surface_extent
+    if attest_privileges is not None:
+        body["attest_privileges"] = attest_privileges
     if change_reason is not None:
         body["change_reason"] = change_reason
     factor_sent = any(k in body for k in _ATTACKER_FACTOR_PARAMS)
-    extent_sent = "surface_extent" in body or "attest_surface_extent" in body
-    if (factor_sent or extent_sent) and not (change_reason and change_reason.strip()):
+    declared = ("surface_extent" in body or "attest_surface_extent" in body
+                or bool(attest_privileges))
+    if (factor_sent or declared) and not (change_reason and change_reason.strip()):
         raise ToolError(
-            "change_reason is required when editing rating factors or "
-            "attesting the surface extent. A factor override and an attested "
-            "extent are both operator declarations, recorded with their "
-            "reason for the audit trail."
+            "change_reason is required when editing rating factors, attesting "
+            "the surface extent or attesting the privileges. Each is a "
+            "declaration, recorded with its reason for the audit trail."
         )
     try:
         client = _get_client()
@@ -3319,6 +3333,13 @@ async def reevaluate_threat_model_factors(
     nothing was persisted; retry when the evaluator is reachable.
 
     Soft-deleted assets and attackers are skipped.
+
+    Re-ratings are rating revisions and keep the model version, except
+    where an answer changes an attacker's ``attack_vector`` or
+    ``privileges_required``: reachability reads both, so the run saves one
+    new version carrying every answer, and a proposal reviewed before it
+    reads ``review_stale``. Privileges an answer changes are no longer
+    attested.
 
     Args:
         model_id: ID of the threat model to re-rate.
@@ -4620,9 +4641,10 @@ async def add_trust_boundary(
             suggestion: only an ATTESTED seal lets reachability decisively
             rule an asset unreachable instead of indeterminate, and the
             attestation is recorded with ``edit_trust_boundary``
-            (``seal_source="attested"`` with a ``change_reason``). Default
-            False (assume a lateral pivot is possible). Set it only when the
-            isolation is real and attestable.
+            (``seal_source="attested"`` with a ``change_reason``), by a
+            person or a program the workspace delegates ``seal_attested``
+            to. Default False (assume a lateral pivot is possible). Set it
+            only when the isolation is real and attestable.
     """
     parsed_crosses = [c.strip() for c in crosses.split(",") if c.strip()] if crosses else []
     parsed_passes = (
@@ -4649,6 +4671,13 @@ async def edit_trust_boundary(
 ) -> dict:
     """Edit a trust boundary. Creates a new model version.
 
+    Attesting the seal is a judgment: a person's edit attests it; a
+    program's only under a workspace rule delegating ``seal_attested``,
+    otherwise the edit lands with the seal unattested and the answer's
+    ``attestation`` names the parked ``escalation_id`` (never a 403). Any
+    change to ``passes``, ``crosses``, ``neighbors`` or ``sealed`` voids an
+    attested seal: the attestation is of the content as it stood.
+
     Args:
         model_id: ID of the threat model.
         tb_id: ID of the trust boundary (e.g., "TB1").
@@ -4663,11 +4692,11 @@ async def edit_trust_boundary(
             way in is crossing the perimeter — an air-gap / segmented enclave),
             which lets reachability decisively rule the boundary unreachable;
             False assumes a lateral pivot is possible. Reach-relevant — changing
-            it can flip CO verdicts. Setting it records an operator attestation
-            of the seal. Omit to leave unchanged.
-        seal_source: "attested" | "unattested". Only an operator-attested seal
-            lets reachability decisively rule an objective unreachable past the
-            boundary; an unattested (default/model-suggested) seal is treated as
+            it can flip CO verdicts. Setting it attests the seal, as above.
+            Omit to leave unchanged.
+        seal_source: "attested" | "unattested". Only an attested seal lets
+            reachability decisively rule an objective unreachable past the
+            boundary; an unattested (default or generated) seal is treated as
             pivotable. Use "attested" to attest a boundary already marked sealed
             without re-toggling it; "unattested" retracts. An attested seal
             implies ``sealed``. Requires ``change_reason``.
@@ -6801,8 +6830,12 @@ async def list_proposals(
     ``update_finding``, ``create_risk_acceptance``, ``submit_attestation``
     or ``decide_proposal`` carries an
     ``escalation_id``; that escalation appears here as a
-    ``decision_request``. Poll it here until a person resolves it; do not
-    retry the refused call.
+    ``decision_request``. An attestation refused does not 403: the edit of
+    ``edit_trust_boundary``, ``edit_attacker`` or ``add_attacker`` lands
+    unattested and its answer's ``attestation`` carries the
+    ``escalation_id``, bound to the content it was parked over (an edit of
+    that content supersedes it). Poll it here until a person resolves it;
+    do not retry the refused call.
 
     Args:
         model_id: ID of the threat model.
@@ -6921,6 +6954,10 @@ _DECISION_KINDS = (
     "behavioural_model_confirmed",
     "behavioural_delta_declared",
     "behavioural_cross_check_dismissed",
+    "seal_attested",
+    "position_attested",
+    "privileges_attested",
+    "extent_attested",
     "escalation_resolved",
 )
 
@@ -6938,9 +6975,10 @@ async def list_decisions(
     (finding dismissed or remediated, risk accepted, not-applicable
     declared, proposal accepted / rejected / reverted, assumption accepted,
     behavioural model answered / confirmed, a control's delta declared, a
-    finding of its cross-check dismissed, escalation resolved), newest
-    first, with who made it and whether it was within the workspace's
-    delegation policy. Read-only; no side effects.
+    finding of its cross-check dismissed, a seal, position, privileges or
+    surface extent attested, escalation resolved), newest first, with who
+    made it and whether it was within the workspace's delegation policy.
+    Read-only; no side effects.
 
     Call this BEFORE raising a proposal or asking for a judgment, so you
     do not propose what a person rejected or ask again for what was
@@ -6967,8 +7005,10 @@ async def list_decisions(
             (an answer, an element edit or a link declared),
             ``behavioural_model_confirmed``, ``behavioural_delta_declared``,
             ``behavioural_cross_check_dismissed`` (a person set aside a
-            finding of a declaration's cross-check), ``escalation_resolved``.
-            Empty (default) returns every kind.
+            finding of a declaration's cross-check), ``seal_attested``,
+            ``position_attested``, ``privileges_attested``,
+            ``extent_attested``, ``escalation_resolved``. Empty (default)
+            returns every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,

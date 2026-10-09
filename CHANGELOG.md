@@ -52,9 +52,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The extraction is queued and runs in the background; the client and tool
     descriptions say so.
 
-  The tool surface is 142 tools.
+  The tool surface is 144 tools.
+- `get_threat_model` takes `include_inventory_completeness=True`: the
+  completeness record, with the `grounding_gaps` of each entity holding the
+  tier down, each gap naming the ground it lacks and the act (tool and
+  fields) that supplies it.
+- `edit_attacker` takes `attest_privileges=True`, which attests the
+  attacker's privileges as they stand, with a `change_reason`.
+- `start_control_build` takes `scope_revision`, the digest of the objectives
+  the reviewed proposal would author; a start whose scope has changed since
+  is refused `review_stale`.
+- `list_decisions` filters by the four attestation decisions
+  (`seal_attested`, `position_attested`, `privileges_attested`,
+  `extent_attested`).
 
 ### Changed
+
+- An attestation (a seal, a position, privileges, a surface extent) is
+  described as the judgment it is: a person's edit attests it; a program's
+  only under a workspace delegation rule, and otherwise the edit lands
+  unattested and its answer's `attestation` names the escalation parked for
+  a person, with no 403. A change to what was attested voids it.
+  `edit_trust_boundary`, `add_trust_boundary`, `add_attacker`,
+  `edit_attacker`, `list_proposals` and the server instructions say so.
+- `get_control_generation_status` describes the proposal's estimate basis,
+  `scope_revision`, flagged entities and pending attestations, and the
+  build's figures as the diagnosis gives them (`no_control`,
+  `awaiting_attestation`, `mitigated_elsewhere`, `excluded_cos`,
+  `dispositioned_cos`, `awaiting_judgement_cos`).
+- `reevaluate_threat_model_factors` says a run whose answers change an
+  attacker's vector or privileges saves a new model version.
 
 - **BREAKING — systems are gone; the group tools act on tags.** A system was
   a named, exclusive grouping of models; every one is now a tag with the same

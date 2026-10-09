@@ -401,11 +401,19 @@ class MipitiClient:
         data = await self._get("/api/models", params=params)
         return [ModelSummary.model_validate(m) for m in data]
 
-    async def get_model(self, model_id: str, version: int | None = None) -> ThreatModel:
+    async def get_model(
+        self, model_id: str, version: int | None = None, include: str = "",
+    ) -> ThreatModel:
+        """The model, or one version of it. ``include`` names extra fields
+        the latest read inlines (``inventory_completeness``); a version read
+        takes none, so the two are not combined."""
         if version is not None:
+            if include:
+                raise ValueError("include applies to the latest version only")
             data = await self._get(f"/api/models/{model_id}/versions/{version}")
         else:
-            data = await self._get(f"/api/models/{model_id}")
+            params = {"include": include} if include else None
+            data = await self._get(f"/api/models/{model_id}", params=params)
         return ThreatModel.model_validate(data)
 
     async def rename_model(self, model_id: str, name: str) -> RenameResult:
@@ -746,12 +754,15 @@ class MipitiClient:
         model_version: int | None = None,
         set_revision: int | None = None,
         confirm_estimate: bool = False,
+        scope_revision: str | None = None,
     ) -> dict:
         """POST /api/models/{model_id}/controls/build.
 
         Without ``confirm_estimate`` the proposed build and a fresh estimate
         come back and nothing starts. With it the build starts when
-        ``model_version`` and ``set_revision`` name the model as it stands.
+        ``model_version``, ``set_revision`` and ``scope_revision`` name the
+        model, its controls and the objectives the build would author as they
+        stand. Each is sent only when given.
 
         A refusal is an answer, not an error: 404 (nothing proposed), 409
         (the model changed since the review, or a build holds it) and 402 (the
@@ -762,6 +773,8 @@ class MipitiClient:
             body["model_version"] = int(model_version)
         if set_revision is not None:
             body["set_revision"] = int(set_revision)
+        if scope_revision is not None:
+            body["scope_revision"] = str(scope_revision)
         resp = await self._request_with_idempotency(
             "POST", f"/api/models/{model_id}/controls/build", json=body)
         if resp.status_code in (402, 404, 409):
