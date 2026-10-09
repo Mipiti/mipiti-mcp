@@ -93,7 +93,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving, and both return the entity-change result with the model as it now stands.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
 - `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
-- `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them). `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and the fields to send).
+- `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them). `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and its `mcp_arguments`, ready to send once the angle-bracketed values are filled).
 - `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
 - `list_threat_models` — browse existing models.
 - `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
@@ -1346,8 +1346,9 @@ async def get_threat_model(
     ``grounding_gaps``, keyed by entity id. Each gap names a ``ground`` the
     entity lacks (``position``, ``privileges``, ``extent``, ``components``,
     ``flagged``, ``inherited``), a ``detail``, and ``acts``: each act's
-    ``mcp_tool`` and the ``fields`` to send, a value in angle brackets being
-    yours to fill. Taking every listed act grounds the entity; a gap with no
+    ``mcp_tool`` and ``mcp_arguments`` (that tool's arguments, the entity
+    named and lists comma-separated; ``fields`` is the REST body), a value
+    in angle brackets being yours to fill. Taking every listed act grounds the entity; a gap with no
     act says no act can supply it on this deployment. An attestation an act
     names is a judgment (see ``edit_attacker``). ``null`` when the record
     could not be read.
@@ -3145,7 +3146,12 @@ async def add_attacker(
         capability: Attacker capability description (required).
         position: Position/access level.
         archetype: Archetype (e.g., "insider", "external").
-        trust_boundary_ids: Comma-separated trust boundary IDs.
+        trust_boundary_ids: Comma-separated ids of the boundaries the
+            attacker has crossed. Naming them attests the position: a
+            person's is recorded attested; a program's only under a rule
+            delegating ``position_attested``, otherwise the position lands
+            suggested and the attestation waits for a person
+            (``attestation.escalation_id``).
         surface_extent: ``"whole"`` when, from its position, the attacker's
             operations range over ANY entry of the interface it reaches
             (any endpoint, request, row, file, message or frame). Requires

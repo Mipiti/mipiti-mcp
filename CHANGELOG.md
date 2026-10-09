@@ -55,8 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The tool surface is 144 tools.
 - `get_threat_model` takes `include_inventory_completeness=True`: the
   completeness record, with the `grounding_gaps` of each entity holding the
-  tier down, each gap naming the ground it lacks and the act (tool and
-  fields) that supplies it.
+  tier down, each gap naming the ground it lacks and the act that supplies
+  it: the tool and its `mcp_arguments`, ready to send.
 - `edit_attacker` takes `attest_privileges=True`, which attests the
   attacker's privileges as they stand, with a `change_reason`.
 - `start_control_build` takes `scope_revision`, the digest of the objectives
@@ -72,7 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   described as the judgment it is: a person's edit attests it; a program's
   only under a workspace delegation rule, and otherwise the edit lands
   unattested and its answer's `attestation` names the escalation parked for
-  a person, with no 403. A change to what was attested voids it.
+  a person, with no 403. A change to what was attested voids it. Naming
+  `trust_boundary_ids` on `add_attacker` attests the position.
   `edit_trust_boundary`, `add_trust_boundary`, `add_attacker`,
   `edit_attacker`, `list_proposals` and the server instructions say so.
 - `get_control_generation_status` describes the proposal's estimate basis,
