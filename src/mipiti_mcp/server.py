@@ -2803,10 +2803,16 @@ async def get_review_queue(server_version: str) -> dict:
     ``behavioural_link`` (an element of the behavioural model not yet linked
     to an asset or trust boundary, or linked to one that lacks the property
     at stake; see ``get_behavioural_links``), ``not_applicable_refuted`` (a
-    statement that an entity does not apply, which the behavioural model
-    contradicts: ask the person to revise the statement or confirm the
-    model), or ``stale_control`` (an implemented/verified
-    control whose assertions have not been checked in 90+ days). Escalations
+    person's statement that a property does not apply to an asset, which
+    the behavioural model contradicts: under a confirmed model it no longer
+    counts, under an unconfirmed one it still does; ask the person to revise
+    or revoke it, or to confirm the model), ``position_disagreement`` (an
+    attested attacker position a producer would place elsewhere), or
+    ``stale_control`` (an implemented/verified
+    control whose assertions have not been checked in 90+ days). Rows are
+    ranked: escalations, then proposals and the behavioural rows by risk
+    tier, then position disagreements, unaccepted assumptions, open
+    assumptions and stale controls. Escalations
     and proposals are decided with ``decide_proposal``; an unaccepted
     assumption is accepted with ``submit_attestation``; for each stale
     control, verify its assertions against the codebase. Accepting an
