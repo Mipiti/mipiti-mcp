@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->128<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->139<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -169,7 +169,7 @@ uvx mipiti-mcp
 | `get_verification_report` | Shows verified, partially verified, and unverified controls with sufficiency details. |
 | `get_sufficiency` | Quick check: do the assertions of one control (or one functional test, with `functional_test_id`) collectively cover all aspects? For the per-clause work list read `get_control_work_order`: where the order names a required class for a clause, `required_evidence` carries the class, the clause id to bind evidence to, and a submission skeleton to fill in. A claim that carries a `soundness_tier` reports its weakest clause's tier. |
 | `get_scan_prompt` | Returns targeted prompts for scanning the codebase against not_implemented controls. |
-| `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal` (including `assumption` proposals a strengthening run raised), `unaccepted_assumption` (an assumption something depends on that is not accepted), `open_assumption`, `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`; an unaccepted assumption is accepted with `submit_attestation`. Start here for periodic maintenance. |
+| `get_review_queue` | The workspace review queue, ranked: `escalation`, `proposal` (including `assumption` proposals a strengthening run raised), `unaccepted_assumption` (an assumption something depends on that is not accepted), `open_assumption`, `behavioural_question` (an open question about what the system does), `behavioural_link` (a behavioural element not yet linked to an asset or trust boundary), `not_applicable_refuted` (a statement that an entity does not apply, which the behavioural model contradicts), `stale_control` (implemented/verified controls not checked in 90+ days). Escalations and proposals are decided with `decide_proposal`; an unaccepted assumption is accepted with `submit_attestation`. Start here for periodic maintenance. |
 | `submit_findings` / `list_findings` / `update_finding` | Report and track negative findings (gap discovery). |
 | `remediate_finding` | Without `apply`, read-only: a structured diff of the changes the remediation would make, shaped by the finding's kind (e.g. for `structural_duplicate_controls`: which controls would be kept, which dropped, the union of CO mappings + framework refs that would land on the survivor). With `apply=True` and a non-empty `justification` (one-line operator rationale, recorded on the audit trail), it commits them. The agent is responsible for the preview-then-apply norm — surface the diff and get explicit confirmation before applying. |
 
@@ -197,7 +197,25 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 | `list_proposals` | Proposals and escalations on a model with their status (`proposed` / `applied_pending_review` open; `accepted` / `rejected` / `reverted` / `superseded` closed). A refused judgment (403 with `escalation_id`) appears as a `decision_request`; poll here until a person resolves it. Read-only. |
 | `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. Accepting an `assumption` proposal accepts the assumption (its own decision, `assumption_accepted`), attested until `expires_at`; rejecting one keeps the precondition from being proposed again. |
 | `get_design_leverage` | What eliminating each attacker position or asset by design would remove from the matrix, ranked by critical then high at-risk objectives removed. `include_design_moves=True` authors a concrete `design_move` per row; turn one into a `design_change` proposal with `create_proposal`. Read-only. |
-| `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, assumption accepted, escalation resolved), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
+| `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, assumption accepted, behavioural model answered / confirmed, escalation resolved), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
+
+### Behavioural model
+
+A behavioural model states what a system does: its elements, the actions on them and the zones they sit in, taken from the model's description. The possible threats are read from it. An answer, an element edit and a confirmation each create a model version. A program's answer, edit, link declaration, link acceptance or confirmation is a judgment: it is refused with 403 and an `escalation_id` and parked for a person unless the workspace's delegation policy admits it. Do not retry a refusal.
+
+| Tool | Description |
+|------|-------------|
+| `get_behavioural_model` | A model's behavioural model: `status` (`none`, `needs_answers`, `extracted`, `confirmed`, `stale`), the model and its `ir_hash`, the open questions, the answers collected and not yet extracted. Read-only. |
+| `extract_behavioural_model` | Give a model that has none one. A paid action: call once for the estimate (nothing is charged or written) and relay it to the person, then with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned. Refusals (`409` already has one or review stale, `402` balance) come back as data. |
+| `answer_behavioural_questions` | Answer open questions, many in one call. The model is extracted, billed to the caller, once every open owner question has an answer or when `extract_now=True`. |
+| `edit_behavioural_element` | Replace or add one element as a person wrote it. Voids a confirmation. |
+| `confirm_behavioural_model` | Confirm the model whose `ir_hash` was reviewed. Refused when the model changed since (`review_stale`), the description moved (`stale`) or an owner question is open (`needs_answers`). |
+| `get_behavioural_links` | The links from elements and zones to assets and trust boundaries, the proposals with the `proposals_hash` a bulk acceptance names, and the open link questions. Read-only. |
+| `declare_behavioural_link` | Declare the asset or trust boundary an element or zone is. Creates no model version. |
+| `accept_behavioural_link_proposals` | Declare every proposal as shown, naming the `proposals_hash` reviewed. |
+| `get_control_delta` | The edits to the behavioural model a control's own text commits to, with their status (`absent`, `pending`, `checked`, `failed`, `declared`). Read-only. |
+| `declare_control_delta` | Declare a control's delta, each edit quoting the control's text. A program's submission is stored undeclared and checked by one call billed to the caller; it never replaces a delta a person declared. |
+| `get_behavioural_threats` | The possible threats found per control objective, with the default questions whose answers would remove them. Relay a possible threat to the person with its default questions first. Read-only. |
 
 ### Assurance
 

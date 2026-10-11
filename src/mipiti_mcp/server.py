@@ -140,6 +140,8 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`; a program's `declare_control_delta` is checked, never counted as a person's declaration.
+
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
 1. `get_sufficiency` (or `get_verification_report` for the whole model) — **start here, it is free and it is usually the answer.** If `status` is `insufficient`, `details` names each uncovered clause and the evidence that would close it. That is the work list. Write those assertions.
@@ -2796,13 +2798,20 @@ async def get_review_queue(server_version: str) -> dict:
     ``unaccepted_assumption`` (an assumption something depends on that is
     not accepted — never attested, lapsed, or its text changed since it was
     attested — with the controls and objectives that wait on it),
-    ``open_assumption``, or ``stale_control`` (an implemented/verified
-    control whose assertions have not been checked in 90+ days). Rows are
-    ranked in that order. Escalations and proposals are decided with
-    ``decide_proposal``; an unaccepted assumption is accepted with
-    ``submit_attestation``; for each stale control, verify its assertions
-    against the codebase. Accepting an assumption is a person's judgment
-    unless the workspace delegates it. Start here for periodic maintenance.
+    ``open_assumption``, ``behavioural_question`` (an open question about
+    what the system does, answered with ``answer_behavioural_questions``),
+    ``behavioural_link`` (an element of the behavioural model not yet linked
+    to an asset or trust boundary, or linked to one that lacks the property
+    at stake; see ``get_behavioural_links``), ``not_applicable_refuted`` (a
+    statement that an entity does not apply, which the behavioural model
+    contradicts: ask the person to revise the statement or confirm the
+    model), or ``stale_control`` (an implemented/verified
+    control whose assertions have not been checked in 90+ days). Escalations
+    and proposals are decided with ``decide_proposal``; an unaccepted
+    assumption is accepted with ``submit_attestation``; for each stale
+    control, verify its assertions against the codebase. Accepting an
+    assumption is a person's judgment unless the workspace delegates it.
+    Start here for periodic maintenance.
     """
     try:
         return _dump(await _get_client().get_review_queue())
@@ -6860,6 +6869,8 @@ _DECISION_KINDS = (
     "proposal_rejected",
     "proposal_reverted",
     "assumption_accepted",
+    "behavioural_model_answered",
+    "behavioural_model_confirmed",
     "escalation_resolved",
 )
 
@@ -6876,7 +6887,7 @@ async def list_decisions(
     """List the decision ledger of a model: every judgment recorded on it
     (finding dismissed or remediated, risk accepted, not-applicable
     declared, proposal accepted / rejected / reverted, assumption accepted,
-    escalation resolved), newest first, with who made it and whether it was within
+    behavioural model answered / confirmed, escalation resolved), newest first, with who made it and whether it was within
     the workspace's delegation policy. Read-only; no side effects.
 
     Call this BEFORE raising a proposal or asking for a judgment, so you
@@ -6900,7 +6911,9 @@ async def list_decisions(
             ``finding_remediated``, ``risk_accepted``,
             ``not_applicable_declared``, ``proposal_accepted``,
             ``proposal_rejected``, ``proposal_reverted``,
-            ``assumption_accepted``, ``escalation_resolved``. Empty
+            ``assumption_accepted``, ``behavioural_model_answered``
+            (an answer, an element edit or a link declared),
+            ``behavioural_model_confirmed``, ``escalation_resolved``. Empty
             (default) returns every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
@@ -6919,6 +6932,417 @@ async def list_decisions(
             decision=decision,
             limit=limit,
         )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Behavioural model ===
+#
+# A behavioural model states what the system does: its elements, the actions
+# on them and the zones they sit in, extracted from the model's description.
+# The possible threats the platform finds are read from it.
+
+
+def _json_value(raw: str, name: str, kind: type, example: str) -> Any:
+    """``raw`` parsed as JSON of type ``kind``, or a refusal that shows the
+    shape expected."""
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise ToolError(f"{name} must be valid JSON, e.g. {example}") from exc
+    if not isinstance(value, kind):
+        raise ToolError(f"{name} must be a JSON {'array' if kind is list else 'object'}, e.g. {example}")
+    return value
+
+
+@mcp.tool()
+async def get_behavioural_model(server_version: str, model_id: str) -> dict:
+    """Read a model's behavioural model: what the system does, as elements,
+    actions and zones taken from its description. Read-only; no side effects.
+
+    Returns ``{status, ir, ir_hash, questions, owner_questions_open,
+    pending_answers, answered, confirmed, links, ...}``. ``status`` is
+    ``none`` (the model has none; ``extract_behavioural_model`` gives it one),
+    ``needs_answers`` (an owner question is open and the model decides
+    nothing yet), ``extracted``, ``confirmed`` or ``stale`` (the description
+    changed since it was extracted). ``questions`` are the open ones: each is
+    answered with ``answer_behavioural_questions``. ``pending_answers`` are
+    answers collected and not yet extracted. ``ir_hash`` is what
+    ``confirm_behavioural_model`` names.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_behavioural_model(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def extract_behavioural_model(
+    server_version: str,
+    model_id: str,
+    confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
+    set_revision: Optional[int] = None,
+) -> dict:
+    """Give a model that has no behavioural model one. Mutating only with
+    ``confirm_estimate=True``; a paid action then.
+
+    The extraction is paid for by whoever requests it, so it is estimated
+    first and the estimate is RELAYED TO THE PERSON before it is confirmed.
+    Never confirm on your own.
+
+    1. Call with ``confirm_estimate=False`` (the default): nothing is charged
+       or written. The answer carries the ``estimate`` (the extraction, the
+       existing controls' deltas and checks, the link-matching call and the
+       re-judgement, by part), the ``model_version`` and ``set_revision`` the
+       model stands at, and ``notices`` on what the extraction changes:
+       judgements of the groups the threats reach are asked again, and
+       posture can move down as well as up. Show all of it to the person.
+    2. Once they agree, call with ``confirm_estimate=True`` and those two
+       values. The extraction runs, a new model version stores the result
+       with the link proposals, and the answer carries ``status`` (it may be
+       ``needs_answers``), ``matching``, ``proposals`` and ``deltas``. Read
+       the proposals with ``get_behavioural_links``.
+
+    Refusals come back as data, ``{confirmed: false, http_status, code,
+    message}``: 409 ``has_behavioural_model`` (read it with
+    ``get_behavioural_model``), 409 ``review_stale`` (the model or its
+    controls changed since the estimate: confirm again with the values
+    returned), 402 (the balance cannot cover the estimate). A 404 means the
+    caller may not start paid actions on the model.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: False (default) estimates; True extracts.
+        model_version: With ``confirm_estimate=True``: the estimate's value.
+        set_revision: With ``confirm_estimate=True``: the estimate's value.
+    """
+    try:
+        return _dump(await _get_client().extract_behavioural_model(
+            model_id, confirm_estimate=confirm_estimate,
+            model_version=model_version, set_revision=set_revision))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def answer_behavioural_questions(
+    server_version: str,
+    model_id: str,
+    answers: str = "[]",
+    extract_now: bool = False,
+) -> dict:
+    """Answer open behavioural questions, many in one call. Mutating; creates
+    a model version.
+
+    ``get_behavioural_model`` (or ``get_review_queue``, as
+    ``behavioural_question`` rows) lists the open questions. Answer only from
+    what the code or the owner shows, and say unknown where it does not: a
+    guess becomes a stated fact. Each answer is kept as a clarification. The
+    model is extracted once every open owner question has an answer, or when
+    ``extract_now=True`` asks for it (with no answers, it extracts with those
+    already collected). That extraction is billed to the caller; a balance
+    that cannot cover it is refused (402).
+
+    A program's answer is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the behavioural model as it now stands, with ``extracted`` (the
+    answers were extracted) and ``generation_ready``.
+
+    Args:
+        model_id: ID of the threat model.
+        answers: JSON array of ``{"question_id": "...", "text": "..."}``.
+            Example: '[{"question_id": "q1", "text": "Only the owner can
+            delete a record."}]'. Empty to extract with answers collected.
+        extract_now: Extract now, with the answers given and those already
+            collected.
+    """
+    parsed = _json_value(
+        answers, "answers", list,
+        '[{"question_id": "q1", "text": "Only the owner can delete a record."}]')
+    for a in parsed:
+        if not (isinstance(a, dict) and str(a.get("question_id", "")).strip()
+                and str(a.get("text", "")).strip()):
+            raise ToolError("each answer needs a non-empty question_id and text.")
+    if not parsed and not extract_now:
+        raise ToolError("Give at least one answer, or pass extract_now=True.")
+    try:
+        return _dump(await _get_client().answer_behavioural_questions(
+            model_id, parsed, extract_now=extract_now))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def edit_behavioural_element(
+    server_version: str,
+    model_id: str,
+    collection: str,
+    element: str,
+) -> dict:
+    """Replace, or add, one element of a model's behavioural model. Mutating;
+    creates a model version (none when the edit changes nothing).
+
+    The element is kept as a person wrote it, so a later extraction keeps it.
+    It changes the model's ``ir_hash``, which voids a confirmation: confirm
+    again with ``confirm_behavioural_model``. The result must still be a
+    valid model (422 otherwise), and a build holding the model refuses it
+    (409).
+
+    A program's edit is a judgment. Unless the workspace's delegation policy
+    admits it, it is refused with 403 and an ``escalation_id`` and parked for
+    a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the behavioural model as it now stands, with ``changed``.
+
+    Args:
+        model_id: ID of the threat model.
+        collection: The collection of ``get_behavioural_model``'s ``ir`` the
+            element belongs to.
+        element: JSON object, the whole element including its ``id``; it
+            replaces the element of that id, or adds one.
+    """
+    parsed = _json_value(element, "element", dict, '{"id": "e1", ...}')
+    if not str(parsed.get("id", "")).strip():
+        raise ToolError("element needs an id.")
+    if not collection.strip():
+        raise ToolError("collection is required.")
+    try:
+        return _dump(await _get_client().edit_behavioural_element(
+            model_id, collection.strip(), parsed))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def confirm_behavioural_model(
+    server_version: str,
+    model_id: str,
+    ir_hash: str,
+    note: str = "",
+) -> dict:
+    """Confirm a model's behavioural model as reviewed. Mutating; creates a
+    model version.
+
+    Confirm only the model whose ``ir_hash`` was reviewed, which is the one
+    ``get_behavioural_model`` returns. Refused with 409: ``review_stale``
+    (the model is not that hash now), ``stale`` (the description changed since
+    it was extracted) or ``needs_answers`` (an owner question is open). An
+    edit voids a confirmation.
+
+    A program's confirmation is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Args:
+        model_id: ID of the threat model.
+        ir_hash: The ``ir_hash`` reviewed.
+        note: Optional note recorded with the confirmation.
+    """
+    if not ir_hash.strip():
+        raise ToolError("ir_hash is required.")
+    try:
+        return _dump(await _get_client().confirm_behavioural_model(
+            model_id, ir_hash.strip(), note=note))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_behavioural_links(server_version: str, model_id: str) -> dict:
+    """Read the links from a behavioural model's elements and zones to the
+    model's assets and trust boundaries. Read-only; no side effects.
+
+    Returns ``{nodes, links, proposals, proposals_hash, questions, repair}``:
+    each link says whether it counts toward the analysis; ``proposals`` are
+    matches a person is shown (an empty ``entity_id`` is a node nothing
+    matched); ``proposals_hash`` is what ``accept_behavioural_link_proposals``
+    names; ``questions`` are the open link questions (also on
+    ``get_review_queue`` as ``behavioural_link`` rows). A link is declared
+    for one node with ``declare_behavioural_link``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_behavioural_links(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def declare_behavioural_link(
+    server_version: str,
+    model_id: str,
+    node_id: str,
+    entity_id: str,
+    component_id: str = "",
+) -> dict:
+    """Declare the asset or trust boundary a behavioural element or zone is.
+    Mutating; creates no model version.
+
+    The link is checked on every read: one whose asset lacks the property the
+    element carries is kept and asked about. A link that counts changes what
+    the analysis reaches, so the judgements it re-keys are queued, charged to
+    the caller.
+
+    A program's declaration is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the links as ``get_behavioural_links`` does, with ``declared``.
+
+    Args:
+        model_id: ID of the threat model.
+        node_id: The element or zone, from ``get_behavioural_links``.
+        entity_id: The asset or trust boundary it is.
+        component_id: Optional component the node belongs to.
+    """
+    if not node_id.strip() or not entity_id.strip():
+        raise ToolError("node_id and entity_id are required.")
+    try:
+        return _dump(await _get_client().declare_behavioural_link(
+            model_id, node_id.strip(), entity_id.strip(),
+            component_id=component_id.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def accept_behavioural_link_proposals(
+    server_version: str,
+    model_id: str,
+    proposals_hash: str,
+) -> dict:
+    """Declare every link proposal as shown, in one act. Mutating; creates no
+    model version.
+
+    Relay the proposals to the person first: read them with
+    ``get_behavioural_links`` and name its ``proposals_hash``, which is the
+    set reviewed. Refused with 409 ``review_stale`` when a proposal has
+    changed since, and with 422 ``no_proposals`` when there is none. The
+    judgements the links re-key are queued, charged to the caller.
+
+    A program's acceptance is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the links as ``get_behavioural_links`` does, with ``declared``.
+
+    Args:
+        model_id: ID of the threat model.
+        proposals_hash: The ``proposals_hash`` reviewed.
+    """
+    if not proposals_hash.strip():
+        raise ToolError("proposals_hash is required.")
+    try:
+        return _dump(await _get_client().accept_behavioural_link_proposals(
+            model_id, proposals_hash.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_control_delta(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+) -> dict:
+    """Read the delta of a control: the edits to the behavioural model that
+    the control's own text commits to. Read-only; no side effects.
+
+    The delta is served for the control's text as it stands. ``status`` is
+    ``absent`` (none), ``pending`` (not checked yet), ``checked``, ``failed``
+    or ``declared`` (a person declared it). Returns ``{status, edits,
+    unexpressed, applies, expressible, declared_by, ...}``.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control (e.g. "CTRL-01").
+    """
+    try:
+        return _dump(await _get_client().get_control_delta(model_id, control_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def declare_control_delta(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    edits: str,
+    unexpressed: str = "[]",
+) -> dict:
+    """Declare a control's delta: edits to the behavioural model, each quoting
+    the control's own text. Mutating; writes no control, set revision or model
+    version.
+
+    Each edit's quote must be found in the control's text (a quote's
+    ``source`` defaults to the control), and ``unexpressed`` lists what the
+    text commits to that no edit states. An edit that does not check is
+    refused (422 ``delta_refused``) with its failures.
+
+    Only a person's declaration is ``declared``. A program's submission is
+    stored undeclared and checked by one call billed to the caller (402 when
+    the balance is short), so it can never make the analysis credit a control
+    alone, and it never replaces a delta a person declared (409
+    ``declared_by_person``). Relay a program's delta to the person if it
+    should stand.
+
+    Returns the delta as ``get_control_delta`` does, with ``check_ran`` for a
+    program's submission.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control.
+        edits: JSON array of edit objects, each with a ``trace`` of quotes
+            from the control's text.
+        unexpressed: JSON array of ``{"kind", "quote", "note"}``.
+    """
+    parsed_edits = _json_value(edits, "edits", list, '[{"trace": [{"quote": "..."}], ...}]')
+    parsed_unexpressed = _json_value(
+        unexpressed, "unexpressed", list, '[{"kind": "...", "quote": "...", "note": ""}]')
+    try:
+        return _dump(await _get_client().declare_control_delta(
+            model_id, control_id, parsed_edits, parsed_unexpressed))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_behavioural_threats(server_version: str, model_id: str) -> dict:
+    """Read the possible threats the behavioural analysis finds for each
+    control objective of a model. Read-only: nothing is judged, written or
+    paid for.
+
+    The analysis runs over the model with no controls applied. Per objective
+    it returns its ``standing``, each obligation's ``result``, the ``threats``
+    (rule, obligation, elements), the ``default_questions`` whose answers
+    would remove them, and the ``grounds`` the analysis rests on. Returns
+    ``decides: false`` while the behavioural model is absent, asks an owner
+    question, or has not been extracted.
+
+    A possible threat is not a finding yet. RELAY IT TO THE PERSON with its
+    default questions first: an answer that settles a default removes the
+    threat, and only a threat the person confirms is worth a control. Answer
+    with ``answer_behavioural_questions``.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_behavioural_threats(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 

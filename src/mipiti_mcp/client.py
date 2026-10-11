@@ -2942,3 +2942,170 @@ class MipitiClient:
         return await self._get(
             f"/api/models/{model_id}/decisions", params=params or None,
         )
+
+    # ------------------------------------------------------------------
+    # Behavioural model
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _behavioural(model_id: str, tail: str = "") -> str:
+        return f"/api/models/{model_id}/behavioural-model{tail}"
+
+    async def get_behavioural_model(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/behavioural-model.
+
+        Read-only. Returns the status (``none``, ``needs_answers``,
+        ``extracted``, ``confirmed`` or ``stale``), the model, its
+        ``ir_hash``, the open questions, the answers collected and not yet
+        extracted, and a summary of the links.
+        """
+        return await self._get(self._behavioural(model_id))
+
+    async def extract_behavioural_model(
+        self,
+        model_id: str,
+        confirm_estimate: bool = False,
+        model_version: int | None = None,
+        set_revision: int | None = None,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/extract.
+
+        Estimate, and with ``confirm_estimate`` run, the extraction of a
+        behavioural model for a model that has none. A confirmation names the
+        ``model_version`` and ``set_revision`` the estimate reported; each is
+        sent only when given.
+
+        A refusal is an answer, not an error: 402 (the balance cannot cover
+        the estimate) and 409 (the model already has a behavioural model, a
+        build holds it, or it changed since the estimate) come back as
+        ``{"confirmed": False, "http_status": ..., **detail}`` so a caller can
+        relay them. Any other failure raises.
+        """
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        if set_revision is not None:
+            body["set_revision"] = int(set_revision)
+        resp = await self._request_with_idempotency(
+            "POST", self._behavioural(model_id, "/extract"), json=body)
+        if resp.status_code in (402, 409):
+            return {"confirmed": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
+    async def answer_behavioural_questions(
+        self,
+        model_id: str,
+        answers: list[dict],
+        extract_now: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/answers.
+
+        Answers open questions, many in one call; each answer is
+        ``{"question_id", "text"}``. Creates a model version, and runs the
+        extraction (billed to the caller) once every open owner question has
+        an answer or when ``extract_now`` asks for it.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/answers"),
+            {"answers": list(answers), "extract_now": bool(extract_now)},
+        )
+
+    async def edit_behavioural_element(
+        self, model_id: str, collection: str, element: dict,
+    ) -> dict:
+        """PUT /api/models/{model_id}/behavioural-model/elements.
+
+        Replaces (or adds) one element in ``collection`` as a person wrote
+        it. Creates a model version, and voids a confirmation.
+        """
+        return await self._put(
+            self._behavioural(model_id, "/elements"),
+            {"collection": collection, "element": element},
+        )
+
+    async def confirm_behavioural_model(
+        self, model_id: str, ir_hash: str, note: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/confirm.
+
+        Confirms the model whose ``ir_hash`` the caller reviewed. Creates a
+        model version.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/confirm"),
+            {"ir_hash": ir_hash, "note": note},
+        )
+
+    async def get_behavioural_links(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/behavioural-model/links.
+
+        Read-only. The nodes, the links and whether each counts, the
+        proposals with the ``proposals_hash`` a bulk acceptance names, the
+        link questions and what repair would propose.
+        """
+        return await self._get(self._behavioural(model_id, "/links"))
+
+    async def declare_behavioural_link(
+        self, model_id: str, node_id: str, entity_id: str,
+        component_id: str = "",
+    ) -> dict:
+        """PUT /api/models/{model_id}/behavioural-model/links/{node_id}.
+
+        Declares the asset (or trust boundary) an element (or zone) is.
+        Creates no model version.
+        """
+        return await self._put(
+            self._behavioural(model_id, f"/links/{node_id}"),
+            {"entity_id": entity_id, "component_id": component_id},
+        )
+
+    async def accept_behavioural_link_proposals(
+        self, model_id: str, proposals_hash: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/links/accept.
+
+        Declares every proposal as shown, naming the ``proposals_hash``
+        reviewed.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/links/accept"),
+            {"proposals_hash": proposals_hash},
+        )
+
+    async def get_control_delta(self, model_id: str, control_id: str) -> dict:
+        """GET /api/models/{model_id}/behavioural-model/controls/{control_id}/delta.
+
+        Read-only. The delta served for the control's text as it stands, with
+        its status (``absent``, ``pending``, ``checked``, ``failed`` or
+        ``declared``).
+        """
+        return await self._get(
+            self._behavioural(model_id, f"/controls/{control_id}/delta"))
+
+    async def declare_control_delta(
+        self,
+        model_id: str,
+        control_id: str,
+        edits: list[dict],
+        unexpressed: list[dict] | None = None,
+    ) -> dict:
+        """PUT /api/models/{model_id}/behavioural-model/controls/{control_id}/delta.
+
+        Declares the control's delta: edits to the behavioural model, each
+        quoting the control's own text. Writes no control, set revision or
+        model version.
+        """
+        return await self._put(
+            self._behavioural(model_id, f"/controls/{control_id}/delta"),
+            {"edits": list(edits), "unexpressed": list(unexpressed or [])},
+        )
+
+    async def get_behavioural_threats(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/behavioural-model/threats.
+
+        Read-only. The possible threats found per live control objective,
+        with the default questions whose answers would remove them.
+        """
+        return await self._get(self._behavioural(model_id, "/threats"))
