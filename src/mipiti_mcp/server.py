@@ -7047,7 +7047,10 @@ async def answer_behavioural_questions(
     ``get_behavioural_model`` (or ``get_review_queue``, as
     ``behavioural_question`` rows) lists the open questions. Answer only from
     what the code or the owner shows, and say unknown where it does not: a
-    guess becomes a stated fact. Each answer is kept as a clarification. The
+    guess becomes a stated fact. Answer what each question asks and no more,
+    in a sentence or two: whatever else an answer describes is modelled, and
+    each new part is asked about in turn, so a detailed answer opens more
+    questions than it closes. Each answer is kept as a clarification. The
     model is extracted once every open owner question has an answer, or when
     ``extract_now=True`` asks for it (with no answers, it extracts with those
     already collected). That extraction is billed to the caller; a balance
