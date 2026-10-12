@@ -6974,7 +6974,10 @@ async def get_behavioural_model(server_version: str, model_id: str) -> dict:
     changed since it was extracted). ``questions`` are the open ones: each is
     answered with ``answer_behavioural_questions``. ``pending_answers`` are
     answers collected and not yet extracted. ``ir_hash`` is what
-    ``confirm_behavioural_model`` names.
+    ``confirm_behavioural_model`` names. ``extraction.job`` is the extraction
+    running in the background (null when none): poll this until it is null;
+    a ``failed`` job says why in ``error``. ``generation_ready`` is true when
+    a generation stopped on these questions can now run.
 
     Args:
         model_id: ID of the threat model.
@@ -7008,17 +7011,20 @@ async def extract_behavioural_model(
        judgements of the groups the threats reach are asked again, and
        posture can move down as well as up. Show all of it to the person.
     2. Once they agree, call with ``confirm_estimate=True`` and those two
-       values. The extraction runs, a new model version stores the result
-       with the link proposals, and the answer carries ``status`` (it may be
-       ``needs_answers``), ``matching``, ``proposals`` and ``deltas``. Read
-       the proposals with ``get_behavioural_links``.
+       values. The extraction is queued and the call returns at once
+       (``queued``, ``extraction.job``): it can take an hour on a long
+       description. Poll ``get_behavioural_model`` until ``extraction.job``
+       is null; a new model version then holds the result (its ``status``
+       may be ``needs_answers``). Read the proposals with
+       ``get_behavioural_links``.
 
     Refusals come back as data, ``{confirmed: false, http_status, code,
     message}``: 409 ``has_behavioural_model`` (read it with
-    ``get_behavioural_model``), 409 ``review_stale`` (the model or its
-    controls changed since the estimate: confirm again with the values
-    returned), 402 (the balance cannot cover the estimate). A 404 means the
-    caller may not start paid actions on the model.
+    ``get_behavioural_model``), 409 ``extraction_running`` (one is queued or
+    running: poll it), 409 ``review_stale`` (the model or its controls
+    changed since the estimate: confirm again with the values returned), 402
+    (the balance cannot cover the estimate). A 404 means the caller may not
+    start paid actions on the model.
 
     Args:
         model_id: ID of the threat model.
@@ -7061,8 +7067,10 @@ async def answer_behavioural_questions(
     parked for a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
-    Returns the behavioural model as it now stands, with ``extracted`` (the
-    answers were extracted) and ``generation_ready``.
+    Returns at once with the answers stored. When an extraction was asked
+    for, ``queued`` is true and it runs in the background (up to an hour on
+    a long description): poll ``get_behavioural_model`` until
+    ``extraction.job`` is null, then read the new questions.
 
     Args:
         model_id: ID of the threat model.
