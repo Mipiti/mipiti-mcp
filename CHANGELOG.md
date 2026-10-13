@@ -34,8 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `get_review_queue` lists `behavioural_question`, `behavioural_link` and
     `not_applicable_refuted` rows, and `list_decisions` filters on
     `behavioural_model_answered` and `behavioural_model_confirmed`. The server
-    instructions say how to route a possible threat and an open question. The
-    tool surface is 139 tools.
+    instructions say how to route a possible threat and an open question.
+  - `request_model_check`, `get_model_check` and `manage_model_check` request
+    a model check of the obligations the analysis could not settle (estimate,
+    relayed to the person, then confirm), read it, and pause, resume or
+    discard it. Refusals (409, 402, 503) come back as data.
+  - A `generate_threat_model` that stops on questions only the description's
+    owner can answer returns `needs_answers` with the saved `model_id` and the
+    `questions`; called again with `model_id` once they are answered, the
+    generation resumes from the answers.
+  - The extraction is queued and runs in the background; the client and tool
+    descriptions say so.
+
+  The tool surface is 142 tools.
 
 ### Changed
 

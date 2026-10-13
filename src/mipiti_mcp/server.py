@@ -140,7 +140,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`; a program's `declare_control_delta` is checked, never counted as a person's declaration.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`; a program's `declare_control_delta` is checked, never counted as a person's declaration. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -707,6 +707,7 @@ async def generate_threat_model(
     provenance_ref: str = "",
     provenance_source_ref: str = "",
     provenance_source_url: str = "",
+    model_id: str = "",
 ) -> dict:
     """Generate a complete threat model from a feature description.
 
@@ -737,6 +738,18 @@ async def generate_threat_model(
     never reads the description as a question or a change to another
     model.
 
+    **Stopped on owner questions:** where the platform models what the
+    system does, a description that leaves open what only its owner can
+    say stops before any inventory is generated, and the model is saved
+    holding the description. The tool returns ``needs_answers: true`` with
+    the ``model_id`` and the ``questions``.
+    RELAY THE QUESTIONS TO THE PERSON, answer them with
+    ``answer_behavioural_questions`` from what they or the code show,
+    poll ``get_behavioural_model`` until it reports
+    ``generation_ready: true``, then call this tool again with that
+    ``model_id``: the generation resumes from the answers and saves that
+    model's next version. No control build is proposed until then.
+
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
@@ -765,6 +778,15 @@ async def generate_threat_model(
         provenance_source_ref: Identifier of the ticket or document the
             description came from (``ticket`` / ``document`` kinds).
         provenance_source_url: URL of that ticket or document.
+        model_id: Only to resume a generation that stopped on owner
+            questions (above): the model it saved. Pass it once
+            ``get_behavioural_model`` reports ``generation_ready: true``.
+            Before then it is not a resume, and a new model is generated.
+
+    Return shape (stopped on owner questions):
+        ``{"generated": False, "needs_answers": True, "model_id",
+        "version", "questions": [{"question_id", "text", ...}],
+        "message"}``.
 
     Return shape (normal generation):
         ``{"model_id", "version", "title", "asset_count",
@@ -819,6 +841,7 @@ async def generate_threat_model(
             parent_id=parent_id,
             on_progress=on_progress,
             provenance=provenance,
+            model_id=model_id.strip() or None,
         )
         # Emit a final 100% notification aligned with the sequence's total.
         # If on_progress was never called (stream had no step events), skip
@@ -843,6 +866,18 @@ async def generate_threat_model(
                 ),
             }
         if isinstance(result, ChatResponse):
+            stopped = getattr(result, "needs_answers", None)
+            if isinstance(stopped, dict):
+                # The generation stopped on owner questions: the model is
+                # saved holding the description, with no inventory yet.
+                return {
+                    "generated": False,
+                    "needs_answers": True,
+                    "model_id": stopped.get("model_id", ""),
+                    "version": stopped.get("version"),
+                    "questions": list(stopped.get("questions") or []),
+                    "message": result.content,
+                }
             # Only a backend that does not take the named intent answers a
             # generation in prose; nothing was written.
             return {"generated": False, "message": result.content}
@@ -7382,6 +7417,144 @@ async def get_behavioural_threats(server_version: str, model_id: str) -> dict:
     """
     try:
         return _dump(await _get_client().get_behavioural_threats(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def request_model_check(
+    server_version: str,
+    model_id: str,
+    confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
+    set_revision: Optional[int] = None,
+    obligations: str = "",
+    scope: str = "",
+) -> dict:
+    """Request a model check of the obligations the behavioural analysis
+    could not settle. Mutating only with ``confirm_estimate=True``; a paid
+    action then.
+
+    A check is paid for by whoever requests it, so it is estimated first and
+    the estimate is RELAYED TO THE PERSON before it is confirmed.
+    Never confirm on your own.
+
+    1. Call with ``confirm_estimate=False`` (the default): nothing runs or is
+       charged. The answer carries the ``obligations`` it would cover (each
+       with its completion ``prediction``), the ``scope``, the ``cones``
+       (each module, its runs, and ``remedies`` / ``not_run`` where it may
+       not complete or fits no runner), the ``estimate``, the
+       ``model_version`` and ``set_revision`` the model stands at, and
+       ``notices`` on what a check does. Show all of it to the person. With
+       nothing to check, the ``message`` says so: name ``obligations`` to
+       check some anyway.
+    2. Once they agree, call with ``confirm_estimate=True`` and those two
+       values. The check is queued (``confirmed: true``, ``job_id``,
+       ``status: "queued"``); poll ``get_model_check`` until ``terminal``.
+
+    Refusals come back as data, ``{confirmed: false, http_status, code,
+    message}``: 409 ``not_confirmed`` (confirm the behavioural model first,
+    after reviewing it), ``differences_open`` (answer the open questions an
+    earlier check raised), ``check_active`` (one is live: read it),
+    ``generation_active`` (a build holds the model), ``review_stale`` (the
+    model or its controls changed since the estimate: confirm again with
+    the values returned), ``no_runner_size`` (every module is larger than
+    any runner holds: answer the defaults it rests on, or narrow the scope
+    or the obligations); 503 ``not_priced`` or ``no_runner_pool`` (checks
+    cannot run here yet); 402 (the balance cannot cover the estimate). A 404
+    means model checks are not available for the model, or the caller may
+    not start paid actions on it.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: False (default) estimates; True queues the check.
+        model_version: With ``confirm_estimate=True``: the estimate's value.
+        set_revision: With ``confirm_estimate=True``: the estimate's value.
+        obligations: Optional comma-separated obligation ids to cover in
+            place of the default (the unsettled ones the controls' groups
+            reach).
+        scope: Optional JSON object lowering some of the scope's constants,
+            the keys the estimate's ``scope`` reports (e.g.
+            ``{"domain": 1, "horizon": 4}``); each must be a non-negative
+            integer at most the declared value, and those left out keep it
+            (400 ``bad_scope`` otherwise).
+    """
+    parsed_obligations = [o.strip() for o in obligations.split(",") if o.strip()]
+    parsed_scope = (_json_value(scope, "scope", dict, '{"domain": 1, "horizon": 4}')
+                    if scope.strip() else None)
+    try:
+        return _dump(await _get_client().request_model_check(
+            model_id, confirm_estimate=confirm_estimate,
+            model_version=model_version, set_revision=set_revision,
+            obligations=parsed_obligations, scope=parsed_scope))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_model_check(server_version: str, model_id: str) -> dict:
+    """Read a model's model check: the live one, else the latest. Read-only.
+
+    ``status`` is ``queued``, ``extracting`` (the independent extraction),
+    ``running``, ``pausing``, ``paused``, ``differences`` (the independent
+    extraction disagreed with the confirmed model: ``cross_check.questions``
+    are the questions to answer with ``answer_behavioural_questions``, and no
+    model check ran), ``complete``, ``incomplete``, ``failed``,
+    ``discarded``, or ``none`` when the model has never had one. ``terminal``
+    says whether it has stopped. Beside it: the ``obligations`` and
+    ``scope`` it covers, the ``estimate`` confirmed, the ``results`` of its
+    runs, ``machine_seconds`` and ``error_message``. A result that did not
+    complete reports no violation up to the depth reached and credits
+    nothing.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_model_check(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+_MODEL_CHECK_ACTIONS = ("pause", "resume", "discard")
+
+
+@mcp.tool()
+async def manage_model_check(
+    server_version: str,
+    model_id: str,
+    action: Literal["pause", "resume", "discard"],
+) -> dict:
+    """Pause, resume or discard a model's live model check. Mutating.
+
+    - ``action="pause"``: a queued check pauses at once, a running one at its
+      next stage (``pausing`` until then). Idempotent. What it already ran is
+      charged. Returns ``{paused: true, job_id, status}``.
+    - ``action="resume"``: a paused check resumes at the stage it stopped in.
+      Returns ``{resumed: true, job_id, status: "queued"}``.
+    - ``action="discard"``: drops a queued or paused check; a running one is
+      refused until it is paused. What it already ran is charged. Returns
+      ``{discarded: true, job_id, status: "discarded"}``.
+
+    A refusal comes back as data, ``{paused|resumed|discarded: false,
+    http_status: 409, code, message}``: ``not_running`` (no check is live),
+    ``pause_in_progress`` (still stopping: resume once it reads ``paused``),
+    ``not_paused``, ``pause_first`` (pause a running check before
+    discarding it).
+
+    Args:
+        model_id: ID of the threat model.
+        action: "pause", "resume" or "discard".
+    """
+    if action not in _MODEL_CHECK_ACTIONS:
+        raise ToolError(f"action must be one of {', '.join(_MODEL_CHECK_ACTIONS)}.")
+    try:
+        client = _get_client()
+        if action == "pause":
+            return _dump(await client.pause_model_check(model_id))
+        if action == "resume":
+            return _dump(await client.resume_model_check(model_id))
+        return _dump(await client.discard_model_check(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
 

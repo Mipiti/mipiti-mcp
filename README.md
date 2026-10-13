@@ -86,13 +86,13 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->139<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->142<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
 | Tool | Description |
 |------|-------------|
-| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Progress reported automatically via MCP protocol — the tool blocks until complete. Optional `provenance_*` params record where the description came from at creation (for a repository: `provenance_kind="code"` + `provenance_repo_url` + `provenance_commit_sha`). |
+| `generate_threat_model` | Generate a complete threat model from a feature description. Runs a multi-step AI pipeline producing trust boundaries, assets, attackers, control objectives, and assumptions. Progress reported automatically via MCP protocol — the tool blocks until complete. Optional `provenance_*` params record where the description came from at creation (for a repository: `provenance_kind="code"` + `provenance_repo_url` + `provenance_commit_sha`). Where the platform models what the system does, a description that leaves open what only its owner can say stops before any inventory and returns `needs_answers` with the saved `model_id` and the `questions`; once they are answered and `get_behavioural_model` reports `generation_ready`, call again with that `model_id` and the generation resumes from the answers. |
 | `update_threat_model` | Change a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; no new version), and the `provenance_*` values (where its description came from: `code` with a commit SHA means the code is authoritative and the model follows it, anything else means the description is intent and the code is measured against it; bumps the version). Changes apply in that order; a failure names the ones already applied. |
 | `refine_threat_model` | Refine an existing threat model based on an instruction. Creates a new version. Only affected entity types are modified — unaffected entities are preserved server-side. An instruction that cannot be applied (a targeted change naming an entity the model does not have) writes nothing and returns `{model_id, changed: false, message}`. |
 | `query_threat_model` | Ask a question about an existing threat model. It only answers; it never changes the model. |
@@ -205,9 +205,9 @@ A behavioural model states what a system does: its elements, the actions on them
 
 | Tool | Description |
 |------|-------------|
-| `get_behavioural_model` | A model's behavioural model: `status` (`none`, `needs_answers`, `extracted`, `confirmed`, `stale`), the model and its `ir_hash`, the open questions, the answers collected and not yet extracted. Read-only. |
-| `extract_behavioural_model` | Give a model that has none one. A paid action: call once for the estimate (nothing is charged or written) and relay it to the person, then with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned. Refusals (`409` already has one or review stale, `402` balance) come back as data. |
-| `answer_behavioural_questions` | Answer open questions, many in one call. The model is extracted, billed to the caller, once every open owner question has an answer or when `extract_now=True`. |
+| `get_behavioural_model` | A model's behavioural model: `status` (`none`, `needs_answers`, `extracted`, `confirmed`, `stale`), the model and its `ir_hash`, the open questions, the answers collected and not yet extracted, and the extraction queued or running (`extraction.job`). Read-only. |
+| `extract_behavioural_model` | Give a model that has none one. A paid action: call once for the estimate (nothing is charged or written) and relay it to the person, then with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned. The extraction is queued and runs in the background; poll `get_behavioural_model`. Refusals (`409` already has one, one is running or review stale, `402` balance) come back as data. |
+| `answer_behavioural_questions` | Answer open questions, many in one call. The model is extracted in the background, billed to the caller, once every open owner question has an answer or when `extract_now=True`. |
 | `edit_behavioural_element` | Replace or add one element as a person wrote it. Voids a confirmation. |
 | `confirm_behavioural_model` | Confirm the model whose `ir_hash` was reviewed. Refused when the model changed since (`review_stale`), the description moved (`stale`) or an owner question is open (`needs_answers`). |
 | `get_behavioural_links` | The links from elements and zones to assets and trust boundaries, the proposals with the `proposals_hash` a bulk acceptance names, and the open link questions. Read-only. |
@@ -216,6 +216,9 @@ A behavioural model states what a system does: its elements, the actions on them
 | `get_control_delta` | The edits to the behavioural model a control's own text commits to, with their status (`absent`, `pending`, `checked`, `failed`, `declared`). Read-only. |
 | `declare_control_delta` | Declare a control's delta, each edit quoting the control's text. A program's submission is stored undeclared and checked by one call billed to the caller; it never replaces a delta a person declared. |
 | `get_behavioural_threats` | The possible threats found per control objective, with the default questions whose answers would remove them. Relay a possible threat to the person with its default questions first. Read-only. |
+| `request_model_check` | Model-check the obligations the analysis could not settle, over a confirmed behavioural model. A paid action: call once for the estimate (the obligations, each module's completion prediction and runner size, the estimate and what a check does; nothing runs or is charged) and relay it to the person, then with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned. `obligations` and `scope` narrow it. Refusals (`409`, `402`, `503`) come back as data. |
+| `get_model_check` | The model's live model check, else its latest: its status, what it covers, the differences an independent extraction found, and the results of its runs. A result that did not complete credits nothing. Read-only. |
+| `manage_model_check` | `action="pause"`, `"resume"` or `"discard"` the model's live check. What it already ran is charged. Refusals (`409`) come back as data. |
 
 ### Assurance
 

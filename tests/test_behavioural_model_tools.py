@@ -128,6 +128,92 @@ async def test_writes_use_the_verbs_and_bodies_the_api_takes(mock_env: None) -> 
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_check_estimate_sends_only_the_flag(mock_env: None) -> None:
+    route = respx.post(BASE + "/check").mock(return_value=httpx.Response(
+        200, json={"confirmed": False, "model_version": 4, "set_revision": 2,
+                   "estimate": {"credits": 30.0}}))
+    out = await MipitiClient().request_model_check("tm-1")
+    assert out["estimate"]["credits"] == 30.0
+    assert _body(route) == {"confirm_estimate": False}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_check_confirmation_names_the_reviewed_values(mock_env: None) -> None:
+    route = respx.post(BASE + "/check").mock(return_value=httpx.Response(
+        200, json={"confirmed": True, "job_id": "j1", "status": "queued"}))
+    out = await MipitiClient().request_model_check(
+        "tm-1", confirm_estimate=True, model_version=4, set_revision=2,
+        obligations=["ob1"], scope={"domain": 1})
+    assert out["job_id"] == "j1"
+    assert _body(route) == {"confirm_estimate": True, "model_version": 4,
+                            "set_revision": 2, "obligations": ["ob1"],
+                            "scope": {"domain": 1}}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "not_confirmed"),
+                                         (409, "review_stale"),
+                                         (409, "no_runner_size"),
+                                         (503, "not_priced"),
+                                         (402, "insufficient_credits")])
+async def test_check_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(BASE + "/check").mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().request_model_check("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status", [400, 403, 404])
+async def test_check_other_failures_raise(mock_env: None, status: int) -> None:
+    respx.post(BASE + "/check").mock(
+        return_value=httpx.Response(status, json={"detail": {"code": "x"}}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await MipitiClient().request_model_check("tm-1")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_check_status_and_its_controls(mock_env: None) -> None:
+    client = MipitiClient()
+    read = respx.get(BASE + "/check").mock(return_value=httpx.Response(
+        200, json={"model_id": "tm-1", "status": "running", "terminal": False}))
+    assert (await client.get_model_check("tm-1"))["status"] == "running"
+    assert read.called
+    for tail, call, key in (
+        ("/check/pause", client.pause_model_check, "paused"),
+        ("/check/resume", client.resume_model_check, "resumed"),
+        ("/check/discard", client.discard_model_check, "discarded"),
+    ):
+        respx.post(BASE + tail).mock(return_value=httpx.Response(
+            200, json={"model_id": "tm-1", "job_id": "j1", "status": "x"}))
+        out = await call("tm-1")
+        assert out[key] is True and out["job_id"] == "j1", tail
+        respx.post(BASE + tail).mock(return_value=httpx.Response(
+            409, json={"detail": {"code": "not_running", "message": "m"}}))
+        out = await call("tm-1")
+        assert out[key] is False and out["http_status"] == 409, tail
+        assert out["code"] == "not_running", tail
+
+
+@pytest.mark.asyncio
+async def test_generation_names_the_model_it_resumes(mock_env: None) -> None:
+    client = MipitiClient()
+    stream = AsyncMock(return_value={"type": "chat_response", "content": "c"})
+    with patch.object(client, "_stream_model", stream):
+        await client.generate_threat_model("desc", model_id="tm-1")
+        await client.generate_threat_model("desc")
+    assert stream.await_args_list[0].kwargs["model_id"] == "tm-1"
+    assert stream.await_args_list[1].kwargs["model_id"] is None
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_a_refused_judgment_raises_with_its_escalation(mock_env: None) -> None:
     respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
         403, json={"detail": {"code": "delegation_required",
@@ -308,6 +394,95 @@ async def test_the_reads_forward_their_ids() -> None:
     client.get_control_delta.assert_awaited_once_with("tm-1", "CTRL-1")
 
 
+@pytest.mark.asyncio
+async def test_check_tool_parses_obligations_and_scope() -> None:
+    client = _client(request_model_check={"confirmed": True, "job_id": "j1"})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.request_model_check(
+            server_version="0", model_id="tm-1", confirm_estimate=True,
+            model_version=4, set_revision=2, obligations=" ob1, ,ob2 ",
+            scope='{"domain": 1}')
+    client.request_model_check.assert_awaited_once_with(
+        "tm-1", confirm_estimate=True, model_version=4, set_revision=2,
+        obligations=["ob1", "ob2"], scope={"domain": 1})
+    assert out["job_id"] == "j1"
+
+
+@pytest.mark.asyncio
+async def test_check_tool_estimates_by_default() -> None:
+    client = _client(request_model_check={"confirmed": False})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.request_model_check(server_version="0", model_id="tm-1")
+    client.request_model_check.assert_awaited_once_with(
+        "tm-1", confirm_estimate=False, model_version=None, set_revision=None,
+        obligations=[], scope=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["nope", "[1]"])
+async def test_a_malformed_scope_is_refused_before_the_call(scope: str) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match="scope"):
+            await server.request_model_check(
+                server_version="0", model_id="tm-1", scope=scope)
+    client.request_model_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manage_model_check_dispatches_each_action() -> None:
+    client = _client(pause_model_check={"paused": True},
+                     resume_model_check={"resumed": True},
+                     discard_model_check={"discarded": True})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        for action, key in (("pause", "paused"), ("resume", "resumed"),
+                            ("discard", "discarded")):
+            out = await server.manage_model_check(
+                server_version="0", model_id="tm-1", action=action)
+            assert out[key] is True, action
+        with pytest.raises(ToolError, match="action"):
+            await server.manage_model_check(
+                server_version="0", model_id="tm-1", action="restart")
+        await server.get_model_check(server_version="0", model_id="tm-1")
+    for name in ("pause_model_check", "resume_model_check", "discard_model_check",
+                 "get_model_check"):
+        getattr(client, name).assert_awaited_once_with("tm-1")
+
+
+@pytest.mark.asyncio
+async def test_a_generation_stopped_on_questions_returns_them() -> None:
+    from mipiti_mcp.types import ChatResponse
+
+    questions = [{"question_id": "q1", "text": "Who may delete a record?"}]
+    stopped = ChatResponse.model_validate({
+        "type": "chat_response", "content": "answer these",
+        "needs_answers": {"model_id": "tm-9", "version": 1, "questions": questions}})
+    client = _client(generate_threat_model=stopped)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.generate_threat_model(
+            server_version="0", feature_description="desc", ctx=AsyncMock())
+    assert out == {"generated": False, "needs_answers": True, "model_id": "tm-9",
+                   "version": 1, "questions": questions, "message": "answer these"}
+
+
+@pytest.mark.asyncio
+async def test_a_generation_names_the_model_it_resumes_only_when_given() -> None:
+    from mipiti_mcp.types import ChatResponse
+
+    prose = ChatResponse.model_validate({"type": "chat_response", "content": "c"})
+    client = _client(generate_threat_model=prose)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.generate_threat_model(
+            server_version="0", feature_description="desc", ctx=AsyncMock(),
+            model_id=" tm-9 ")
+        await server.generate_threat_model(
+            server_version="0", feature_description="desc", ctx=AsyncMock())
+    calls = client.generate_threat_model.await_args_list
+    assert calls[0].kwargs["model_id"] == "tm-9"
+    assert calls[1].kwargs["model_id"] is None
+    assert out == {"generated": False, "message": "c"}
+
+
 # ------------------------------------------------------------------
 # Published text
 # ------------------------------------------------------------------
@@ -318,6 +493,7 @@ _TOOLS = (
     "confirm_behavioural_model", "get_behavioural_links",
     "declare_behavioural_link", "accept_behavioural_link_proposals",
     "get_control_delta", "declare_control_delta", "get_behavioural_threats",
+    "request_model_check", "get_model_check", "manage_model_check",
 )
 
 
@@ -344,6 +520,22 @@ def test_the_extraction_is_estimated_and_relayed_first() -> None:
     text = _descriptions()["extract_behavioural_model"]
     assert "confirm_estimate" in text and "RELAYED TO THE PERSON" in text
     assert "Never confirm on your own" in text
+
+
+def test_the_check_is_estimated_and_relayed_first() -> None:
+    text = _descriptions()["request_model_check"]
+    assert "confirm_estimate" in text and "RELAYED TO THE PERSON" in text
+    assert "Never confirm on your own" in text
+    instructions = build_instructions("pro", "user")
+    assert "RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON" in instructions
+    assert "`manage_model_check`" in instructions
+
+
+def test_a_stopped_generation_says_how_it_resumes() -> None:
+    text = _descriptions()["generate_threat_model"]
+    assert "needs_answers" in text and "RELAY THE QUESTIONS TO THE PERSON" in text
+    assert "generation_ready" in text
+    assert "needs_answers" in build_instructions("developer", "user")
 
 
 def test_judgments_name_the_refusal_and_the_no_retry_rule() -> None:

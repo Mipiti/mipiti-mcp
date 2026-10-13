@@ -988,7 +988,7 @@ class TestProgressChannelClosed:
 
         async def _client_call(
             _desc, force_generate=False, parent_id=None, on_progress=None,
-            provenance=None,
+            provenance=None, model_id=None,
         ):
             if on_progress is not None:
                 await on_progress(1.0, 5.0, "Working")
