@@ -7040,6 +7040,9 @@ async def extract_behavioural_model(
         raise _api_error(exc) from exc
 
 
+_ANSWER_DISPOSITIONS = ("fact", "not_needed", "not_behaviour", "unknown", "as_stated")
+
+
 @mcp.tool()
 async def answer_behavioural_questions(
     server_version: str,
@@ -7062,6 +7065,17 @@ async def answer_behavioural_questions(
     already collected). That extraction is billed to the caller; a balance
     that cannot cover it is refused (402).
 
+    An answer is a fact (``text``) unless it names a ``disposition`` the
+    question's ``dispositions`` lists: ``not_needed`` (the gap does not
+    matter to what the system does), ``not_behaviour`` (the sentence
+    describes no behaviour), ``unknown`` (nobody can say; it stays visible as
+    an accepted unknown) or ``as_stated`` (the model's reading of the
+    structure the question names is what the system does). Its ``text`` is
+    then an optional note. Use ``unknown`` rather than a guess. A question
+    with no ``dispositions`` takes a fact only: one about the model's own
+    structure has no worst case to fall back on, so any disposition is
+    refused (422).
+
     A program's answer is a judgment. Unless the workspace's delegation
     policy admits it, it is refused with 403 and an ``escalation_id`` and
     parked for a person. Do not retry: report the ``escalation_id`` and poll
@@ -7074,9 +7088,11 @@ async def answer_behavioural_questions(
 
     Args:
         model_id: ID of the threat model.
-        answers: JSON array of ``{"question_id": "...", "text": "..."}``.
-            Example: '[{"question_id": "q1", "text": "Only the owner can
-            delete a record."}]'. Empty to extract with answers collected.
+        answers: JSON array of ``{"question_id": "...", "text": "...",
+            "disposition"?: "..."}``. Example: '[{"question_id": "q1",
+            "text": "Only the owner can delete a record."}, {"question_id":
+            "q2", "disposition": "unknown"}]'. Empty to extract with answers
+            collected.
         extract_now: Extract now, with the answers given and those already
             collected.
     """
@@ -7084,9 +7100,15 @@ async def answer_behavioural_questions(
         answers, "answers", list,
         '[{"question_id": "q1", "text": "Only the owner can delete a record."}]')
     for a in parsed:
-        if not (isinstance(a, dict) and str(a.get("question_id", "")).strip()
-                and str(a.get("text", "")).strip()):
-            raise ToolError("each answer needs a non-empty question_id and text.")
+        if not (isinstance(a, dict) and str(a.get("question_id", "")).strip()):
+            raise ToolError("each answer needs a non-empty question_id.")
+        disposition = str(a.get("disposition") or "fact")
+        if disposition not in _ANSWER_DISPOSITIONS:
+            raise ToolError(
+                f"disposition must be one of {', '.join(_ANSWER_DISPOSITIONS)}.")
+        if disposition == "fact" and not str(a.get("text", "")).strip():
+            raise ToolError("a fact needs a non-empty text; name a disposition "
+                            "to answer without one.")
     if not parsed and not extract_now:
         raise ToolError("Give at least one answer, or pass extract_now=True.")
     try:

@@ -179,6 +179,8 @@ async def test_answers_are_parsed_and_forwarded() -> None:
     ('{"question_id": "q1"}', False),
     ('[{"question_id": "q1"}]', False),
     ('[{"question_id": "", "text": "x"}]', False),
+    ('[{"question_id": "q1", "disposition": "fact"}]', False),
+    ('[{"question_id": "q1", "disposition": "skip"}]', False),
     ("[]", False),
 ])
 async def test_malformed_answers_are_refused_before_the_call(
@@ -190,6 +192,24 @@ async def test_malformed_answers_are_refused_before_the_call(
                 server_version="0", model_id="tm-1", answers=answers,
                 extract_now=extract_now)
     client.answer_behavioural_questions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_disposition_answers_without_text() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "disposition": "unknown"},
+               {"question_id": "q2", "disposition": "as_stated", "text": "note"}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+def test_the_answer_tool_names_every_disposition() -> None:
+    text = _descriptions()["answer_behavioural_questions"]
+    for disposition in server._ANSWER_DISPOSITIONS[1:]:
+        assert f"``{disposition}``" in text, disposition
 
 
 @pytest.mark.asyncio

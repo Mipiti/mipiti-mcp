@@ -3003,7 +3003,8 @@ class MipitiClient:
         """POST /api/models/{model_id}/behavioural-model/answers.
 
         Answers open questions, many in one call; each answer is
-        ``{"question_id", "text"}``. Creates a model version, and runs the
+        ``{"question_id", "text", "disposition"?}``, a fact unless it names a
+        disposition the question lists. Creates a model version, and runs the
         extraction (billed to the caller) once every open owner question has
         an answer or when ``extract_now`` asks for it.
         """
