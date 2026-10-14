@@ -122,8 +122,24 @@ async def test_writes_use_the_verbs_and_bodies_the_api_takes(mock_env: None) -> 
     assert _body(accept) == {"proposals_hash": "h1"}
 
     delta = respx.put(BASE + "/controls/CTRL-1/delta").mock(return_value=ok)
-    await client.declare_control_delta("tm-1", "CTRL-1", [{"op": "x"}])
+    await client.submit_control_delta("tm-1", "CTRL-1", [{"op": "x"}])
     assert _body(delta) == {"edits": [{"op": "x"}], "unexpressed": []}
+
+    declare = respx.post(BASE + "/controls/CTRL-1/delta/declare").mock(return_value=ok)
+    await client.declare_control_delta(
+        "tm-1", "CTRL-1", nothing_spans=[{"start": 0, "end": 4}],
+        declaration_hash="d1", confirm=True)
+    assert _body(declare) == {"nothing_spans": [{"start": 0, "end": 4}],
+                              "resolutions": [], "placements": [], "confirm": True,
+                              "declaration_hash": "d1"}
+    await client.declare_control_delta("tm-1", "CTRL-1")
+    assert _body(declare) == {"nothing_spans": [], "resolutions": [], "placements": [],
+                              "confirm": False}
+
+    reading = respx.post(BASE + "/deltas/second-reading").mock(return_value=ok)
+    await client.request_delta_second_reading("tm-1", ["CTRL-1", "CTRL-2"])
+    assert _body(reading) == {"control_ids": ["CTRL-1", "CTRL-2"],
+                              "confirm_estimate": False}
 
 
 @pytest.mark.asyncio
@@ -346,19 +362,53 @@ async def test_blank_required_values_are_refused_before_the_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delta_tool_parses_edits_and_unexpressed() -> None:
-    client = _client(declare_control_delta={"status": "pending", "check_ran": True})
+async def test_submit_tool_parses_edits_and_unexpressed() -> None:
+    client = _client(submit_control_delta={"status": "checked", "check_ran": True})
     with patch("mipiti_mcp.server._get_client", return_value=client):
-        out = await server.declare_control_delta(
+        out = await server.submit_control_delta(
             server_version="0", model_id="tm-1", control_id="CTRL-1",
             edits='[{"op": "x"}]', unexpressed='[{"kind": "k", "quote": "q"}]')
         with pytest.raises(ToolError):
-            await server.declare_control_delta(
+            await server.submit_control_delta(
                 server_version="0", model_id="tm-1", control_id="CTRL-1",
                 edits="nope")
-    client.declare_control_delta.assert_awaited_once_with(
+    client.submit_control_delta.assert_awaited_once_with(
         "tm-1", "CTRL-1", [{"op": "x"}], [{"kind": "k", "quote": "q"}])
     assert out["check_ran"] is True
+
+
+@pytest.mark.asyncio
+async def test_declare_tool_previews_and_needs_the_hash_to_confirm() -> None:
+    client = _client(declare_control_delta={"declaration_hash": "d1", "declarable": True})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.declare_control_delta(
+            server_version="0", model_id="tm-1", control_id="CTRL-1",
+            resolutions='[{"start": 0, "end": 4, "choice": "second"}]')
+        with pytest.raises(ToolError, match="declaration_hash"):
+            await server.declare_control_delta(
+                server_version="0", model_id="tm-1", control_id="CTRL-1", confirm=True)
+        with pytest.raises(ToolError, match="nothing_spans"):
+            await server.declare_control_delta(
+                server_version="0", model_id="tm-1", control_id="CTRL-1",
+                nothing_spans="{}")
+    client.declare_control_delta.assert_awaited_once_with(
+        "tm-1", "CTRL-1", nothing_spans=[],
+        resolutions=[{"start": 0, "end": 4, "choice": "second"}], placements=[],
+        declaration_hash="", confirm=False)
+    assert out["declaration_hash"] == "d1"
+
+
+@pytest.mark.asyncio
+async def test_second_reading_tool_splits_the_ids_and_estimates_by_default() -> None:
+    client = _client(request_delta_second_reading={"confirmed": False})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.request_delta_second_reading(
+            server_version="0", model_id="tm-1", control_ids=" CTRL-1, ,CTRL-2 ")
+        with pytest.raises(ToolError, match="control_ids"):
+            await server.request_delta_second_reading(
+                server_version="0", model_id="tm-1", control_ids=" , ")
+    client.request_delta_second_reading.assert_awaited_once_with(
+        "tm-1", ["CTRL-1", "CTRL-2"], confirm_estimate=False)
 
 
 @pytest.mark.asyncio
@@ -492,7 +542,8 @@ _TOOLS = (
     "answer_behavioural_questions", "edit_behavioural_element",
     "confirm_behavioural_model", "get_behavioural_links",
     "declare_behavioural_link", "accept_behavioural_link_proposals",
-    "get_control_delta", "declare_control_delta", "get_behavioural_threats",
+    "get_control_delta", "submit_control_delta", "request_delta_second_reading",
+    "declare_control_delta", "get_behavioural_threats",
     "request_model_check", "get_model_check", "manage_model_check",
 )
 
@@ -548,8 +599,17 @@ def test_judgments_name_the_refusal_and_the_no_retry_rule() -> None:
 
 
 def test_a_programs_delta_is_never_a_persons_declaration() -> None:
-    text = _descriptions()["declare_control_delta"]
-    assert "never replaces a delta a person declared" in text
+    assert "never replaces a delta a person declared" in _descriptions()[
+        "submit_control_delta"]
+    text = " ".join(_descriptions()["declare_control_delta"].split())
+    assert "403" in text and "escalation_id" in text and "Do not retry" in text
+    assert "whatever the workspace delegates" in text
+
+
+def test_the_second_reading_is_estimated_and_relayed_first() -> None:
+    text = _descriptions()["request_delta_second_reading"]
+    assert "confirm_estimate" in text and "RELAYED TO THE PERSON" in text
+    assert "Never confirm on your own" in text
 
 
 def test_threats_are_relayed_with_their_default_questions() -> None:
@@ -574,3 +634,4 @@ def test_review_queue_names_the_new_item_types() -> None:
 def test_decision_filter_accepts_the_behavioural_kinds() -> None:
     assert "behavioural_model_answered" in server._DECISION_KINDS
     assert "behavioural_model_confirmed" in server._DECISION_KINDS
+    assert "behavioural_delta_declared" in server._DECISION_KINDS

@@ -140,7 +140,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`; a program's `declare_control_delta` is checked, never counted as a person's declaration. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -6912,6 +6912,7 @@ _DECISION_KINDS = (
     "assumption_accepted",
     "behavioural_model_answered",
     "behavioural_model_confirmed",
+    "behavioural_delta_declared",
     "escalation_resolved",
 )
 
@@ -7351,31 +7352,29 @@ async def get_control_delta(
 
 
 @mcp.tool()
-async def declare_control_delta(
+async def submit_control_delta(
     server_version: str,
     model_id: str,
     control_id: str,
     edits: str,
     unexpressed: str = "[]",
 ) -> dict:
-    """Declare a control's delta: edits to the behavioural model, each quoting
-    the control's own text. Mutating; writes no control, set revision or model
-    version.
+    """Submit a draft of a control's delta: edits to the behavioural model,
+    each quoting the control's own text. Mutating; writes no control, set
+    revision or model version.
 
     Each edit's quote must be found in the control's text (a quote's
     ``source`` defaults to the control), and ``unexpressed`` lists what the
     text commits to that no edit states. An edit that does not check is
     refused (422 ``delta_refused``) with its failures.
 
-    Only a person's declaration is ``declared``. A program's submission is
-    stored undeclared and checked by one call billed to the caller (402 when
-    the balance is short), so it can never make the analysis credit a control
-    alone, and it never replaces a delta a person declared (409
-    ``declared_by_person``). Relay a program's delta to the person if it
-    should stand.
+    A submission is a draft, never a declaration: it is checked against the
+    text by one call billed to the caller (402 when the balance is short), so
+    it can never make the analysis credit a control alone, and a program's
+    never replaces a delta a person declared (409 ``declared_by_person``).
+    A person declares a draft with ``declare_control_delta``.
 
-    Returns the delta as ``get_control_delta`` does, with ``check_ran`` for a
-    program's submission.
+    Returns the delta as ``get_control_delta`` does, with ``check_ran``.
 
     Args:
         model_id: ID of the threat model.
@@ -7388,8 +7387,101 @@ async def declare_control_delta(
     parsed_unexpressed = _json_value(
         unexpressed, "unexpressed", list, '[{"kind": "...", "quote": "...", "note": ""}]')
     try:
-        return _dump(await _get_client().declare_control_delta(
+        return _dump(await _get_client().submit_control_delta(
             model_id, control_id, parsed_edits, parsed_unexpressed))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def request_delta_second_reading(
+    server_version: str,
+    model_id: str,
+    control_ids: str,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Read controls' text into deltas a second time, by a call not shown the
+    drafts: a delta is declared only once its draft has been read twice.
+
+    Without ``confirm_estimate`` nothing is charged or written: the result
+    lists the controls it would read, those it skips (``no_draft``, or
+    ``read`` already) and the estimate, which must be RELAYED TO THE PERSON
+    first. Never confirm on your own. With it the reading is made, billed to
+    the caller (402 when the balance is short), and each control's outcome
+    is returned (``usable``, ``unusable``, ``failed``, ``unavailable``).
+    Refused with 409 ``generation_active`` while a build holds the model.
+
+    Args:
+        model_id: ID of the threat model.
+        control_ids: Comma-separated control IDs, at most 30.
+        confirm_estimate: True to make the reading after the person agreed.
+    """
+    ids = [c.strip() for c in (control_ids or "").split(",") if c.strip()]
+    if not ids:
+        raise ToolError("control_ids is required: comma-separated control IDs.")
+    try:
+        return _dump(await _get_client().request_delta_second_reading(
+            model_id, ids, confirm_estimate=confirm_estimate))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def declare_control_delta(
+    server_version: str,
+    model_id: str,
+    control_id: str,
+    nothing_spans: str = "[]",
+    resolutions: str = "[]",
+    placements: str = "[]",
+    declaration_hash: str = "",
+    confirm: bool = False,
+) -> dict:
+    """Prepare the declaration of a control's delta as served: the act that
+    makes it the control's specification. Declaring is a person's act, never
+    a program's.
+
+    Without ``confirm`` (the default) this is the preview, and nothing is
+    written: the declaration the given spans and resolutions make, its
+    ``declaration_hash``, each edit in words beside its quotes, the second
+    reading's ``differences`` and those still ``open``, the text no quote
+    reaches (``unquoted``), the spans the text's notes suggest as committing
+    to nothing, what declaring does, and ``blocking`` (what stops it). Relay
+    the preview to the person: the differences, and which text commits to
+    nothing, are theirs to decide.
+
+    With ``confirm`` and the ``declaration_hash`` previewed, a program's call
+    is always refused with 403 and an ``escalation_id``, whatever the
+    workspace delegates: it is parked for a person, who sees what it declares
+    and accepts or rejects it. Do not retry: report the ``escalation_id`` and
+    poll ``list_proposals``. A parked declaration is withdrawn once the delta
+    it names changes.
+
+    Args:
+        model_id: ID of the threat model.
+        control_id: ID of the control.
+        nothing_spans: JSON array of ``{"start", "end"}`` spans of the
+            control's text, in code points, that commit to nothing.
+        resolutions: JSON array of ``{"start", "end", "choice"}``, one per
+            difference, in order: ``choice`` is ``draft``, ``second`` or
+            ``written`` (with ``edits``).
+        placements: JSON array of ``{"item", "index", "span", "start",
+            "end"}`` naming which occurrence a repeated quote stands at.
+        declaration_hash: The hash the preview returned.
+        confirm: True to declare (a person's act).
+    """
+    spans = _json_value(nothing_spans, "nothing_spans", list, '[{"start": 0, "end": 12}]')
+    chosen = _json_value(resolutions, "resolutions", list,
+                         '[{"start": 0, "end": 12, "choice": "draft"}]')
+    placed = _json_value(placements, "placements", list,
+                         '[{"item": "edit", "index": 0, "span": 0, "start": 0, "end": 12}]')
+    if confirm and not declaration_hash.strip():
+        raise ToolError("declaration_hash is required to confirm: preview first.")
+    try:
+        return _dump(await _get_client().declare_control_delta(
+            model_id, control_id, nothing_spans=spans, resolutions=chosen,
+            placements=placed, declaration_hash=declaration_hash.strip(),
+            confirm=confirm))
     except Exception as exc:
         raise _api_error(exc) from exc
 

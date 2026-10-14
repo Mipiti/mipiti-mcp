@@ -3097,7 +3097,7 @@ class MipitiClient:
         return await self._get(
             self._behavioural(model_id, f"/controls/{control_id}/delta"))
 
-    async def declare_control_delta(
+    async def submit_control_delta(
         self,
         model_id: str,
         control_id: str,
@@ -3106,13 +3106,54 @@ class MipitiClient:
     ) -> dict:
         """PUT /api/models/{model_id}/behavioural-model/controls/{control_id}/delta.
 
-        Declares the control's delta: edits to the behavioural model, each
-        quoting the control's own text. Writes no control, set revision or
-        model version.
+        Submits a draft of the control's delta: edits to the behavioural
+        model, each quoting the control's own text. Checked against the text
+        by one call billed to the caller; never declared. Writes no control,
+        set revision or model version.
         """
         return await self._put(
             self._behavioural(model_id, f"/controls/{control_id}/delta"),
             {"edits": list(edits), "unexpressed": list(unexpressed or [])},
+        )
+
+    async def declare_control_delta(
+        self,
+        model_id: str,
+        control_id: str,
+        nothing_spans: list[dict] | None = None,
+        resolutions: list[dict] | None = None,
+        placements: list[dict] | None = None,
+        declaration_hash: str = "",
+        confirm: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/controls/{control_id}/delta/declare.
+
+        Without ``confirm``: the preview of declaring the delta as served,
+        with its ``declaration_hash`` and what stops it. With it: the
+        declaration naming that hash, a person's act only.
+        """
+        body: dict = {"nothing_spans": list(nothing_spans or []),
+                      "resolutions": list(resolutions or []),
+                      "placements": list(placements or []), "confirm": confirm}
+        if declaration_hash:
+            body["declaration_hash"] = declaration_hash
+        return await self._post(
+            self._behavioural(model_id, f"/controls/{control_id}/delta/declare"), body)
+
+    async def request_delta_second_reading(
+        self,
+        model_id: str,
+        control_ids: list[str],
+        confirm_estimate: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/deltas/second-reading.
+
+        Estimate, and with ``confirm_estimate`` make, a second reading of the
+        controls' text into deltas, billed to the caller.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/deltas/second-reading"),
+            {"control_ids": list(control_ids), "confirm_estimate": confirm_estimate},
         )
 
     async def get_behavioural_threats(self, model_id: str) -> dict:
