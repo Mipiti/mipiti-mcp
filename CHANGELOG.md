@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Behavioural model tools.** A model can carry a behavioural model: what the
+  system does, as elements, actions and zones taken from its description, from
+  which the possible threats are read.
+  - `get_behavioural_model` reads it; `extract_behavioural_model` gives one to
+    a model that has none. The extraction is paid: call once for the estimate,
+    relay it to the person, then confirm with `confirm_estimate=True` and the
+    `model_version` and `set_revision` the estimate returned. Refusals (409,
+    402) come back as data.
+  - `answer_behavioural_questions`, `edit_behavioural_element` and
+    `confirm_behavioural_model` each create a model version. A program's
+    answer, edit, link declaration, link acceptance or confirmation is a
+    judgment: refused with 403 and an `escalation_id`, and parked for a person,
+    unless the workspace's delegation policy admits it.
+  - `get_behavioural_links`, `declare_behavioural_link` and
+    `accept_behavioural_link_proposals` read and declare the links from
+    elements and zones to assets and trust boundaries.
+  - `get_control_delta` and `declare_control_delta` read and declare the edits
+    a control's own text commits to. A program's delta is checked and never
+    counts as a person's declaration. A declared control's sufficiency is
+    judged against its declaration: `get_control_delta` carries the
+    `cross_check` of the declaration against the text, each finding dismissed
+    or open, and `get_sufficiency` the `commitments` its verdict was checked
+    against. An open finding keeps the control insufficient; dismissing one is
+    a person's act, which no tool offers, and `list_decisions` filters on
+    `behavioural_delta_declared` and `behavioural_cross_check_dismissed`.
+  - `get_behavioural_threats` returns the possible threats per control
+    objective with the default questions whose answers would remove them;
+    relay them to the person first.
+  - `get_review_queue` lists `behavioural_question`, `behavioural_link` and
+    `not_applicable_refuted` rows, and `list_decisions` filters on
+    `behavioural_model_answered` and `behavioural_model_confirmed`. The server
+    instructions say how to route a possible threat and an open question.
+  - `request_model_check`, `get_model_check` and `manage_model_check` request
+    a model check of the obligations the analysis could not settle (estimate,
+    relayed to the person, then confirm), read it, and pause, resume or
+    discard it. Refusals (409, 402, 503) come back as data.
+  - A `generate_threat_model` that stops on questions only the description's
+    owner can answer returns `needs_answers` with the saved `model_id` and the
+    `questions`; called again with `model_id` once they are answered, the
+    generation resumes from the answers.
+  - The extraction is queued and runs in the background; the client and tool
+    descriptions say so.
+
+  The tool surface is 142 tools.
+
 ### Changed
 
 - **BREAKING — systems are gone; the group tools act on tags.** A system was
