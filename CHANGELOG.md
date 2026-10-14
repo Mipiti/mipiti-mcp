@@ -27,7 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     elements and zones to assets and trust boundaries.
   - `get_control_delta` and `declare_control_delta` read and declare the edits
     a control's own text commits to. A program's delta is checked and never
-    counts as a person's declaration.
+    counts as a person's declaration. A declared control's sufficiency is
+    judged against its declaration: `get_control_delta` carries the
+    `cross_check` of the declaration against the text, each finding dismissed
+    or open, and `get_sufficiency` the `commitments` its verdict was checked
+    against. An open finding keeps the control insufficient; dismissing one is
+    a person's act, which no tool offers, and `list_decisions` filters on
+    `behavioural_delta_declared` and `behavioural_cross_check_dismissed`.
   - `get_behavioural_threats` returns the possible threats per control
     objective with the default questions whose answers would remove them;
     relay them to the person first.
