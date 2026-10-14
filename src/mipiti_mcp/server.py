@@ -4146,8 +4146,12 @@ async def get_sufficiency(
     insufficient carries ``details`` naming EACH uncovered clause and the
     evidence that would close it. A ``soundness_tier`` is the weakest
     clause's tier: a control is proven no more strongly than its thinnest
-    clause. Reading does not queue a re-evaluation: the write that changed a
-    control queues its own. For the whole model use
+    clause. It is composed over the evidence as it stands now
+    (``strength_basis: now``), beside ``soundness_tier_at_evaluation``, and
+    ``clause_strength`` lists each clause's tier now and when judged, with
+    each piece of evidence marked ``passes_now``: relay a clause whose
+    evidence no longer passes. Reading does not queue a re-evaluation: the
+    write that changed a control queues its own. For the whole model use
     ``get_verification_report``.
 
     Act by submitting the named assertions; a clause describing a mechanism
