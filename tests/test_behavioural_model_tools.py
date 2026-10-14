@@ -635,3 +635,15 @@ def test_decision_filter_accepts_the_behavioural_kinds() -> None:
     assert "behavioural_model_answered" in server._DECISION_KINDS
     assert "behavioural_model_confirmed" in server._DECISION_KINDS
     assert "behavioural_delta_declared" in server._DECISION_KINDS
+    assert "behavioural_cross_check_dismissed" in server._DECISION_KINDS
+
+
+def test_a_cross_check_finding_is_relayed_and_dismissed_by_a_person() -> None:
+    """A declared control's cross-check findings are relayed to the person,
+    and no tool dismisses one: dismissing is a person's act."""
+    delta = " ".join(_descriptions()["get_control_delta"].split())
+    assert "RELAY OPEN FINDINGS TO THE PERSON" in delta
+    assert "never a program's" in delta
+    assert not any("dismiss" in name for name in _descriptions())
+    sufficiency = " ".join(_descriptions()["get_sufficiency"].split())
+    assert "``commitments``" in sufficiency and "declaration" in sufficiency

@@ -140,7 +140,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -4150,9 +4150,12 @@ async def get_sufficiency(
     (``strength_basis: now``), beside ``soundness_tier_at_evaluation``, and
     ``clause_strength`` lists each clause's tier now and when judged, with
     each piece of evidence marked ``passes_now``: relay a clause whose
-    evidence no longer passes. Reading does not queue a re-evaluation: the
-    write that changed a control queues its own. For the whole model use
-    ``get_verification_report``.
+    evidence no longer passes. Reading does not queue a re-evaluation. For
+    the whole model use ``get_verification_report``.
+
+    ``commitments`` is what it was checked against: a person's declaration
+    (``basis: "declaration"``; an open cross-check finding keeps it
+    insufficient: ``get_control_delta``) or a reading of the text.
 
     Act by submitting the named assertions; a clause describing a mechanism
     the system does not use calls for ``refine_control``, not evidence.
@@ -4166,9 +4169,9 @@ async def get_sufficiency(
     clause's only other exits are a risk acceptance or a not-applicable
     disposition.
 
-    For a functional test it is whether the test's evidence proves the
-    objectives it is associated with, with the reasoning; computed after
-    evidence is submitted, so it can read pending or absent until then.
+    For a functional test it is whether its evidence proves the objectives
+    it is associated with, with the reasoning; it can read pending or
+    absent until evidence is submitted.
     """
     if bool(control_id) == bool(functional_test_id):
         raise ToolError("Name exactly one of control_id or functional_test_id.")
@@ -6917,6 +6920,7 @@ _DECISION_KINDS = (
     "behavioural_model_answered",
     "behavioural_model_confirmed",
     "behavioural_delta_declared",
+    "behavioural_cross_check_dismissed",
     "escalation_resolved",
 )
 
@@ -6933,8 +6937,10 @@ async def list_decisions(
     """List the decision ledger of a model: every judgment recorded on it
     (finding dismissed or remediated, risk accepted, not-applicable
     declared, proposal accepted / rejected / reverted, assumption accepted,
-    behavioural model answered / confirmed, escalation resolved), newest first, with who made it and whether it was within
-    the workspace's delegation policy. Read-only; no side effects.
+    behavioural model answered / confirmed, a control's delta declared, a
+    finding of its cross-check dismissed, escalation resolved), newest
+    first, with who made it and whether it was within the workspace's
+    delegation policy. Read-only; no side effects.
 
     Call this BEFORE raising a proposal or asking for a judgment, so you
     do not propose what a person rejected or ask again for what was
@@ -6959,8 +6965,10 @@ async def list_decisions(
             ``proposal_rejected``, ``proposal_reverted``,
             ``assumption_accepted``, ``behavioural_model_answered``
             (an answer, an element edit or a link declared),
-            ``behavioural_model_confirmed``, ``escalation_resolved``. Empty
-            (default) returns every kind.
+            ``behavioural_model_confirmed``, ``behavioural_delta_declared``,
+            ``behavioural_cross_check_dismissed`` (a person set aside a
+            finding of a declaration's cross-check), ``escalation_resolved``.
+            Empty (default) returns every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,
@@ -7343,7 +7351,19 @@ async def get_control_delta(
     The delta is served for the control's text as it stands. ``status`` is
     ``absent`` (none), ``pending`` (not checked yet), ``checked``, ``failed``
     or ``declared`` (a person declared it). Returns ``{status, edits,
-    unexpressed, applies, expressible, declared_by, ...}``.
+    unexpressed, applies, expressible, declared_by, rendered, unquoted,
+    second_reading, declaration, cross_check, ...}``: ``rendered`` is each
+    edit in words beside its quotes, ``unquoted`` the text no quote reaches.
+
+    Once a person declares the delta, the control's sufficiency is judged
+    against the declaration's commitments, not a reading of its text, and
+    ``cross_check`` says whether the text may commit to more than they
+    state: ``completed`` (false until the control's next sufficiency
+    evaluation asks it) and ``findings``, each ``dismissed`` or open. The
+    control reads sufficient only once its cross-check completed and every
+    finding is dismissed. RELAY OPEN FINDINGS TO THE PERSON: dismissing one
+    is a person's act, made in the app, never a program's; the other exit
+    is a new draft declared again.
 
     Args:
         model_id: ID of the threat model.
