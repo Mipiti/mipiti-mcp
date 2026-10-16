@@ -308,6 +308,81 @@ async def test_a_disposition_answers_without_text() -> None:
         "tm-1", answers, extract_now=False)
 
 
+@pytest.mark.asyncio
+async def test_a_structured_answer_and_a_contradiction_are_forwarded() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "structured": {"classes": ["org_admin"]}},
+               {"question_id": "q2", "text": "It also resets.",
+                "contradicts": {"direction": "code_does_more"}}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [
+    {"question_id": "q1", "structured": ["org_admin"]},
+    {"question_id": "q1", "text": "x", "contradicts": {"direction": "sideways"}},
+    {"question_id": "q1", "text": "x", "contradicts": "code_does_more"},
+])
+async def test_a_malformed_structured_answer_or_contradiction_is_refused(answer) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.answer_behavioural_questions(
+                server_version="0", model_id="tm-1", answers=json.dumps([answer]))
+    client.answer_behavioural_questions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_generation_saved_first_returns_the_model_and_its_job() -> None:
+    from mipiti_mcp.types import ChatResponse
+
+    extracting = {"model_id": "tm-9", "version": 1, "title": "Keys",
+                  "job": {"state": "queued"}, "estimate": {"credits": 40}}
+    client = _client(generate_threat_model=ChatResponse.model_validate(
+        {"type": "chat_response", "content": "Saved.", "extracting": extracting}))
+    ctx = AsyncMock()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.generate_threat_model(
+            server_version="0", feature_description="desc", ctx=ctx)
+    assert out["extracting"] is True and out["generated"] is False
+    assert (out["model_id"], out["job"]["state"]) == ("tm-9", "queued")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_drift_intent_and_record_only_reach_their_routes(mock_env: None) -> None:
+    client = MipitiClient()
+    intent = respx.post("https://test.api.mipiti.io/api/models/tm-1/findings/f-1/drift-intent"
+                        ).mock(return_value=httpx.Response(200, json={"intent": "defect"}))
+    await client.decide_drift_intent("tm-1", "f-1", "defect", control_id="C1",
+                                     head_commit="abc")
+    assert _body(intent) == {"intent": "defect", "control_id": "C1", "head_commit": "abc",
+                             "note": ""}
+    decide = respx.post("https://test.api.mipiti.io/api/models/tm-1/proposals/p-1/decide"
+                        ).mock(return_value=httpx.Response(200, json={"proposal": {}}))
+    await client.decide_proposal("tm-1", "p-1", "accept", record_only=True)
+    assert _body(decide)["record_only"] is True
+    await client.decide_proposal("tm-1", "p-1", "accept")
+    assert "record_only" not in _body(decide)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent,control", [("maybe", ""), ("defect", "")])
+async def test_a_drift_intent_the_api_would_refuse_is_refused_before_the_call(
+        intent: str, control: str) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.decide_drift_intent(server_version="0", model_id="tm-1",
+                                             finding_id="f-1", intent=intent,
+                                             control_id=control)
+    client.decide_drift_intent.assert_not_awaited()
+
+
 def test_the_answer_tool_names_every_disposition() -> None:
     text = _descriptions()["answer_behavioural_questions"]
     for disposition in server._ANSWER_DISPOSITIONS[1:]:

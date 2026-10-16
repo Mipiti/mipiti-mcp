@@ -2883,20 +2883,39 @@ class MipitiClient:
 
     async def decide_proposal(
         self, model_id: str, proposal_id: str, decision: str, note: str = "",
-        expires_at: str = "",
+        expires_at: str = "", record_only: bool = False,
     ) -> dict:
         """POST /api/models/{model_id}/proposals/{proposal_id}/decide.
 
         Accept or reject a proposal. ``expires_at`` (ISO 8601) is when an
-        accepted assumption lapses; it is sent only when given. Returns
-        ``{proposal, effect}``; a refusal surfaces as an HTTP 403 whose detail
-        carries ``escalation_id``.
+        accepted assumption lapses; it is sent only when given.
+        ``record_only`` accepts parked answers without starting the
+        extraction they complete; sent only when set. Returns ``{proposal,
+        effect}``; a refusal surfaces as an HTTP 403 whose detail carries
+        ``escalation_id``.
         """
         body: dict[str, Any] = {"decision": decision, "note": note}
         if expires_at:
             body["expires_at"] = expires_at
+        if record_only:
+            body["record_only"] = True
         return await self._post(
             f"/api/models/{model_id}/proposals/{proposal_id}/decide", body,
+        )
+
+    async def decide_drift_intent(
+        self, model_id: str, finding_id: str, intent: str, control_id: str = "",
+        head_commit: str = "", note: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/findings/{finding_id}/drift-intent.
+
+        Decide whether a description-drift finding was intended or is a
+        defect of the code; a refusal surfaces as an HTTP 403 whose detail
+        carries ``escalation_id``."""
+        return await self._post(
+            f"/api/models/{model_id}/findings/{finding_id}/drift-intent",
+            {"intent": intent, "control_id": control_id, "head_commit": head_commit,
+             "note": note},
         )
 
     async def get_design_leverage(

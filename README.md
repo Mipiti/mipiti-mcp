@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->144<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->145<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -193,9 +193,10 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 |------|-------------|
 | `get_control_work_order` | The ticket for implementing one control: scan brief, what counts as proof (assertion contract), acceptance criteria, steps, reconcile rules, what this agent may decide on its own, open proposals, and the model's provenance. Call before implementing a control. Read-only. |
 | `reconcile_model` | Reconcile the model with the code: pass the paths changed since the recorded commit and your observations (`mechanism_named`, `component_present`, `component_absent`, `forbidden_behavior`). The platform decides the consequence of each; proposals are never applied on the agent's word, except a component change on a code-derived model, which is applied and queued for a person's review. |
-| `create_proposal` | Raise a change of scope or design (`add_component`, `remove_component`, `design_change`), or an `assumption` a gap needs that only the environment can meet. Raising is not deciding: a person (or an agent under a delegation rule) decides it with `decide_proposal`; design changes are never applied automatically. |
+| `create_proposal` | Raise a change of scope or design (`add_component`, `remove_component`, `design_change`), an `assumption` a gap needs that only the environment can meet, whether a description-drift finding was intended (`drift_intent`), or a revised description (`description_revision`). Raising is not deciding: a person (or an agent under a delegation rule) decides it with `decide_proposal`; design changes are never applied automatically. |
 | `list_proposals` | Proposals and escalations on a model with their status (`proposed` / `applied_pending_review` open; `accepted` / `rejected` / `reverted` / `superseded` closed). A refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) appears as a `decision_request`; poll here until a person resolves it. Read-only. |
-| `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. Accepting an `assumption` proposal accepts the assumption (its own decision, `assumption_accepted`), attested until `expires_at`; rejecting one keeps the precondition from being proposed again. |
+| `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. Accepting an `assumption` proposal accepts the assumption (its own decision, `assumption_accepted`), attested until `expires_at`; rejecting one keeps the precondition from being proposed again. Accepting parked behavioural answers starts the extraction they complete, billed to whoever accepts, unless `record_only=True`. |
+| `decide_drift_intent` | Decide whether a description-drift finding was intended (the description is behind the product) or a defect of the code, naming the control whose passing assertion closes it. A judgment: refused with 403 and an `escalation_id` unless delegated. |
 | `get_design_leverage` | What eliminating each attacker position or asset by design would remove from the matrix, ranked by critical then high at-risk objectives removed. `include_design_moves=True` authors a concrete `design_move` per row; turn one into a `design_change` proposal with `create_proposal`. Read-only. |
 | `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, assumption accepted, behavioural model answered / confirmed, a control's delta declared, a finding of its cross-check dismissed, a seal, position, privileges or surface extent attested, escalation resolved), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
 
@@ -205,9 +206,9 @@ A behavioural model states what a system does: its elements, the actions on them
 
 | Tool | Description |
 |------|-------------|
-| `get_behavioural_model` | A model's behavioural model: `status` (`none`, `needs_answers`, `extracted`, `confirmed`, `stale`), the model and its `ir_hash`, the open questions, the answers collected and not yet extracted, and the extraction queued or running (`extraction.job`). Read-only. |
+| `get_behavioural_model` | A model's behavioural model: `status` (`none`, `needs_answers`, `extracted`, `confirmed`, `stale`, `extracting`), the model and its `ir_hash`, the open questions, the answers collected and not yet extracted, and the extraction queued or running (`extraction.job`). Read-only. |
 | `extract_behavioural_model` | Give a model that has none one. A paid action: call once for the estimate (nothing is charged or written) and relay it to the person, then with `confirm_estimate=True` and the `model_version` and `set_revision` the estimate returned. The extraction is queued and runs in the background; poll `get_behavioural_model`. Refusals (`409` already has one, one is running or review stale, `402` balance) come back as data. |
-| `answer_behavioural_questions` | Answer open questions, many in one call. The model is extracted in the background, billed to the caller, once every open owner question has an answer or when `extract_now=True`. |
+| `answer_behavioural_questions` | Answer open questions, many in one call. The model is extracted in the background, billed to the caller, once every open owner question has an answer or when `extract_now=True`. A question about the model's own structure takes a `structured` answer, applied at once with no extraction; an answer read from the code may say the code `contradicts` its sentence. |
 | `edit_behavioural_element` | Replace or add one element as a person wrote it. Voids a confirmation. |
 | `confirm_behavioural_model` | Confirm the model whose `ir_hash` was reviewed. Refused when the model changed since (`review_stale`), the description moved (`stale`) or an owner question is open (`needs_answers`). |
 | `get_behavioural_links` | The links from elements and zones to assets and trust boundaries, the proposals with the `proposals_hash` a bulk acceptance names, and the open link questions. Read-only. |
