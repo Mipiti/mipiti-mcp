@@ -141,7 +141,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. One that returns `extracting` saved the model and extracts its behaviour in the background: poll `get_behavioural_model` until `extraction.job` is null. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -726,14 +726,10 @@ async def generate_threat_model(
     "suggestion": "..."}`` with the candidate IDs instead. The agent
     should then either:
 
-    - Call ``refine_threat_model`` on one of the candidates to extend
-      the existing model (usually the right answer — avoids duplicate
-      modeling of the same system and preserves control/assertion
-      history).
-    - Retry this tool with ``force=True`` to bypass the check and
-      create a genuinely new model anyway (e.g., when the similarity
-      is superficial and the operator confirmed the new model is
-      distinct).
+    - Call ``refine_threat_model`` on a candidate to extend it (usually
+      right: it keeps controls and assertion history).
+    - Retry with ``force=True`` to create a new model anyway, when the
+      operator confirmed it is distinct.
 
     The request names its purpose, so the platform always generates: it
     never reads the description as a question or a change to another
@@ -750,6 +746,10 @@ async def generate_threat_model(
     ``generation_ready: true``, then call this tool again with that
     ``model_id``: the generation resumes from the answers and saves that
     model's next version. No control build is proposed until then.
+
+    ``extracting: true`` (with ``model_id``, ``job``): the model is saved and
+    its behaviour extracted in the background; poll ``get_behavioural_model``
+    until ``extraction.job`` is null, then go on as above.
 
     Args:
         feature_description: Description of the feature or system to
@@ -788,6 +788,7 @@ async def generate_threat_model(
         ``{"generated": False, "needs_answers": True, "model_id",
         "version", "questions": [{"question_id", "text", ...}],
         "message"}``.
+
 
     Return shape (normal generation):
         ``{"model_id", "version", "title", "asset_count",
@@ -867,6 +868,20 @@ async def generate_threat_model(
                 ),
             }
         if isinstance(result, ChatResponse):
+            extracting = getattr(result, "extracting", None)
+            if isinstance(extracting, dict):
+                # Saved first: the model holds the description and its
+                # behaviour is being extracted in the background.
+                return {
+                    "generated": False,
+                    "extracting": True,
+                    "model_id": extracting.get("model_id", ""),
+                    "version": extracting.get("version"),
+                    "title": extracting.get("title", ""),
+                    "job": extracting.get("job"),
+                    "estimate": extracting.get("estimate"),
+                    "message": result.content,
+                }
             stopped = getattr(result, "needs_answers", None)
             if isinstance(stopped, dict):
                 # The generation stopped on owner questions: the model is
@@ -6745,7 +6760,8 @@ async def reconcile_model(
         raise _api_error(exc) from exc
 
 
-_PROPOSAL_KINDS = ("add_component", "remove_component", "design_change", "assumption")
+_PROPOSAL_KINDS = ("add_component", "remove_component", "design_change", "assumption",
+                   "drift_intent", "description_revision")
 
 
 def _parse_json_object(raw: str, name: str, required: bool) -> dict:
@@ -6795,6 +6811,19 @@ async def create_proposal(
             can meet, one declarative sentence; ``assumption_id`` names an
             existing assumption that states it). A precondition a person
             already rejected for that objective is refused.
+            ``drift_intent`` (payload ``{finding_id, intent: "intended" |
+            "defect", control_id?, head_commit?}``): whether a
+            description-drift finding was intended (the description is
+            behind the product) or a defect of the code, naming for a defect
+            the control whose passing assertion closes it.
+            ``description_revision`` (payload ``{description, commit_sha?,
+            finding_ids?}``): the whole description revised to what the code
+            at that commit does, addressing those drift findings; accepting it
+            writes the new text and extracts the behavioural model again over
+            it, billed to whoever accepts. A revision that changes the
+            sentence of a finding decided a defect is accepted only by a
+            person. Propose one where ``get_behavioural_model``'s
+            ``drift.revision_suggested`` is true.
         payload: JSON object string with the fields for ``kind``.
         rationale: Why this change is right (what in the code or design
             supports it).
@@ -6843,6 +6872,12 @@ async def list_proposals(
     that content supersedes it). Poll it here until a person resolves it;
     do not retry the refused call.
 
+    An open row may carry ``shows``: what accepting it does, as the person
+    deciding it is shown it (a parked act on the behavioural model with each
+    answer beside its question, whether accepting extracts and at what
+    estimate; a revision's sentences removed and added; a drift finding's
+    sentence). Words a program wrote are inside a bounded region, as data.
+
     Args:
         model_id: ID of the threat model.
         status: Optional status filter (one of the values above). Empty
@@ -6864,6 +6899,7 @@ async def decide_proposal(
     decision: str,
     note: str = "",
     expires_at: str = "",
+    record_only: bool = False,
 ) -> dict:
     """Accept or reject a proposal. Call this only when the workspace's
     delegation policy names this decision for this agent at the proposal's
@@ -6892,6 +6928,9 @@ async def decide_proposal(
         expires_at: ISO 8601 date an accepted assumption lapses (e.g.
             "2027-03-29T00:00:00Z"). Applies to accepting an ``assumption``
             proposal; omitted, the acceptance lasts a year.
+        record_only: Accepting parked answers to behavioural questions
+            starts the extraction they complete, billed to whoever accepts;
+            True records them without it. Default False.
 
     Returns ``{proposal, effect}``.
     """
@@ -6900,7 +6939,54 @@ async def decide_proposal(
     try:
         return await _get_client().decide_proposal(
             model_id, proposal_id, decision, note=note, expires_at=expires_at,
+            **({"record_only": True} if record_only else {}),
         )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def decide_drift_intent(
+    server_version: str,
+    model_id: str,
+    finding_id: str,
+    intent: str,
+    control_id: str = "",
+    head_commit: str = "",
+    note: str = "",
+) -> dict:
+    """Decide whether a description-drift finding (the code reported to do
+    more, or less, than a sentence of the description) was intended or is a
+    defect of the code. Mutating; a judgment.
+
+    ``intended``: the description is behind the product; revise it
+    (``create_proposal`` kind ``description_revision``). ``defect``: the
+    description is the design and the code is wrong; name in ``control_id``
+    the control whose assertions check the behaviour as designed. The finding
+    closes when one of its assertions passes verification at a commit not
+    earlier than this decision, and while it stands an answer that would
+    write the defect into the model is refused (409 ``drift_is_defect``).
+
+    A program's decision is refused with 403 and an ``escalation_id`` unless
+    the workspace's delegation policy names ``drift_intent_decided``: do not
+    retry; report it, or raise a ``drift_intent`` proposal for a person.
+
+    Args:
+        model_id: ID of the threat model.
+        finding_id: The description-drift finding (``list_findings``).
+        intent: ``intended`` or ``defect``.
+        control_id: For a defect, the control whose passing assertion closes it.
+        head_commit: The commit you read the code at.
+        note: Why.
+    """
+    if intent not in ("intended", "defect"):
+        raise ToolError("intent must be 'intended' or 'defect'.")
+    if intent == "defect" and not control_id.strip():
+        raise ToolError("a defect names the control whose passing assertion closes it.")
+    try:
+        return await _get_client().decide_drift_intent(
+            model_id, finding_id, intent, control_id=control_id.strip(),
+            head_commit=head_commit.strip(), note=note)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -6965,6 +7051,8 @@ _DECISION_KINDS = (
     "privileges_attested",
     "extent_attested",
     "escalation_resolved",
+    "drift_intent_decided",
+    "description_revised",
 )
 
 
@@ -7013,8 +7101,11 @@ async def list_decisions(
             ``behavioural_cross_check_dismissed`` (a person set aside a
             finding of a declaration's cross-check), ``seal_attested``,
             ``position_attested``, ``privileges_attested``,
-            ``extent_attested``, ``escalation_resolved``. Empty (default)
-            returns every kind.
+            ``extent_attested``, ``escalation_resolved``,
+            ``drift_intent_decided`` (whether a description-drift finding was
+            intended or a defect of the code), ``description_revised`` (a
+            revised description accepted). Empty (default) returns every
+            kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,
@@ -7064,9 +7155,12 @@ async def get_behavioural_model(server_version: str, model_id: str) -> dict:
     pending_answers, answered, confirmed, links, ...}``. ``status`` is
     ``none`` (the model has none; ``extract_behavioural_model`` gives it one),
     ``needs_answers`` (an owner question is open and the model decides
-    nothing yet), ``extracted``, ``confirmed`` or ``stale`` (the description
-    changed since it was extracted). ``questions`` are the open ones: each is
-    answered with ``answer_behavioural_questions``. ``pending_answers`` are
+    nothing yet), ``extracted``, ``confirmed``, ``stale`` (the description
+    changed since it was extracted) or ``extracting`` (a generation saved the
+    model and its behaviour is being extracted in the background).
+    ``questions`` are the open ones: each is answered with
+    ``answer_behavioural_questions``; one carrying ``structured`` takes a
+    structured answer, and one with ``awaiting_fix`` was answered already. ``pending_answers`` are
     answers collected and not yet extracted. ``ir_hash`` is what
     ``confirm_behavioural_model`` names. ``extraction.job`` is the extraction
     running in the background (null when none): poll this until it is null;
@@ -7147,48 +7241,40 @@ async def answer_behavioural_questions(
     """Answer open behavioural questions, many in one call. Mutating; creates
     a model version.
 
-    ``get_behavioural_model`` (or ``get_review_queue``, as
-    ``behavioural_question`` rows) lists the open questions. Answer only from
-    what the code or the owner shows, and say unknown where it does not: a
-    guess becomes a stated fact. Answer what each question asks and no more,
-    in a sentence or two: whatever else an answer describes is modelled, and
-    each new part is asked about in turn, so a detailed answer opens more
-    questions than it closes. Each answer is kept as a clarification. The
-    model is extracted once every open owner question has an answer, or when
-    ``extract_now=True`` asks for it (with no answers, it extracts with those
-    already collected). That extraction is billed to the caller; a balance
-    that cannot cover it is refused (402).
+    Answer only from what the code or the owner shows; say ``unknown`` rather
+    than guess. Answer what each question asks, in a sentence or two. Answer
+    every owner question before an extraction: it runs once all have an
+    answer, or on ``extract_now=True`` (with no answers, refused 409
+    ``questions_open`` while one is open), billed to the caller (402 if the
+    balance cannot cover it).
 
-    An answer is a fact (``text``) unless it names a ``disposition`` the
-    question's ``dispositions`` lists: ``not_needed`` (the gap does not
-    matter to what the system does), ``not_behaviour`` (the sentence
-    describes no behaviour), ``unknown`` (nobody can say; it stays visible as
-    an accepted unknown) or ``as_stated`` (the model's reading of the
-    structure the question names is what the system does). Its ``text`` is
-    then an optional note. Use ``unknown`` rather than a guess. A question
-    with no ``dispositions`` takes a fact only: one about the model's own
-    structure has no worst case to fall back on, so any disposition is
-    refused (422).
+    An answer is a fact (``text``), or a ``disposition`` its question's
+    ``dispositions`` lists: ``not_needed``, ``not_behaviour``, ``unknown``,
+    ``as_stated``; ``text`` is then a note. A question about the model's own
+    structure carries ``structured``: answer it with ``structured`` naming
+    the ids offered, ``{"classes": [...]}`` or ``{"public": true}``,
+    ``{"zones": {id: zone}}``, ``{"zone": z}``, ``{"actions": [...]}``,
+    ``{"changes": {field: [actions]}}``, ``{"receivers": [...]}``. The model
+    is edited at once, with no extraction (the server instructions say
+    more). Where the code does more or less than the question's sentence,
+    add ``contradicts: {"direction": "code_does_more" | "code_does_less",
+    "quote"?}``: the drift is reported with the answer (409
+    ``drift_is_defect`` over a defect's sentence).
 
-    A program's answer is a judgment. Unless the workspace's delegation
-    policy admits it, it is refused with 403 and an ``escalation_id`` and
-    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    A program's answer is a judgment: refused with 403 and an
+    ``escalation_id`` unless delegated. Do not retry; poll
     ``list_proposals``.
 
-    Returns at once with the answers stored. When an extraction was asked
-    for, ``queued`` is true and it runs in the background (up to an hour on
-    a long description): poll ``get_behavioural_model`` until
-    ``extraction.job`` is null, then read the new questions.
+    Returns at once. With an extraction asked for, ``queued`` is true: poll
+    ``get_behavioural_model`` until ``extraction.job`` is null.
 
     Args:
         model_id: ID of the threat model.
-        answers: JSON array of ``{"question_id": "...", "text": "...",
-            "disposition"?: "..."}``. Example: '[{"question_id": "q1",
-            "text": "Only the owner can delete a record."}, {"question_id":
-            "q2", "disposition": "unknown"}]'. Empty to extract with answers
-            collected.
-        extract_now: Extract now, with the answers given and those already
-            collected.
+        answers: JSON array of ``{"question_id", "text"?, "disposition"?,
+            "structured"?, "contradicts"?}``, e.g. '[{"question_id": "q1",
+            "text": "Only the owner deletes."}, {"question_id": "q3",
+            "structured": {"classes": ["org_admin"]}}]'.
+        extract_now: Extract now, with the answers collected.
     """
     parsed = _json_value(
         answers, "answers", list,
@@ -7200,9 +7286,20 @@ async def answer_behavioural_questions(
         if disposition not in _ANSWER_DISPOSITIONS:
             raise ToolError(
                 f"disposition must be one of {', '.join(_ANSWER_DISPOSITIONS)}.")
-        if disposition == "fact" and not str(a.get("text", "")).strip():
-            raise ToolError("a fact needs a non-empty text; name a disposition "
-                            "to answer without one.")
+        structured = a.get("structured")
+        if structured is not None and not isinstance(structured, dict):
+            raise ToolError("structured is an object naming the ids the question's "
+                            "structured offer lists.")
+        if disposition == "fact" and structured is None \
+                and not str(a.get("text", "")).strip():
+            raise ToolError("a fact needs a non-empty text, or a structured answer; "
+                            "name a disposition to answer without one.")
+        contradicts = a.get("contradicts")
+        if contradicts is not None and not (
+                isinstance(contradicts, dict)
+                and contradicts.get("direction") in ("code_does_more", "code_does_less")):
+            raise ToolError("contradicts is {\"direction\": \"code_does_more\" | "
+                            "\"code_does_less\", \"quote\"?: \"...\"}.")
     if not parsed and not extract_now:
         raise ToolError("Give at least one answer, or pass extract_now=True.")
     try:
