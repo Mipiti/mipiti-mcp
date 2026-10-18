@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.88.1] - 2026-10-18
+
+### Changed
+
+- Each release's notes are its CHANGELOG.md section, written when it is released; the changelog has no Unreleased section. (#326)
+- CHANGELOG.md's opening paragraph states how each version's section is written. (#327)
+
 ## [0.42.0 to 0.88.0]
 
 ### Added
