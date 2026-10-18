@@ -9,6 +9,17 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.89.0] - 2026-10-18
+
+### Added
+
+- Structured answers to behavioural questions can name a zone or a receiver the model lacks, where the question's offer allows it. (#329)
+- `get_behavioural_model` lists the elements an extraction could not keep, with the sentence each came from. (#329)
+
+### Changed
+
+- Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused with `extraction_running`. (#329)
+
 ## [0.88.1] - 2026-10-18
 
 ### Changed
