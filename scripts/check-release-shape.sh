@@ -4,17 +4,20 @@
 #
 # A release is produced by the parent repository's release pipeline, which
 # opens a version-bump PR that changes exactly the `version = "..."` line of
-# pyproject.toml, squash-merges it onto main as `chore: release vX.Y.Z`, and
-# tags the merged commit `vX.Y.Z`. The publish workflow accepts nothing
-# else: every property of that shape is checked here, and any deviation
-# fails closed before a package is built.
+# pyproject.toml and adds the version's CHANGELOG.md section, squash-merges
+# it onto main as `chore: release vX.Y.Z`, and tags the merged commit
+# `vX.Y.Z`. The publish workflow accepts nothing else: every property of
+# that shape is checked here, and any deviation fails closed before a
+# package is built.
 #
 # Invariants enforced (all must hold):
 #   1. The tag `v<version>` exists and is an ancestor of origin/main.
 #   2. The tree being built is the tag's commit (HEAD == tag commit).
 #   3. pyproject.toml's `version` equals the tag's version.
-#   4. The tag commit has one parent and touches only pyproject.toml, and
-#      that change is a single version-line replacement to <version>.
+#   4. The tag commit has one parent and touches only CHANGELOG.md and
+#      pyproject.toml: in pyproject.toml a single version-line replacement
+#      to <version>, in CHANGELOG.md one added block, removing nothing,
+#      whose first non-blank line is `## [<version>] - YYYY-MM-DD`.
 #   5. The tag commit's subject is `chore: release v<version>`, allowing
 #      the ` (#NNN)` suffix a squash-merge appends.
 #
@@ -81,14 +84,25 @@ if [ "$PY_VERSION" != "$VERSION" ]; then
   fail "tag $TAG does not match pyproject.toml version '$PY_VERSION'"
 fi
 
-# 4. The release commit changes only the version line of pyproject.toml.
+# 4. The release commit changes the version line of pyproject.toml and adds
+#    the version's CHANGELOG.md section, and nothing else.
 PARENTS=$(git rev-list --parents -n 1 "$TAG_COMMIT" | wc -w | tr -d ' ')
 if [ "$PARENTS" != "2" ]; then
   fail "release commit $TAG_COMMIT must have exactly one parent (found $((PARENTS - 1)))"
 fi
-CHANGED=$(git diff --name-only "${TAG_COMMIT}^" "$TAG_COMMIT")
-if [ "$CHANGED" != "pyproject.toml" ]; then
-  fail "release commit $TAG_COMMIT must change only pyproject.toml; it changes: $(printf '%s' "$CHANGED" | tr '\n' ' ')"
+CHANGED=$(git diff --name-only "${TAG_COMMIT}^" "$TAG_COMMIT" | tr '\n' ' ')
+if [ "$CHANGED" != "CHANGELOG.md pyproject.toml " ]; then
+  fail "release commit $TAG_COMMIT must change only CHANGELOG.md and pyproject.toml; it changes: $CHANGED"
+fi
+SECTION=$(git diff --unified=0 "${TAG_COMMIT}^" "$TAG_COMMIT" -- CHANGELOG.md | grep -E '^(@@|[-+])' | grep -vE '^(\+\+\+|---) ' || true)
+# The first added line that is not blank: a diff may place the block's
+# surrounding blank line on either side of it.
+FIRST_ADDED=$(printf '%s\n' "$SECTION" | grep -m1 -E '^\+.' || true)
+VERSION_RE=$(printf '%s' "$VERSION" | sed 's/\./\\./g')
+if [ "$(printf '%s\n' "$SECTION" | grep -c '^@@')" != "1" ] \
+   || printf '%s\n' "$SECTION" | grep -qE '^-' \
+   || ! printf '%s\n' "$FIRST_ADDED" | grep -qxE "\+## \[${VERSION_RE}\] - [0-9]{4}-[0-9]{2}-[0-9]{2}"; then
+  fail "release commit $TAG_COMMIT must add only the CHANGELOG.md section for $VERSION, as one block opening with its heading"
 fi
 # Every changed line, with the file headers stripped.
 HUNK=$(git diff --unified=0 "${TAG_COMMIT}^" "$TAG_COMMIT" -- pyproject.toml | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' || true)
