@@ -322,6 +322,44 @@ async def test_a_structured_answer_and_a_contradiction_are_forwarded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_zone_or_receiver_the_offer_does_not_list_is_forwarded_unchanged() -> None:
+    # Which ids are new is the API's to decide from the offer: the tool keeps
+    # no list of its own that would refuse them.
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "structured": {"zones": {"feed": "vendor_zone"}}},
+               {"question_id": "q2", "structured": {"zone": "partner_net"}},
+               {"question_id": "q3", "structured": {"receivers": ["partner_api"]}}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_idle_reextraction_refusal_names_its_code(mock_env: None) -> None:
+    respx.post(BASE + "/answers").mock(return_value=httpx.Response(
+        409, json={"detail": {"code": "extraction_running",
+                              "message": "An extraction is running."}}))
+    with patch("mipiti_mcp.server._get_client", return_value=MipitiClient()):
+        with pytest.raises(ToolError, match="extraction_running"):
+            await server.answer_behavioural_questions(
+                server_version="0", model_id="tm-1", extract_now=True)
+
+
+def test_the_published_text_names_the_new_forms_and_the_refusal() -> None:
+    text = _descriptions()["answer_behavioural_questions"]
+    for term in ("new_zones", "new_actors", "id_in_use", "extraction_running"):
+        assert f"``{term}``" in text, term
+    assert "dropped_elements" in _descriptions()["get_behavioural_model"]
+    instructions = build_instructions("pro", "owner")
+    for term in ("new_zones", "new_actors", "extraction.dropped_elements",
+                 "extraction_running"):
+        assert f"`{term}`" in instructions, term
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("answer", [
     {"question_id": "q1", "structured": ["org_admin"]},
     {"question_id": "q1", "text": "x", "contradicts": {"direction": "sideways"}},
