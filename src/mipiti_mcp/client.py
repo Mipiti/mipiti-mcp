@@ -2997,10 +2997,11 @@ class MipitiClient:
         """GET /api/models/{model_id}/behavioural-model.
 
         Read-only. Returns the status (``none``, ``needs_answers``,
-        ``extracted``, ``confirmed`` or ``stale``), the model, its
-        ``ir_hash``, the open questions, the answers collected and not yet
-        extracted, a summary of the links, and the extraction queued or
-        running (``extraction.job``, null when none).
+        ``extracted``, ``confirmed``, ``stale`` or ``extracting``), the
+        model, its ``ir_hash``, the open questions, the answers collected and
+        not yet extracted, a summary of the links, the extraction queued or
+        running (``extraction.job``, null when none) and what the last one
+        could not keep (``extraction.dropped_elements``).
         """
         return await self._get(self._behavioural(model_id))
 
@@ -3046,11 +3047,14 @@ class MipitiClient:
         """POST /api/models/{model_id}/behavioural-model/answers.
 
         Answers open questions, many in one call; each answer is
-        ``{"question_id", "text", "disposition"?}``, a fact unless it names a
-        disposition the question lists. Creates a model version, and queues
-        the extraction (billed to the caller) once every open owner question
-        has an answer or when ``extract_now`` asks for it; the call returns
-        at once with ``queued`` and ``extraction.job``.
+        ``{"question_id", "text"?, "disposition"?, "structured"?,
+        "contradicts"?}``, a fact unless it names a disposition the question
+        lists. Creates a model version, and queues the extraction (billed to
+        the caller) once every open owner question has an answer or when
+        ``extract_now`` asks for it; the call returns at once with ``queued``
+        and ``extraction.job``. ``extract_now`` while an extraction is queued
+        or running, or with no answer since it started, is refused 409
+        ``extraction_running``.
         """
         return await self._post(
             self._behavioural(model_id, "/answers"),
