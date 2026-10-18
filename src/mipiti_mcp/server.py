@@ -7164,8 +7164,11 @@ async def get_behavioural_model(server_version: str, model_id: str) -> dict:
     answers collected and not yet extracted. ``ir_hash`` is what
     ``confirm_behavioural_model`` names. ``extraction.job`` is the extraction
     running in the background (null when none): poll this until it is null;
-    a ``failed`` job says why in ``error``. ``generation_ready`` is true when
-    a generation stopped on these questions can now run.
+    a ``failed`` job says why in ``error``. ``extraction.dropped_elements``
+    lists what the extraction could not keep, each with the sentence it came
+    from: answer that sentence's question so the next extraction can.
+    ``generation_ready`` is true when a generation stopped on these questions
+    can now run.
 
     Args:
         model_id: ID of the threat model.
@@ -7245,8 +7248,10 @@ async def answer_behavioural_questions(
     than guess. Answer what each question asks, in a sentence or two. Answer
     every owner question before an extraction: it runs once all have an
     answer, or on ``extract_now=True`` (with no answers, refused 409
-    ``questions_open`` while one is open), billed to the caller (402 if the
-    balance cannot cover it).
+    ``questions_open`` while one is open, and 409 ``extraction_running`` while
+    one is queued or running, or when no answer was given since it started:
+    poll it instead), billed to the caller (402 if the balance cannot cover
+    it).
 
     An answer is a fact (``text``), or a ``disposition`` its question's
     ``dispositions`` lists: ``not_needed``, ``not_behaviour``, ``unknown``,
@@ -7254,7 +7259,11 @@ async def answer_behavioural_questions(
     structure carries ``structured``: answer it with ``structured`` naming
     the ids offered, ``{"classes": [...]}`` or ``{"public": true}``,
     ``{"zones": {id: zone}}``, ``{"zone": z}``, ``{"actions": [...]}``,
-    ``{"changes": {field: [actions]}}``, ``{"receivers": [...]}``. The model
+    ``{"changes": {field: [actions]}}``, ``{"receivers": [...]}``. Where the
+    offer carries ``new_zones``, a zone it does not list may be named and is
+    added; where it carries ``new_actors``, a receiver it does not list may be
+    named and is added as an outside party holding a credential of its own
+    (409 ``id_in_use`` when the id names something else). The model
     is edited at once, with no extraction (the server instructions say
     more). Where the code does more or less than the question's sentence,
     add ``contradicts: {"direction": "code_does_more" | "code_does_less",
