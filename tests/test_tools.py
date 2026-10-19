@@ -2474,14 +2474,19 @@ class TestEditAsset:
 class TestRemoveAsset:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
-        """Soft-delete: asset stays in model with deleted=True."""
+        """Soft-delete as a job: asset stays in model with deleted=True."""
         mock = _mock_client()
+        mock.start_remove_entity = AsyncMock(return_value={"job_id": "job-remove"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "assets": [{"id": "A1", "deleted": True}]}}})
         with _patch_client(mock):
             result = await remove_entity(
                 server_version="0", model_id="tm-001",
-                entity_type="asset", entity_id="A1",
+                entity_type="asset", entity_id="A1", ctx=_mock_ctx(),
             )
         assert "model" in result
+        mock.start_remove_entity.assert_awaited_once_with("tm-001", "asset", "A1")
+        mock.get_operation.assert_awaited_once_with("job-remove")
 
 
 class TestAddAttacker:
@@ -2596,12 +2601,41 @@ class TestRemoveAttacker:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
         mock = _mock_client()
+        mock.start_remove_entity = AsyncMock(return_value={"job_id": "job-remove"})
+        mock.get_operation = AsyncMock(return_value={"status": "completed", "result": {
+            "model": {"id": "tm-001", "attackers": []}}})
         with _patch_client(mock):
             result = await remove_entity(
                 server_version="0", model_id="tm-001",
-                entity_type="attacker", entity_id="T1",
+                entity_type="attacker", entity_id="T1", ctx=_mock_ctx(),
             )
         assert "model" in result
+        mock.start_remove_entity.assert_awaited_once_with("tm-001", "attacker", "T1")
+
+    @pytest.mark.asyncio
+    async def test_a_refused_removal_fails_with_its_reason(self) -> None:
+        mock = _mock_client()
+        mock.start_remove_entity = AsyncMock(return_value={"job_id": "job-remove"})
+        mock.get_operation = AsyncMock(return_value={
+            "status": "failed", "error": "Cannot delete the last live attacker."})
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="last live attacker"):
+                await remove_entity(
+                    server_version="0", model_id="tm-001",
+                    entity_type="attacker", entity_id="T1", ctx=_mock_ctx(),
+                )
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_type_is_refused_before_the_job(self) -> None:
+        mock = _mock_client()
+        mock.start_remove_entity = AsyncMock()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="Unsupported entity_type"):
+                await remove_entity(
+                    server_version="0", model_id="tm-001",
+                    entity_type="control", entity_id="C1", ctx=_mock_ctx(),
+                )
+        mock.start_remove_entity.assert_not_awaited()
 
 
 # ------------------------------------------------------------------

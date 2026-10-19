@@ -376,7 +376,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 ## Long-running operations
 
-`generate_threat_model`, `generate_from_behavioural_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically; no polling is needed for the operation itself. Entity writes (`add_asset`, `edit_asset`, `add_attacker`, `edit_attacker`) run as background jobs and report progress while they wait; a job a client stops waiting for finishes or fails on its own, so read the model before writing again.
+`generate_threat_model`, `generate_from_behavioural_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically; no polling is needed for the operation itself. Entity writes (`add_asset`, `edit_asset`, `add_attacker`, `edit_attacker`, `remove_entity`) run as background jobs and report progress while they wait; a job a client stops waiting for finishes or fails on its own, so read the model before writing again.
 
 **Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits` with its basis, and the `model_version`, `set_revision` and `scope_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. The proposal also names what to review first: `flagged_entities` (a judge's warning, a rating nobody chose, a suspected duplicate) and `pending_attestations` (a seal, position or privileges that, once attested, would remove objectives from the build); neither blocks a start. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, scope_revision, confirm_estimate=True)`. A `review_stale` refusal means the model, its controls or the objectives the build would author changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
@@ -5580,12 +5580,18 @@ async def remove_entity(
     model_id: str,
     entity_type: str,
     entity_id: str,
+    ctx: Context,
 ) -> dict:
     """Soft-delete a single entity of any core type. Mutating: creates a
     new model version. Reversible with ``restore_entity`` using the same
     ``entity_type`` — the entity's ID is preserved (never reused) so a
     restore reinstates the same ID and all its links. To change an
     entity's fields instead of removing it, use the typed ``edit_*`` tool.
+
+    Runs as a background job, reporting progress while it waits; a job a
+    client stops waiting for finishes or fails on its own. A removal that
+    is refused (the entity is not found or already deleted, or it is the
+    last live asset or attacker) fails with the reason.
 
     Dispatches on ``entity_type``. Per-type consequence (all derived at
     read time; nothing is hard-destroyed):
@@ -5621,14 +5627,9 @@ async def remove_entity(
         )
     try:
         client = _get_client()
-        remover = {
-            "asset": client.remove_asset,
-            "attacker": client.remove_attacker,
-            "component": client.remove_component,
-            "trust_boundary": client.remove_trust_boundary,
-            "assumption": client.remove_assumption,
-        }[entity_type]
-        return _dump(await remover(model_id, entity_id))
+        started = await client.start_remove_entity(model_id, entity_type, entity_id)
+        return _dump(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True))
     except Exception as exc:
         raise _api_error(exc) from exc
 

@@ -1910,6 +1910,22 @@ class MipitiClient:
         similar-rejection) plus 503 on LLM outage."""
         return await self._post(f"/api/models/{model_id}/attackers/add-job", kwargs)
 
+    async def start_remove_entity(
+        self, model_id: str, entity_type: str, entity_id: str,
+    ) -> dict:
+        """Kick off the soft-delete of one entity as a background job: POST
+        /api/models/{model_id}/entities/{entity_type}/{entity_id}/remove-job,
+        ``entity_type`` one of ``asset``, ``attacker``, ``component``,
+        ``trust_boundary``, ``assumption``. Returns ``{"job_id": ...}`` to
+        poll; the job result is the entity-change envelope a removal
+        returns. An unknown type (400) and a missing model (404) are refused
+        before any job starts; a removal the API refuses (the entity not
+        found or already deleted, the last live asset or attacker) fails the
+        job with its message."""
+        return await self._post(
+            f"/api/models/{model_id}/entities/{entity_type}/{entity_id}/remove-job", {},
+        )
+
     async def start_edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
         """Kick off an attacker edit as a background job; returns
         ``{"job_id": ...}``. Same two-shape job result as

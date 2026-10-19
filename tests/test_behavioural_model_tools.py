@@ -300,6 +300,20 @@ async def test_the_reads_send_their_view_wait_and_page(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("entity_type,entity_id", [
+    ("asset", "A1"), ("attacker", "T1"), ("component", "CMP1"),
+    ("trust_boundary", "TB1"), ("assumption", "AS1")])
+async def test_a_removal_starts_its_job(mock_env: None, entity_type: str,
+                                        entity_id: str) -> None:
+    route = respx.post(
+        f"https://test.api.mipiti.io/api/models/tm-1/entities/{entity_type}/"
+        f"{entity_id}/remove-job").mock(return_value=httpx.Response(200, json={"job_id": "j"}))
+    out = await MipitiClient().start_remove_entity("tm-1", entity_type, entity_id)
+    assert out == {"job_id": "j"} and route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_a_dry_run_is_sent_only_when_asked(mock_env: None) -> None:
     route = respx.post(BASE + "/answers").mock(return_value=httpx.Response(
         200, json={"dry_run": True, "outcome": {"extracts": False}}))
