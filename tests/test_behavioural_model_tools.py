@@ -993,6 +993,8 @@ _TOOLS = (
     "get_control_delta", "submit_control_delta", "request_delta_second_reading",
     "declare_control_delta", "get_behavioural_threats",
     "request_model_check", "get_model_check", "manage_model_check",
+    "get_behavioural_attackers", "answer_attacker_credentials",
+    "add_proposed_attacker", "dismiss_proposed_attacker",
 )
 
 
@@ -1066,7 +1068,8 @@ def test_the_new_reads_publish_their_bounds() -> None:
 def test_judgments_name_the_refusal_and_the_no_retry_rule() -> None:
     for name in ("answer_behavioural_questions", "edit_behavioural_element",
                  "confirm_behavioural_model", "declare_behavioural_link",
-                 "accept_behavioural_link_proposals"):
+                 "accept_behavioural_link_proposals", "answer_attacker_credentials",
+                 "add_proposed_attacker", "dismiss_proposed_attacker"):
         text = _descriptions()[name]
         assert "403" in text and "escalation_id" in text, name
         assert "Do not retry" in text, name
@@ -1118,6 +1121,109 @@ def test_a_cross_check_finding_is_relayed_and_dismissed_by_a_person() -> None:
     delta = " ".join(_descriptions()["get_control_delta"].split())
     assert "RELAY OPEN FINDINGS TO THE PERSON" in delta
     assert "never a program's" in delta
-    assert not any("dismiss" in name for name in _descriptions())
+    # The one dismissing tool dismisses a proposed attacker, a judgment a
+    # program takes under delegation; none dismisses a cross-check finding.
+    assert [n for n in _descriptions() if "dismiss" in n] == ["dismiss_proposed_attacker"]
     sufficiency = " ".join(_descriptions()["get_sufficiency"].split())
     assert "``commitments``" in sufficiency and "declaration" in sufficiency
+
+
+# ------------------------------------------------------------------
+# The attacker closure
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_attacker_closure_reaches_its_routes(mock_env: None) -> None:
+    client = MipitiClient()
+    ok = httpx.Response(200, json={"applies": True})
+    read = respx.get(BASE + "/attackers").mock(return_value=ok)
+    assert (await client.get_behavioural_attackers("tm-1"))["applies"] is True
+    assert read.called
+    creds = respx.put(BASE + "/attackers/T3/credentials").mock(return_value=ok)
+    await client.answer_attacker_credentials("tm-1", "T3", ["tenant_user"])
+    assert _body(creds) == {"credential_classes": ["tenant_user"]}
+    await client.answer_attacker_credentials("tm-1", "T3", [])
+    assert _body(creds) == {"credential_classes": []}
+    add = respx.post(BASE + "/attackers/proposals/add").mock(return_value=ok)
+    await client.add_proposed_attacker("tm-1", ["db_reader"])
+    assert _body(add) == {"credential_classes": ["db_reader"]}
+    dismiss = respx.post(BASE + "/attackers/proposals/dismiss").mock(return_value=ok)
+    await client.dismiss_proposed_attacker("tm-1", ["db_reader"], "Not deployed.")
+    assert _body(dismiss) == {"credential_classes": ["db_reader"], "reason": "Not deployed."}
+
+
+@pytest.mark.asyncio
+async def test_the_attacker_tools_split_the_classes_and_forward_them() -> None:
+    client = _client(get_behavioural_attackers={"applies": True},
+                     answer_attacker_credentials={"attacker": {"id": "T3"}},
+                     add_proposed_attacker={"added": "T9"},
+                     dismiss_proposed_attacker={"dismissed_set": ["db_reader"]})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.get_behavioural_attackers(server_version="0", model_id="tm-1")
+        await server.answer_attacker_credentials(
+            server_version="0", model_id="tm-1", attacker_id=" T3 ",
+            credential_classes=" tenant_user, ,admin ")
+        await server.answer_attacker_credentials(
+            server_version="0", model_id="tm-1", attacker_id="T4")
+        out = await server.add_proposed_attacker(
+            server_version="0", model_id="tm-1", credential_classes="db_reader")
+        await server.dismiss_proposed_attacker(
+            server_version="0", model_id="tm-1", credential_classes="db_reader",
+            reason=" Not deployed. ")
+    client.get_behavioural_attackers.assert_awaited_once_with("tm-1")
+    assert client.answer_attacker_credentials.await_args_list[0].args == (
+        "tm-1", "T3", ["tenant_user", "admin"])
+    assert client.answer_attacker_credentials.await_args_list[1].args == ("tm-1", "T4", [])
+    client.add_proposed_attacker.assert_awaited_once_with("tm-1", ["db_reader"])
+    client.dismiss_proposed_attacker.assert_awaited_once_with(
+        "tm-1", ["db_reader"], "Not deployed.")
+    assert out["added"] == "T9"
+
+
+@pytest.mark.asyncio
+async def test_an_attacker_act_missing_what_it_needs_is_refused_before_the_call() -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match="attacker_id"):
+            await server.answer_attacker_credentials(
+                server_version="0", model_id="tm-1", attacker_id=" ")
+        with pytest.raises(ToolError, match="reason"):
+            await server.dismiss_proposed_attacker(
+                server_version="0", model_id="tm-1", credential_classes="x", reason=" ")
+    client.answer_attacker_credentials.assert_not_awaited()
+    client.dismiss_proposed_attacker.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(409, "not_proposed"), (409, "dismissed_already"),
+                                         (422, "unknown_class"), (403, "delegation_required")])
+async def test_an_attacker_act_refused_names_its_code(status: int, code: str) -> None:
+    request = httpx.Request("POST", "http://x/dismiss")
+    refusal = httpx.HTTPStatusError(
+        "refused", request=request, response=httpx.Response(
+            status, json={"detail": {"code": code, "escalation_id": "E-1"}},
+            request=request))
+    client = AsyncMock()
+    client.dismiss_proposed_attacker = AsyncMock(side_effect=refusal)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match=f"{status}.*{code}"):
+            await server.dismiss_proposed_attacker(
+                server_version="0", model_id="tm-1", credential_classes="x", reason="r")
+
+
+def test_the_attacker_closure_is_published() -> None:
+    text = _descriptions()["answer_attacker_credentials"]
+    for term in ("``unknown_class``", "``closure_not_offered``", "``no_attacker``",
+                 "``privileges_from_holdings``"):
+        assert term in text, term
+    assert "``not_proposed``" in _descriptions()["add_proposed_attacker"]
+    assert "``dismissed_already``" in _descriptions()["dismiss_proposed_attacker"]
+    assert "``privileges_from_holdings``" in " ".join(
+        _descriptions()["edit_attacker"].split())
+    instructions = build_instructions("pro", "user")
+    for name in ("get_behavioural_attackers", "answer_attacker_credentials",
+                 "add_proposed_attacker", "dismiss_proposed_attacker",
+                 "privileges_from_holdings"):
+        assert f"`{name}`" in instructions, name

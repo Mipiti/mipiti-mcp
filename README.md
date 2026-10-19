@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->146<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->150<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -203,7 +203,7 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 
 ### Behavioural model
 
-A behavioural model states what a system does: its elements, the actions on them and the zones they sit in, taken from the model's description. The possible threats are read from it. An answer, an element edit and a confirmation each create a model version. A program's answer, edit, link declaration, link acceptance or confirmation is a judgment: it is refused with 403 and an `escalation_id` and parked for a person unless the workspace's delegation policy admits it. Do not retry a refusal.
+A behavioural model states what a system does: its elements, the actions on them and the zones they sit in, taken from the model's description. The possible threats are read from it. An answer, an element edit and a confirmation each create a model version. A program's answer, edit, link declaration, link acceptance, confirmation, or act on the attacker closure is a judgment: it is refused with 403 and an `escalation_id` and parked for a person unless the workspace's delegation policy admits it. Do not retry a refusal.
 
 | Tool | Description |
 |------|-------------|
@@ -215,6 +215,10 @@ A behavioural model states what a system does: its elements, the actions on them
 | `get_behavioural_links` | The links from elements and zones to assets and trust boundaries, the proposals with the `proposals_hash` a bulk acceptance names, and the open link questions. Read-only. |
 | `declare_behavioural_link` | Declare the asset or trust boundary an element or zone is. Creates no model version. |
 | `accept_behavioural_link_proposals` | Declare every proposal as shown, naming the `proposals_hash` reviewed. |
+| `get_behavioural_attackers` | The attacker closure of a generated model: the attackers the behavioural model's credential classes say the inventory lacks (each with its `credential_classes`, the `privileges_required` they give, its `capability` and the `objectives` it adds), those dismissed with why, and the questions asking what an attacker holds. `applies` is false where the closure is not offered. Read-only. |
+| `answer_attacker_credentials` | Say which credential classes an attacker holds (none: it holds no credential). Its privileges follow by rule (`None`, `High` or `Low`), and `edit_attacker` then refuses a privileges change (409 `privileges_from_holdings`); a holder of a per-tenant class is placed at every tenant-isolation boundary, suggested. Refused 422 `unknown_class`, 409 `closure_not_offered`, 404 `no_attacker`. Creates a model version. |
+| `add_proposed_attacker` | Add the attacker the closure proposes for a credential set, holding it, its rating factors left unrated. Refused 409 `not_proposed`. Creates a model version. |
+| `dismiss_proposed_attacker` | Dismiss a proposed attacker, with why; it is no longer offered while the dismissal stands. Refused 409 `not_proposed` or `dismissed_already`. Creates a model version. |
 | `get_control_delta` | The edits to the behavioural model a control's own text commits to, each in words beside its quotes, with their status (`absent`, `pending`, `checked`, `failed`, `declared`), the text no quote reaches, the draft's second reading and whether it is declared under the rule. Once declared, the control's sufficiency is judged against the declaration, and `cross_check` says whether the text may commit to more than it states: its findings, each dismissed or open. An open finding keeps the control insufficient; dismissing one is a person's act in the app, so relay it. Read-only. |
 | `submit_control_delta` | Submit a draft of a control's delta, each edit quoting the control's text. Checked against the text by one call billed to the caller and never declared; a program's never replaces a delta a person declared. |
 | `request_delta_second_reading` | Read controls' text into deltas a second time, by a call not shown the drafts. A paid action: call once for the estimate and relay it to the person, then with `confirm_estimate=True`. |

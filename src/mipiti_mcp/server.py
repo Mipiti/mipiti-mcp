@@ -142,7 +142,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them and answer them. One that returns `extracting` saved the model and extracts its behaviour in the background. Follow an extraction with `get_behavioural_model(view="status", wait_seconds=50)`, which answers when the job moves and reports its progress meanwhile, until `extraction.job` is null; `view="questions"` pages the open questions without the whole model. Once it reports `generation_ready`, call `generate_from_behavioural_model` with the `model_id`: it takes no description (a `generate_threat_model` naming a `model_id` with a description is refused, `resume_takes_no_description`). Before submitting answers, call `answer_behavioural_questions` with `dry_run=true`: it records nothing and says whether they extract and which questions they leave or raise, so you answer those too and submit once. `get_behavioural_threats` is paged (`offset`, `limit`, `co_id`, `standing`): read on from `next_offset`. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. Where the offer carries `new_zones` or `new_actors`, an answer may name a zone or a receiver the model lacks, and it is added. A question about what a zone holds (closure `zone_contents`: "What does the system keep in, or send to, <zone>?", or "<action> sends <values> over <channel> to <zone>, and the model holds none of it as an element") offers the `contents` form: `structured: {"elements": [...]}`, each element an id, or `{"id": "<id>", "secret": true}` for one that holds a secret. An id the offer lists under `elements` names an element already in the zone; any other id is a new element, declared in that zone, kept there, with one field (a secret where marked, else a plain value). The answer closes the question at once, with no extraction, and only widens what is analysed. An id another element holds elsewhere is refused 409 `id_in_use`; an empty or malformed list is refused 422 `structured_malformed`. The question takes one dismissal besides a fact: `disposition: "not_needed"`, saying the zone holds nothing of the system's; it stands while the zone, or what is sent there, is as it was asked about. `unknown` is refused. `extraction.dropped_elements` lists what an extraction could not keep, with the sentence each came from: answer that sentence's question. Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused (409 `extraction_running`): poll it instead. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them and answer them. One that returns `extracting` saved the model and extracts its behaviour in the background. Follow an extraction with `get_behavioural_model(view="status", wait_seconds=50)`, which answers when the job moves and reports its progress meanwhile, until `extraction.job` is null; `view="questions"` pages the open questions without the whole model. Once it reports `generation_ready`, call `generate_from_behavioural_model` with the `model_id`: it takes no description (a `generate_threat_model` naming a `model_id` with a description is refused, `resume_takes_no_description`). Before submitting answers, call `answer_behavioural_questions` with `dry_run=true`: it records nothing and says whether they extract and which questions they leave or raise, so you answer those too and submit once. `get_behavioural_threats` is paged (`offset`, `limit`, `co_id`, `standing`): read on from `next_offset`. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. Where the offer carries `new_zones` or `new_actors`, an answer may name a zone or a receiver the model lacks, and it is added. A question about what a zone holds (closure `zone_contents`: "What does the system keep in, or send to, <zone>?", or "<action> sends <values> over <channel> to <zone>, and the model holds none of it as an element") offers the `contents` form: `structured: {"elements": [...]}`, each element an id, or `{"id": "<id>", "secret": true}` for one that holds a secret. An id the offer lists under `elements` names an element already in the zone; any other id is a new element, declared in that zone, kept there, with one field (a secret where marked, else a plain value). The answer closes the question at once, with no extraction, and only widens what is analysed. An id another element holds elsewhere is refused 409 `id_in_use`; an empty or malformed list is refused 422 `structured_malformed`. The question takes one dismissal besides a fact: `disposition: "not_needed"`, saying the zone holds nothing of the system's; it stands while the zone, or what is sent there, is as it was asked about. `unknown` is refused. `get_behavioural_attackers` reads the attacker closure on a generated model: the attackers its credential classes say the inventory lacks (`add_proposed_attacker`, or `dismiss_proposed_attacker` with why) and questions asking what an attacker holds (`answer_attacker_credentials`, whose answer sets its privileges by rule; `edit_attacker` then refuses a privileges change, 409 `privileges_from_holdings`). Each act is a judgment, as an answer is. `extraction.dropped_elements` lists what an extraction could not keep, with the sentence each came from: answer that sentence's question. Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused (409 `extraction_running`): poll it instead. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -3325,7 +3325,10 @@ async def edit_attacker(
 
     400 when factor fields, ``surface_extent``, ``attest_surface_extent``
     or ``attest_privileges`` come without ``change_reason``; 503/502 on an
-    evaluator outage or malformed answer.
+    evaluator outage or malformed answer. 409 ``privileges_from_holdings``
+    for a privileges change on an attacker whose credential classes are
+    stated: its privileges follow from them, so say what it holds instead
+    (``answer_attacker_credentials``).
 
     Args:
         attack_vector: Network | Adjacent | Local | Physical.
@@ -7670,6 +7673,158 @@ async def accept_behavioural_link_proposals(
     try:
         return _dump(await _get_client().accept_behavioural_link_proposals(
             model_id, proposals_hash.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+def _class_list(raw: str) -> list[str]:
+    """Comma-separated credential class ids, as a list without blanks."""
+    return [c.strip() for c in (raw or "").split(",") if c.strip()]
+
+
+@mcp.tool()
+async def get_behavioural_attackers(server_version: str, model_id: str) -> dict:
+    """Read the attacker closure of a model: the attackers its behavioural
+    model says are missing from the inventory, and what its attackers hold.
+    Read-only: no model is called and nothing is written.
+
+    Returns ``{applies, credential_classes, proposals, dismissed,
+    questions}``. ``applies`` is false where the closure is not offered (a
+    model with no inventory, or whose behavioural model decides nothing
+    yet). ``credential_classes`` are the behavioural model's classes, by id.
+    Each of ``proposals`` is an attacker no attacker of the inventory stands
+    for: its ``credential_classes``, the ``privileges_required`` they give,
+    its ``capability`` and the ``objectives`` adding it adds; add it with
+    ``add_proposed_attacker`` or dismiss it with
+    ``dismiss_proposed_attacker``. ``dismissed`` lists those dismissed, with
+    ``reason``, ``dismissed_by`` and ``dismissed_at``. ``questions`` ask what
+    an attacker holds: answer each with ``answer_attacker_credentials``.
+    Relay the proposals to the person before acting on them.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_behavioural_attackers(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def answer_attacker_credentials(
+    server_version: str,
+    model_id: str,
+    attacker_id: str,
+    credential_classes: str = "",
+) -> dict:
+    """Say which of the behavioural model's credential classes an attacker
+    holds. Mutating; creates a model version.
+
+    Answer from what the code or the owner shows. Empty means it holds no
+    credential. Its privileges follow from what it holds, by rule: ``None``
+    with none, ``High`` when a class may invoke an action that writes what
+    decides authority, ``Low`` otherwise; ``edit_attacker`` then refuses a
+    privileges change (409 ``privileges_from_holdings``). A holder of a
+    per-tenant class is placed at every tenant-isolation boundary,
+    suggested. Refused with 422 ``unknown_class`` (a class the model does not
+    have), 409 ``closure_not_offered`` (``get_behavioural_attackers`` reads
+    ``applies: false``), 404 ``no_attacker``.
+
+    A program's answer is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the closure as ``get_behavioural_attackers`` does, with the
+    ``attacker`` as it now stands.
+
+    Args:
+        model_id: ID of the threat model.
+        attacker_id: The attacker (e.g. "T3").
+        credential_classes: Comma-separated class ids from
+            ``credential_classes``; empty for none.
+    """
+    if not attacker_id.strip():
+        raise ToolError("attacker_id is required.")
+    try:
+        return _dump(await _get_client().answer_attacker_credentials(
+            model_id, attacker_id.strip(), _class_list(credential_classes)))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def add_proposed_attacker(
+    server_version: str,
+    model_id: str,
+    credential_classes: str = "",
+) -> dict:
+    """Add the attacker the attacker closure proposes for a credential set.
+    Mutating; creates a model version.
+
+    Name the proposal by its ``credential_classes`` as
+    ``get_behavioural_attackers`` lists it (a dismissed one may be added).
+    The attacker holds them, with the privileges they give and no position
+    but the tenant-isolation boundaries a per-tenant holder is placed at;
+    its rating factors are left unrated (set them with ``edit_attacker`` or
+    ``reevaluate_threat_model_factors``). Refused with 409 ``not_proposed``
+    when no attacker is proposed for exactly that set now (read the
+    attackers again), 409 ``closure_not_offered``, 422 ``unknown_class``.
+
+    A program's addition is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the closure as ``get_behavioural_attackers`` does, with
+    ``added``, the new attacker's id.
+
+    Args:
+        model_id: ID of the threat model.
+        credential_classes: Comma-separated class ids of the proposal; empty
+            for the one holding none.
+    """
+    try:
+        return _dump(await _get_client().add_proposed_attacker(
+            model_id, _class_list(credential_classes)))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def dismiss_proposed_attacker(
+    server_version: str,
+    model_id: str,
+    reason: str,
+    credential_classes: str = "",
+) -> dict:
+    """Dismiss the attacker the attacker closure proposes for a credential
+    set, with why. Mutating; creates a model version.
+
+    The dismissal is kept on the model: the proposal is no longer offered
+    while it stands. Refused with 409 ``not_proposed`` (no attacker is
+    proposed for exactly that set now), 409 ``dismissed_already``, 409
+    ``closure_not_offered``, 422 ``unknown_class``.
+
+    A program's dismissal is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the closure as ``get_behavioural_attackers`` does, with
+    ``dismissed_set``.
+
+    Args:
+        model_id: ID of the threat model.
+        reason: Why the attacker does not apply (required).
+        credential_classes: Comma-separated class ids of the proposal; empty
+            for the one holding none.
+    """
+    if not reason.strip():
+        raise ToolError("reason is required: say why the attacker does not apply.")
+    try:
+        return _dump(await _get_client().dismiss_proposed_attacker(
+            model_id, _class_list(credential_classes), reason.strip()))
     except Exception as exc:
         raise _api_error(exc) from exc
 

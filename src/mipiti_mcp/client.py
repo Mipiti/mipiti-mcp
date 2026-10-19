@@ -3219,6 +3219,56 @@ class MipitiClient:
             {"proposals_hash": proposals_hash},
         )
 
+    async def get_behavioural_attackers(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/behavioural-model/attackers.
+
+        Read-only. The attacker closure: ``applies``, the model's
+        ``credential_classes``, the attackers ``proposals`` (each with its
+        ``credential_classes``, ``privileges_required``, ``capability`` and
+        ``objectives``), those ``dismissed`` with why, and the ``questions``
+        asking what an attacker holds.
+        """
+        return await self._get(self._behavioural(model_id, "/attackers"))
+
+    async def answer_attacker_credentials(
+        self, model_id: str, attacker_id: str, credential_classes: list[str],
+    ) -> dict:
+        """PUT /api/models/{model_id}/behavioural-model/attackers/{attacker_id}/credentials.
+
+        Says which credential classes the attacker holds (none: it holds no
+        credential). Creates a model version.
+        """
+        return await self._put(
+            self._behavioural(model_id, f"/attackers/{attacker_id}/credentials"),
+            {"credential_classes": list(credential_classes)},
+        )
+
+    async def add_proposed_attacker(
+        self, model_id: str, credential_classes: list[str],
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/attackers/proposals/add.
+
+        Adds the attacker the closure proposes for the credential set.
+        Creates a model version.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/attackers/proposals/add"),
+            {"credential_classes": list(credential_classes)},
+        )
+
+    async def dismiss_proposed_attacker(
+        self, model_id: str, credential_classes: list[str], reason: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/attackers/proposals/dismiss.
+
+        Dismisses the attacker the closure proposes for the credential set,
+        with why. Creates a model version.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/attackers/proposals/dismiss"),
+            {"credential_classes": list(credential_classes), "reason": reason},
+        )
+
     async def get_control_delta(self, model_id: str, control_id: str) -> dict:
         """GET /api/models/{model_id}/behavioural-model/controls/{control_id}/delta.
 
