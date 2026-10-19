@@ -249,8 +249,7 @@ async def test_generating_from_the_behavioural_model_asks_a_resume_of_it(
     assert out.model_id == "tm-1"
     body = _body(route)
     assert (body["intent"], body["model_id"], body["resume"]) == ("generate", "tm-1", True)
-    # The message names the model: the API's replay of a stream is keyed by
-    # its message, so two models' resumes never replay each other.
+    # The message names the model, as the request's model_id does.
     assert "tm-1" in body["messages"][-1]["content"]
 
 

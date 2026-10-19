@@ -384,9 +384,10 @@ class MipitiClient:
         as ``{"generated": False, "http_status": 409, **detail}``. Any other
         failure raises, the 404 of a model that is not there included."""
         # The API's replay cache keys a stream request by its last message,
-        # its workspace and its parent, not by the model it names: the
-        # message names the model, so a resume never replays another
-        # model's, while a retry of this one replays its own.
+        # its workspace, its parent and the model it names, so a resume never
+        # replays another model's, while a retry of this one replays its own.
+        # The message names the model too, so the request reads the same in
+        # any record of it.
         try:
             data = await self._stream_model(
                 [{"role": "user", "content": (
