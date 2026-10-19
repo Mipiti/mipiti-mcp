@@ -213,11 +213,19 @@ class MipitiClient:
         on_progress: ProgressCallback | None = None,
         provenance: dict[str, Any] | None = None,
         intent: str | None = None,
+        resume: bool = False,
     ) -> dict[str, Any]:
         """POST /api/model/stream, consume SSE events, return final payload.
 
         ``intent`` (``generate`` / ``refine`` / ``query``) names what the
         caller asks for, so it is never classified from the message.
+        ``resume`` asks to generate the model ``model_id`` names from its
+        behavioural model; the API refuses it, never reading it as a new
+        generation, when that model does not await its first generation.
+
+        A refusal before the stream starts (the API answers with an error
+        status, not an event stream) raises ``httpx.HTTPStatusError`` with
+        the API's detail.
 
         Return shape is one of:
         - the ``result`` event (``"type": "result"``): a model was written
@@ -241,6 +249,8 @@ class MipitiClient:
             body["parent_id"] = parent_id
         if provenance:
             body["provenance"] = provenance
+        if resume:
+            body["resume"] = True
 
         # Generate a fresh Idempotency-Key for this stream request. The
         # streaming endpoint handles caching directly (the global middleware
@@ -257,6 +267,11 @@ class MipitiClient:
             client, "POST", "/api/model/stream", json=body,
             headers={"Idempotency-Key": idem_key},
         ) as event_source:
+            response = event_source.response
+            if response.status_code >= 400:
+                # Refused before any event: the body is the API's detail.
+                await response.aread()
+                response.raise_for_status()
             async for sse in event_source.aiter_sse():
                 event_type = sse.event
                 if event_type == "step_start":
@@ -313,7 +328,6 @@ class MipitiClient:
         parent_id: str | None = None,
         on_progress: ProgressCallback | None = None,
         provenance: dict[str, Any] | None = None,
-        model_id: str | None = None,
     ) -> GenerateResult | ChatResponse | dict:
         """Returns a ``GenerateResult`` on normal generation, OR a raw
         ``{"similar_models": [{id, title, reason}, ...]}`` dict when
@@ -323,13 +337,11 @@ class MipitiClient:
         ``ChatResponse`` is a generation that wrote no inventory: one
         carrying ``needs_answers`` (``{model_id, version, questions}``)
         stopped on questions only the description's owner can answer and
-        saved the model holding the description; any other means the
-        backend answered in prose and wrote nothing (a backend that does
-        not take the named intent can).
-
-        ``model_id`` names a model whose generation stopped on such
-        questions: once they are answered and extracted, the generation
-        resumes from them and saves that model's next version.
+        saved the model holding the description, one carrying
+        ``extracting`` saved the model and extracts its behaviour in the
+        background; any other means the backend answered in prose and wrote
+        nothing (a backend that does not take the named intent can). Such a
+        model is generated later with ``generate_from_behavioural_model``.
 
         When ``parent_id`` is provided, the backend wires the new model
         under that parent on the recursive composition tree, so it
@@ -343,7 +355,6 @@ class MipitiClient:
         """
         data = await self._stream_model(
             [{"role": "user", "content": feature_description}],
-            model_id=model_id,
             force_generate=force_generate,
             parent_id=parent_id,
             on_progress=on_progress,
@@ -352,6 +363,45 @@ class MipitiClient:
         )
         if isinstance(data, dict) and "similar_models" in data:
             return data
+        return self._stream_answer(data)
+
+    async def generate_from_behavioural_model(
+        self,
+        model_id: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> GenerateResult | ChatResponse | dict:
+        """Generate the threat model of ``model_id``, a model awaiting its
+        first generation, from its stored description and the answers to its
+        behavioural model's questions: POST /api/model/stream with
+        ``intent: "generate"``, ``model_id`` and ``resume: true``. It takes no
+        description. Saves the model's next version and returns a
+        ``GenerateResult``; a ``ChatResponse`` carrying ``needs_answers`` when
+        it stopped on questions.
+
+        A refusal is an answer, not an error: 409 (the model does not await
+        its first generation, ``not_awaiting_generation``, or another
+        generation of it is in flight, ``generation_in_progress``) comes back
+        as ``{"generated": False, "http_status": 409, **detail}``. Any other
+        failure raises, the 404 of a model that is not there included."""
+        # The API's replay cache keys a stream request by its last message,
+        # its workspace and its parent, not by the model it names: the
+        # message names the model, so a resume never replays another
+        # model's, while a retry of this one replays its own.
+        try:
+            data = await self._stream_model(
+                [{"role": "user", "content": (
+                    f"Generate the threat model of model {model_id} from its "
+                    "behavioural model.")}],
+                model_id=model_id,
+                on_progress=on_progress,
+                intent="generate",
+                resume=True,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                return {"generated": False, "http_status": 409,
+                        **self._refusal(exc.response)}
+            raise
         return self._stream_answer(data)
 
     async def refine_threat_model(
@@ -2993,17 +3043,40 @@ class MipitiClient:
     def _behavioural(model_id: str, tail: str = "") -> str:
         return f"/api/models/{model_id}/behavioural-model{tail}"
 
-    async def get_behavioural_model(self, model_id: str) -> dict:
-        """GET /api/models/{model_id}/behavioural-model.
+    async def get_behavioural_model(
+        self,
+        model_id: str,
+        view: str = "full",
+        wait_seconds: int = 0,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> dict:
+        """GET /api/models/{model_id}/behavioural-model[?view=&wait_seconds=&offset=&limit=].
 
         Read-only. Returns the status (``none``, ``needs_answers``,
         ``extracted``, ``confirmed``, ``stale`` or ``extracting``), the
         model, its ``ir_hash``, the open questions, the answers collected and
         not yet extracted, a summary of the links, the extraction queued or
-        running (``extraction.job``, null when none) and what the last one
-        could not keep (``extraction.dropped_elements``).
+        running (``extraction.job``, null when none, with its ``progress``)
+        and what the last one could not keep (``extraction.dropped_elements``),
+        what the flow waits on (``waiting_on``) and ``poll_after_seconds``.
+
+        ``view`` ``status`` serves no IR and no questions; ``questions``
+        serves that and the open questions from ``offset``, ``limit`` of
+        them. ``wait_seconds`` (at most 50) answers once the extraction job's
+        state, pass or calls completed change, or when the time is up. Only
+        values other than the defaults are sent.
         """
-        return await self._get(self._behavioural(model_id))
+        params: dict[str, Any] = {}
+        if view and view != "full":
+            params["view"] = view
+        if wait_seconds:
+            params["wait_seconds"] = int(wait_seconds)
+        if offset:
+            params["offset"] = int(offset)
+        if limit is not None:
+            params["limit"] = int(limit)
+        return await self._get(self._behavioural(model_id), params=params or None)
 
     async def extract_behavioural_model(
         self,
@@ -3043,6 +3116,7 @@ class MipitiClient:
         model_id: str,
         answers: list[dict],
         extract_now: bool = False,
+        dry_run: bool = False,
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/answers.
 
@@ -3055,11 +3129,16 @@ class MipitiClient:
         and ``extraction.job``. ``extract_now`` while an extraction is queued
         or running, or with no answer since it started, is refused 409
         ``extraction_running``.
+
+        ``dry_run`` returns ``{model_id, model_version, dry_run: true,
+        outcome}``, what the answers would do, and records nothing: no
+        version, no ledger row, no escalation. Sent only when set.
         """
-        return await self._post(
-            self._behavioural(model_id, "/answers"),
-            {"answers": list(answers), "extract_now": bool(extract_now)},
-        )
+        body: dict[str, Any] = {"answers": list(answers),
+                                "extract_now": bool(extract_now)}
+        if dry_run:
+            body["dry_run"] = True
+        return await self._post(self._behavioural(model_id, "/answers"), body)
 
     async def edit_behavioural_element(
         self, model_id: str, collection: str, element: dict,
@@ -3192,13 +3271,35 @@ class MipitiClient:
             {"control_ids": list(control_ids), "confirm_estimate": confirm_estimate},
         )
 
-    async def get_behavioural_threats(self, model_id: str) -> dict:
-        """GET /api/models/{model_id}/behavioural-model/threats.
+    async def get_behavioural_threats(
+        self,
+        model_id: str,
+        co_id: str = "",
+        offset: int = 0,
+        limit: int | None = None,
+        standing: str = "",
+    ) -> dict:
+        """GET /api/models/{model_id}/behavioural-model/threats[?co_id=&standing=&offset=&limit=].
 
         Read-only. The possible threats found per live control objective,
-        with the default questions whose answers would remove them.
+        with the default questions whose answers would remove them, a page at
+        a time: ``co_id`` one objective, ``standing`` one standing, ``offset``
+        and ``limit`` (the API's default 25, at most 200). The answer carries
+        ``total``, ``next_offset`` (null at the end) and ``truncated`` (the
+        page was cut short to stay under the API's size bound). Only values
+        given are sent.
         """
-        return await self._get(self._behavioural(model_id, "/threats"))
+        params: dict[str, Any] = {}
+        if co_id:
+            params["co_id"] = co_id
+        if standing:
+            params["standing"] = standing
+        if offset:
+            params["offset"] = int(offset)
+        if limit is not None:
+            params["limit"] = int(limit)
+        return await self._get(self._behavioural(model_id, "/threats"),
+                               params=params or None)
 
     async def request_model_check(
         self,
