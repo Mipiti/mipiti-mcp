@@ -433,6 +433,28 @@ async def test_a_zone_or_receiver_the_offer_does_not_list_is_forwarded_unchanged
 
 
 @pytest.mark.asyncio
+async def test_a_contents_answer_and_its_dismissal_are_forwarded_unchanged() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "structured": {"elements": [
+                    "batch_feed", {"id": "vendor_api_key", "secret": True}]}},
+               {"question_id": "q2", "disposition": "not_needed",
+                "text": "The provider only receives a redirect."}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+def test_the_contents_form_is_published() -> None:
+    assert '``{"elements": [id |' in _descriptions()["answer_behavioural_questions"]
+    instructions = build_instructions("pro", "user")
+    for term in ("`zone_contents`", '`structured: {"elements": [...]}`',
+                 "422 `structured_malformed`", "`unknown` is refused"):
+        assert term in instructions, term
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_an_idle_reextraction_refusal_names_its_code(mock_env: None) -> None:
     respx.post(BASE + "/answers").mock(return_value=httpx.Response(
