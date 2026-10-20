@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.90.0] - 2026-10-20
+
+### Added
+
+- Generate_from_behavioural_model, the attacker closure, paged and waiting behavioural reads, removals as jobs (#331)
+
 ## [0.89.0] - 2026-10-18
 
 ### Added
