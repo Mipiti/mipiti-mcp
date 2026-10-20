@@ -85,6 +85,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 
 - `generate_threat_model` — creates a new model with trust boundaries, assets, attackers, and control objectives. Automatically detects similar existing models and routes accordingly. Progress reported automatically.
 - `refine_threat_model` — updates an existing model when you already have a model ID and want to change it. Progress reported automatically.
+- `generate_from_behavioural_model`: generates a model saved before its inventory (see Behavioural model) once `get_behavioural_model` reports `generation_ready`. Takes only the `model_id`. Progress reported automatically.
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
@@ -141,7 +142,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them, answer them, and once `get_behavioural_model` reports `generation_ready`, call `generate_threat_model` again with its `model_id`. One that returns `extracting` saved the model and extracts its behaviour in the background: poll `get_behavioural_model` until `extraction.job` is null. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. Where the offer carries `new_zones` or `new_actors`, an answer may name a zone or a receiver the model lacks, and it is added. `extraction.dropped_elements` lists what an extraction could not keep, with the sentence each came from: answer that sentence's question. Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused (409 `extraction_running`): poll it instead. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them and answer them. One that returns `extracting` saved the model and extracts its behaviour in the background. Follow an extraction with `get_behavioural_model(view="status", wait_seconds=50)`, which answers when the job moves and reports its progress meanwhile, until `extraction.job` is null; `view="questions"` pages the open questions without the whole model. Once it reports `generation_ready`, call `generate_from_behavioural_model` with the `model_id`: it takes no description (a `generate_threat_model` naming a `model_id` with a description is refused, `resume_takes_no_description`). Before submitting answers, call `answer_behavioural_questions` with `dry_run=true`: it records nothing and says whether they extract and which questions they leave or raise, so you answer those too and submit once. `get_behavioural_threats` is paged (`offset`, `limit`, `co_id`, `standing`): read on from `next_offset`. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. Where the offer carries `new_zones` or `new_actors`, an answer may name a zone or a receiver the model lacks, and it is added. A question about what a zone holds (closure `zone_contents`: "What does the system keep in, or send to, <zone>?", or "<action> sends <values> over <channel> to <zone>, and the model holds none of it as an element") offers the `contents` form: `structured: {"elements": [...]}`, each element an id, or `{"id": "<id>", "secret": true}` for one that holds a secret. An id the offer lists under `elements` names an element already in the zone; any other id is a new element, declared in that zone, kept there, with one field (a secret where marked, else a plain value). The answer closes the question at once, with no extraction, and only widens what is analysed. An id another element holds elsewhere is refused 409 `id_in_use`; an empty or malformed list is refused 422 `structured_malformed`. The question takes one dismissal besides a fact: `disposition: "not_needed"`, saying the zone holds nothing of the system's; it stands while the zone, or what is sent there, is as it was asked about. `unknown` is refused. `get_behavioural_attackers` reads the attacker closure on a generated model: the attackers its credential classes say the inventory lacks (`add_proposed_attacker`, or `dismiss_proposed_attacker` with why) and questions asking what an attacker holds (`answer_attacker_credentials`, whose answer sets its privileges by rule; `edit_attacker` then refuses a privileges change, 409 `privileges_from_holdings`). Each act is a judgment, as an answer is. `extraction.dropped_elements` lists what an extraction could not keep, with the sentence each came from: answer that sentence's question. Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused (409 `extraction_running`): poll it instead. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -375,7 +376,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 ## Long-running operations
 
-`generate_threat_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically — no polling needed for the operation itself.
+`generate_threat_model`, `generate_from_behavioural_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically; no polling is needed for the operation itself. Entity writes (`add_asset`, `edit_asset`, `add_attacker`, `edit_attacker`, `remove_entity`) run as background jobs and report progress while they wait; a job a client stops waiting for finishes or fails on its own, so read the model before writing again.
 
 **Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits` with its basis, and the `model_version`, `set_revision` and `scope_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. The proposal also names what to review first: `flagged_entities` (a judge's warning, a rating nobody chose, a suspected duplicate) and `pending_attestations` (a seal, position or privileges that, once attested, would remove objectives from the build); neither blocks a start. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, scope_revision, confirm_estimate=True)`. A `review_stale` refusal means the model, its controls or the objectives the build would author changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
@@ -490,13 +491,20 @@ def _check_justification_length(justification: str) -> None:
         )
 
 
-async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, timeout: float = 600) -> dict:
+async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context,
+                             timeout: float = 600, heartbeat: bool = False) -> dict:
     """Poll a backend job until completion, reporting progress via MCP protocol.
 
     Detects client disconnect (when running over Streamable HTTP transport) and
     aborts polling early so we don't keep doing work for a dead client. The
     backend job itself is intentionally NOT cancelled — it continues running so
     that a retry with the same Idempotency-Key can pick up the cached result.
+
+    ``heartbeat``: a poll that carries no progress of its own still reports
+    one (indeterminate, naming the job's state), so a client whose idle timer
+    a silent wait would outlast keeps receiving progress while the job runs.
+    It never interrupts a numeric sequence: once the job has advertised a
+    total, only that sequence is emitted.
     """
     deadline = time.monotonic() + timeout
 
@@ -546,7 +554,10 @@ async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, ti
         if status == "failed":
             raise ToolError(data.get("error", "Background job failed"))
         if time.monotonic() > deadline:
-            raise ToolError(f"Operation timed out after {timeout}s")
+            raise ToolError(
+                f"Operation timed out after {timeout}s waiting for job {job_id}; the "
+                "job goes on and finishes or fails on its own. Read the model to see "
+                "whether it saved.")
 
         message = data.get("progress") or ""
         cur = data.get("progress_current")
@@ -568,6 +579,10 @@ async def _await_backend_job(client: MipitiClient, job_id: str, ctx: Context, ti
             # counter and omit `total` so clients render a spinner.
             poll_counter += 1
             await _safe_report_progress(ctx, poll_counter, None, str(message))
+        elif heartbeat and locked_total is None:
+            poll_counter += 1
+            await _safe_report_progress(
+                ctx, poll_counter, None, f"job {job_id}: {status or 'running'}")
 
         wait = data.get("poll_after_seconds", 3)
         await asyncio.sleep(wait)
@@ -710,58 +725,50 @@ async def generate_threat_model(
     provenance_source_url: str = "",
     model_id: str = "",
 ) -> dict:
-    """Generate a complete threat model from a feature description.
+    """Generate a threat model from a feature description: trust
+    boundaries, assets (Confidentiality, Integrity, Availability, Usage),
+    capability-defined attackers, the control objective matrix and
+    assumptions. A multi-step pipeline; progress is reported automatically.
 
-    Analyzes the feature using the Security Properties (Confidentiality,
-    Integrity, Availability, Usage) methodology with capability-defined
-    attackers. Produces trust boundaries, asset inventory, attacker
-    inventory, control objective matrix, and assumptions.
+    **Similar models:** where an existing model of the workspace overlaps
+    the description, nothing is generated: ``{"similar_models": [{"id",
+    "title", "reason"}], "suggestion"}``. Refine a candidate with
+    ``refine_threat_model`` (usually right: it keeps controls and history),
+    or retry with ``force=True`` once the operator confirms it is distinct.
 
-    Runs a multi-step AI pipeline. Progress is reported automatically.
+    **Saved first:** where the platform models what the system does, the
+    model is saved holding the description and generated from it later.
+    ``extracting: true`` (``model_id``, ``job``): its behaviour is extracted
+    in the background. ``needs_answers: true`` (``model_id``,
+    ``questions``): RELAY THE QUESTIONS TO THE PERSON and answer them with
+    ``answer_behavioural_questions``. Then poll ``get_behavioural_model``
+    until ``generation_ready`` is true and call
+    ``generate_from_behavioural_model`` with the ``model_id`` (``next`` says
+    so). No control build is proposed until then. Deprecated: ``model_id``
+    here; with an empty description it does the same, with one it is
+    refused (``resume_takes_no_description``).
 
-    **Similar-model short-circuit:** if the backend finds an existing
-    model in the workspace whose feature description substantially
-    overlaps with the new one, it does NOT generate a duplicate. This
-    tool returns ``{"similar_models": [{"id", "title", "reason"}, ...],
-    "suggestion": "..."}`` with the candidate IDs instead. The agent
-    should then either:
-
-    - Call ``refine_threat_model`` on a candidate to extend it (usually
-      right: it keeps controls and assertion history).
-    - Retry with ``force=True`` to create a new model anyway, when the
-      operator confirmed it is distinct.
-
-    The request names its purpose, so the platform always generates: it
-    never reads the description as a question or a change to another
-    model.
-
-    **Stopped on owner questions:** where the platform models what the
-    system does, a description that leaves open what only its owner can
-    say stops before any inventory is generated, and the model is saved
-    holding the description. The tool returns ``needs_answers: true`` with
-    the ``model_id`` and the ``questions``.
-    RELAY THE QUESTIONS TO THE PERSON, answer them with
-    ``answer_behavioural_questions`` from what they or the code show,
-    poll ``get_behavioural_model`` until it reports
-    ``generation_ready: true``, then call this tool again with that
-    ``model_id``: the generation resumes from the answers and saves that
-    model's next version. No control build is proposed until then.
-
-    ``extracting: true`` (with ``model_id``, ``job``): the model is saved and
-    its behaviour extracted in the background; poll ``get_behavioural_model``
-    until ``extraction.job`` is null, then go on as above.
+    Answer: ``{model_id, version, title, asset_count, attacker_count,
+    control_objective_count, controls_status, ...}``. ``proposed``: a build
+    is proposed (``proposal``: what it builds, ``estimated_credits``, the
+    ``model_version``, ``set_revision`` and ``scope_revision`` a start
+    names); review it with the user, then ``start_control_build`` with
+    ``confirm_estimate=True``. ``none_owed``: nothing is owed;
+    ``unavailable`` / ``error``: read ``get_control_generation_status``. A
+    ``governor`` at ``warning`` or ``exhausted``: relay it; queued work
+    resumes at ``resets_at``, never dropped.
 
     Args:
         feature_description: Description of the feature or system to
             threat model. Can be a few sentences or a detailed spec.
         force: Skip the similar-model detection and always create a
-            new model. Default False — the check fires unless the
-            operator / agent has explicit reason to bypass it.
+            new model. Default False: the check fires unless the
+            operator or agent has explicit reason to bypass it.
         parent_id: Optional ID of an existing model to wire the new
             model under as a child on the recursive composition tree.
             The child then inherits the parent's topology and
             participates in composition (delta / inherited control
-            credit). Default None — the model is created flat.
+            credit). Default None: the model is created flat.
         provenance_kind: Where the description came from, one of
             ``code``, ``ticket``, ``document``, ``manual``, ``mixed``.
             Empty (default) records nothing. For an existing repository
@@ -779,53 +786,22 @@ async def generate_threat_model(
         provenance_source_ref: Identifier of the ticket or document the
             description came from (``ticket`` / ``document`` kinds).
         provenance_source_url: URL of that ticket or document.
-        model_id: Only to resume a generation that stopped on owner
-            questions (above): the model it saved. Pass it once
-            ``get_behavioural_model`` reports ``generation_ready: true``.
-            Before then it is not a resume, and a new model is generated.
-
-    Return shape (stopped on owner questions):
-        ``{"generated": False, "needs_answers": True, "model_id",
-        "version", "questions": [{"question_id", "text", ...}],
-        "message"}``.
-
-
-    Return shape (normal generation):
-        ``{"model_id", "version", "title", "asset_count",
-           "attacker_count", "control_objective_count"}``, and — when the
-        workspace bounds background analysis spend — a ``governor`` object
-        (``{"status": "ok"|"warning"|"exhausted", "exhausted", "resets_at",
-        ...}``). When ``governor.status`` is ``warning`` or ``exhausted``,
-        relay it to the user: analysis is nearing or at today's budget and
-        queued background work resumes at ``governor.resets_at`` — it is never
-        dropped. Absent when no budget applies.
-
-        Also carries ``controls_status``. A saved model's controls are built
-        only by a build someone starts, so generation builds none itself:
-        ``proposed`` means a control build is proposed, and ``proposal``
-        (with ``controls_expected``, its objective count) says what it would
-        build, its ``estimated_credits``, and the ``model_version``,
-        ``set_revision`` and ``scope_revision`` a start must name. Review the
-        model with the user, then call ``start_control_build`` with those
-        values and ``confirm_estimate=True``. ``none_owed`` means nothing is owed;
-        ``unavailable`` / ``error`` mean the proposal could not be recorded
-        (read ``get_control_generation_status``, which carries any proposal).
-
-    Return shape (similar-model short-circuit):
-        ``{"similar_models": [{"id", "title", "reason"}, ...],
-           "suggestion": "..."}``
+        model_id: Deprecated: use ``generate_from_behavioural_model``. With
+            an empty ``feature_description`` it does the same; with a
+            description it is refused (``resume_takes_no_description``).
     """
-    # Track the last (progress, total) seen from the upstream stream so the
-    # final "Complete" notification emits (total, total) and preserves the
-    # MCP spec invariants: progress monotonically non-decreasing, and `total`
-    # constant across a single progressToken sequence. Clients are allowed
-    # to drop progressToken sequences that violate either invariant.
-    last_progress_total: list[float] = [0.0, 0.0]  # [last_progress, last_total]
-
-    async def on_progress(progress, total, message):
-        last_progress_total[0] = progress
-        last_progress_total[1] = total
-        await _safe_report_progress(ctx, progress, total, message)
+    if model_id.strip():
+        if feature_description.strip():
+            raise ToolError(
+                "resume_takes_no_description (422): model_id names a model awaiting its "
+                "first generation, which is generated from its own stored description "
+                "and answers, so it takes no description. Call "
+                "generate_from_behavioural_model(model_id), or omit model_id to generate "
+                "a new model from this description.")
+        return await _resume_generation(model_id.strip(), ctx)
+    if not feature_description.strip():
+        raise ToolError("feature_description is required: describe the feature or system.")
+    progress = _StreamProgress(ctx)
     try:
         provenance = None
         if provenance_kind.strip():
@@ -841,18 +817,10 @@ async def generate_threat_model(
             feature_description,
             force_generate=force,
             parent_id=parent_id,
-            on_progress=on_progress,
+            on_progress=progress,
             provenance=provenance,
-            model_id=model_id.strip() or None,
         )
-        # Emit a final 100% notification aligned with the sequence's total.
-        # If on_progress was never called (stream had no step events), skip
-        # the Complete notification — any arbitrary (progress, total) here
-        # would violate the monotonic / constant-total invariant.
-        if last_progress_total[1] > 0:
-            await _safe_report_progress(
-                ctx, last_progress_total[1], last_progress_total[1], "Complete",
-            )
+        await progress.complete()
         # Similar-model short-circuit: client returned a plain dict
         # with a `similar_models` key, not a GenerateResult.
         if isinstance(result, dict) and "similar_models" in result:
@@ -867,62 +835,166 @@ async def generate_threat_model(
                     "anyway."
                 ),
             }
-        if isinstance(result, ChatResponse):
-            extracting = getattr(result, "extracting", None)
-            if isinstance(extracting, dict):
-                # Saved first: the model holds the description and its
-                # behaviour is being extracted in the background.
-                return {
-                    "generated": False,
-                    "extracting": True,
-                    "model_id": extracting.get("model_id", ""),
-                    "version": extracting.get("version"),
-                    "title": extracting.get("title", ""),
-                    "job": extracting.get("job"),
-                    "estimate": extracting.get("estimate"),
-                    "message": result.content,
-                }
-            stopped = getattr(result, "needs_answers", None)
-            if isinstance(stopped, dict):
-                # The generation stopped on owner questions: the model is
-                # saved holding the description, with no inventory yet.
-                return {
-                    "generated": False,
-                    "needs_answers": True,
-                    "model_id": stopped.get("model_id", ""),
-                    "version": stopped.get("version"),
-                    "questions": list(stopped.get("questions") or []),
-                    "message": result.content,
-                }
-            # Only a backend that does not take the named intent answers a
-            # generation in prose; nothing was written.
-            return {"generated": False, "message": result.content}
-        tm = result.threat_model
-        # `model_id` is the persisted model id; `threat_model.id` is the
-        # generated in-memory id, which can be present even when the model was
-        # not saved — returning it yields an id that 404s on the next fetch.
-        # Prefer `model_id`, and if it is absent treat the generation as not
-        # persisted rather than reporting an unusable id.
-        model_id = getattr(result, "model_id", "") or ""
-        if not model_id:
-            raise RuntimeError(
-                "Threat model was generated but not saved (no model id "
-                "returned). This is usually a transient storage error — please "
-                "retry generate_threat_model."
-            )
-        gov = getattr(result, "governor", None)
-        return {
-            "model_id": model_id,
-            "version": tm.version,
-            "title": tm.title,
-            "asset_count": len(tm.assets),
-            "attacker_count": len(tm.attackers),
-            "control_objective_count": len(tm.control_objectives),
-            **({"governor": gov} if gov else {}),
-            **_controls_build_fields(result),
-        }
+        return _generation_answer(result)
     except Exception as exc:
         raise _api_error(exc) from exc
+
+
+class _StreamProgress:
+    """A generation stream's progress, forwarded to the client.
+
+    Tracks the last ``(progress, total)`` seen so the final "Complete"
+    notification emits ``(total, total)`` and keeps the MCP invariants:
+    progress monotonically non-decreasing and ``total`` constant across one
+    progressToken sequence. Clients may drop a sequence that violates
+    either."""
+
+    def __init__(self, ctx: Context) -> None:
+        self._ctx = ctx
+        self._last_total = 0.0
+
+    async def __call__(self, progress, total, message) -> None:
+        self._last_total = total
+        await _safe_report_progress(self._ctx, progress, total, message)
+
+    async def complete(self) -> None:
+        # Without a step event in the stream, any (progress, total) here
+        # would break the sequence's invariants, so nothing is sent.
+        if self._last_total > 0:
+            await _safe_report_progress(
+                self._ctx, self._last_total, self._last_total, "Complete")
+
+
+def _next_for_saved_model(model_id: str, *, extracting: bool) -> str:
+    """What an agent does next with a model saved before its inventory."""
+    first = (f"Poll get_behavioural_model(model_id={model_id!r}, view='status', "
+             "wait_seconds=50) until extraction.job is null, then answer any questions "
+             "it lists with answer_behavioural_questions"
+             if extracting else
+             "Relay the questions to the person and answer them with "
+             f"answer_behavioural_questions; then poll get_behavioural_model(model_id="
+             f"{model_id!r}, view='status', wait_seconds=50)")
+    return (f"{first}. Once generation_ready is true, call "
+            f"generate_from_behavioural_model(model_id={model_id!r}).")
+
+
+def _generation_answer(result: Any) -> dict:
+    """What a generation's stream answered, as the tools return it: a model
+    saved before its inventory (``extracting`` or ``needs_answers``), prose
+    with nothing written, or the generated model."""
+    if isinstance(result, ChatResponse):
+        extracting = getattr(result, "extracting", None)
+        if isinstance(extracting, dict):
+            # Saved first: the model holds the description and its
+            # behaviour is being extracted in the background.
+            model_id = extracting.get("model_id", "")
+            return {
+                "generated": False,
+                "extracting": True,
+                "model_id": model_id,
+                "version": extracting.get("version"),
+                "title": extracting.get("title", ""),
+                "job": extracting.get("job"),
+                "estimate": extracting.get("estimate"),
+                "message": result.content,
+                "next": _next_for_saved_model(model_id, extracting=True),
+            }
+        stopped = getattr(result, "needs_answers", None)
+        if isinstance(stopped, dict):
+            # The generation stopped on owner questions: the model is
+            # saved holding the description, with no inventory yet.
+            model_id = stopped.get("model_id", "")
+            return {
+                "generated": False,
+                "needs_answers": True,
+                "model_id": model_id,
+                "version": stopped.get("version"),
+                "questions": list(stopped.get("questions") or []),
+                "message": result.content,
+                "next": _next_for_saved_model(model_id, extracting=False),
+            }
+        # Only a backend that does not take the named intent answers a
+        # generation in prose; nothing was written.
+        return {"generated": False, "message": result.content}
+    tm = result.threat_model
+    # `model_id` is the persisted model id; `threat_model.id` is the
+    # generated in-memory id, which can be present even when the model was
+    # not saved: returning it yields an id that 404s on the next fetch.
+    # Prefer `model_id`, and if it is absent treat the generation as not
+    # persisted rather than reporting an unusable id.
+    model_id = getattr(result, "model_id", "") or ""
+    if not model_id:
+        raise RuntimeError(
+            "Threat model was generated but not saved (no model id "
+            "returned). This is usually a transient storage error; please "
+            "retry the generation."
+        )
+    gov = getattr(result, "governor", None)
+    return {
+        "model_id": model_id,
+        "version": tm.version,
+        "title": tm.title,
+        "asset_count": len(tm.assets),
+        "attacker_count": len(tm.attackers),
+        "control_objective_count": len(tm.control_objectives),
+        **({"governor": gov} if gov else {}),
+        **_controls_build_fields(result),
+    }
+
+
+async def _resume_generation(model_id: str, ctx: Context) -> dict:
+    """Generate ``model_id``, a model awaiting its first generation, from its
+    behavioural model, reporting the stream's progress. A refusal comes back
+    as data."""
+    progress = _StreamProgress(ctx)
+    try:
+        result = await _get_client().generate_from_behavioural_model(
+            model_id, on_progress=progress)
+        await progress.complete()
+        if isinstance(result, dict):
+            return result
+        return _generation_answer(result)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def generate_from_behavioural_model(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+) -> dict:
+    """Generate the threat model of a model awaiting its first generation,
+    from its behavioural model. Mutating; saves the model's next version.
+
+    A generation where the platform models what the system does saves the
+    model first (``generate_threat_model`` answers ``extracting`` or
+    ``needs_answers``). Once ``get_behavioural_model`` reports
+    ``generation_ready: true``, call this with its ``model_id``: the
+    inventory steps run from the stored description and the answers to its
+    questions. It takes no description. Progress is reported automatically;
+    it takes minutes.
+
+    Answer: as ``generate_threat_model``'s, ``controls_status`` and the
+    proposed control build included; ``needs_answers`` with the
+    ``questions`` when it stopped on questions.
+
+    Refusals come back as data, ``{generated: false, http_status: 409, code,
+    message}``: ``not_awaiting_generation`` (the model has been generated,
+    or its behavioural model still asks questions or is being extracted:
+    read ``get_behavioural_model``, and refine a generated model with
+    ``refine_threat_model``), ``generation_in_progress`` (another generation
+    of the model is running: do not start another; poll
+    ``get_behavioural_model``, whose ``generation_ready`` turns false and
+    whose version moves when it saves). A model that is not there is a 404
+    error.
+
+    Args:
+        model_id: The model, as ``generate_threat_model`` returned it.
+    """
+    if not model_id.strip():
+        raise ToolError("model_id is required.")
+    return await _resume_generation(model_id.strip(), ctx)
 
 
 @mcp.tool()
@@ -2975,7 +3047,7 @@ async def add_asset(
     try:
         client = _get_client()
         started = await client.start_add_asset(model_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx)
+        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3085,7 +3157,7 @@ async def edit_asset(
     try:
         client = _get_client()
         started = await client.start_edit_asset(model_id, asset_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx)
+        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3205,7 +3277,7 @@ async def add_attacker(
     try:
         client = _get_client()
         started = await client.start_add_attacker(model_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx)
+        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3253,7 +3325,10 @@ async def edit_attacker(
 
     400 when factor fields, ``surface_extent``, ``attest_surface_extent``
     or ``attest_privileges`` come without ``change_reason``; 503/502 on an
-    evaluator outage or malformed answer.
+    evaluator outage or malformed answer. 409 ``privileges_from_holdings``
+    for a privileges change on an attacker whose credential classes are
+    stated: its privileges follow from them, so say what it holds instead
+    (``answer_attacker_credentials``).
 
     Args:
         attack_vector: Network | Adjacent | Local | Physical.
@@ -3314,7 +3389,7 @@ async def edit_attacker(
     try:
         client = _get_client()
         started = await client.start_edit_attacker(model_id, attacker_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx)
+        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5508,12 +5583,18 @@ async def remove_entity(
     model_id: str,
     entity_type: str,
     entity_id: str,
+    ctx: Context,
 ) -> dict:
     """Soft-delete a single entity of any core type. Mutating: creates a
     new model version. Reversible with ``restore_entity`` using the same
     ``entity_type`` — the entity's ID is preserved (never reused) so a
     restore reinstates the same ID and all its links. To change an
     entity's fields instead of removing it, use the typed ``edit_*`` tool.
+
+    Runs as a background job, reporting progress while it waits; a job a
+    client stops waiting for finishes or fails on its own. A removal that
+    is refused (the entity is not found or already deleted, or it is the
+    last live asset or attacker) fails with the reason.
 
     Dispatches on ``entity_type``. Per-type consequence (all derived at
     read time; nothing is hard-destroyed):
@@ -5549,14 +5630,9 @@ async def remove_entity(
         )
     try:
         client = _get_client()
-        remover = {
-            "asset": client.remove_asset,
-            "attacker": client.remove_attacker,
-            "component": client.remove_component,
-            "trust_boundary": client.remove_trust_boundary,
-            "assumption": client.remove_assumption,
-        }[entity_type]
-        return _dump(await remover(model_id, entity_id))
+        started = await client.start_remove_entity(model_id, entity_type, entity_id)
+        return _dump(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7146,35 +7222,138 @@ def _json_value(raw: str, name: str, kind: type, example: str) -> Any:
     return value
 
 
-@mcp.tool()
-async def get_behavioural_model(server_version: str, model_id: str) -> dict:
-    """Read a model's behavioural model: what the system does, as elements,
-    actions and zones taken from its description. Read-only; no side effects.
+#: The reads of the behavioural model, and the bounds the API takes for
+#: them: a wait of at most 50 seconds, a page of at most 200 questions (50 by
+#: default), and the threats read's page of at most 200 objectives (25 by
+#: default).
+_BEHAVIOURAL_VIEWS = ("full", "status", "questions")
+_WAIT_MAX_SECONDS = 50
+_QUESTIONS_PAGE_DEFAULT = 50
+_THREATS_PAGE_DEFAULT = 25
+_PAGE_MAX = 200
+#: The longest one read of a wait lasts, so progress reaches the client
+#: between reads.
+_WAIT_SLICE_SECONDS = 10
 
-    Returns ``{status, ir, ir_hash, questions, owner_questions_open,
-    pending_answers, answered, confirmed, links, ...}``. ``status`` is
-    ``none`` (the model has none; ``extract_behavioural_model`` gives it one),
-    ``needs_answers`` (an owner question is open and the model decides
-    nothing yet), ``extracted``, ``confirmed``, ``stale`` (the description
-    changed since it was extracted) or ``extracting`` (a generation saved the
-    model and its behaviour is being extracted in the background).
-    ``questions`` are the open ones: each is answered with
-    ``answer_behavioural_questions``; one carrying ``structured`` takes a
-    structured answer, and one with ``awaiting_fix`` was answered already. ``pending_answers`` are
-    answers collected and not yet extracted. ``ir_hash`` is what
-    ``confirm_behavioural_model`` names. ``extraction.job`` is the extraction
-    running in the background (null when none): poll this until it is null;
-    a ``failed`` job says why in ``error``. ``extraction.dropped_elements``
-    lists what the extraction could not keep, each with the sentence it came
-    from: answer that sentence's question so the next extraction can.
-    ``generation_ready`` is true when a generation stopped on these questions
-    can now run.
+
+def _extraction_job(read: dict) -> Optional[dict]:
+    job = (read.get("extraction") or {}).get("job") if isinstance(read, dict) else None
+    return job if isinstance(job, dict) else None
+
+
+def _job_signature(job: Optional[dict]) -> tuple:
+    """What a wait watches of the extraction job, as the API does: its state,
+    its pass and the calls it has completed."""
+    if job is None:
+        return (None,)
+    progress = job.get("progress") or {}
+    return (job.get("state"), progress.get("pass"), progress.get("calls_completed"))
+
+
+def _job_message(job: Optional[dict]) -> str:
+    """The extraction job in words, as a progress notification carries it:
+    ``call 3 of 5: actions``, with the estimated finish once there is one."""
+    if job is None:
+        return "extraction finished"
+    state = job.get("state") or ""
+    if state != "running":
+        return f"extraction {state}" + (f": {job['error']}" if job.get("error") else "")
+    progress = job.get("progress") or {}
+    completed = int(progress.get("calls_completed") or 0)
+    call = completed + (1 if progress.get("call_started_at") else 0)
+    if not call:
+        return "extraction running"
+    expected = progress.get("calls_expected")
+    message = f"call {call}" + (f" of {expected}" if expected else "")
+    if progress.get("pass"):
+        message += f": {progress['pass']}"
+    if progress.get("estimated_finish"):
+        message += f", estimated finish {progress['estimated_finish']}"
+    return message
+
+
+async def _wait_for_extraction(client: MipitiClient, model_id: str, wait_seconds: int,
+                               ctx: Context) -> None:
+    """Wait up to ``wait_seconds`` for the model's extraction job to change
+    its state, pass or calls completed, reading it a slice at a time and
+    reporting each read through the client's progress channel. Returns at
+    once when no job is queued or running: a failed one moves only when it
+    is asked for again."""
+    deadline = time.monotonic() + wait_seconds
+    job = _extraction_job(await client.get_behavioural_model(model_id, view="status"))
+    if job is None or job.get("state") not in ("queued", "running"):
+        return
+    seen = _job_signature(job)
+    sent = 1
+    await _safe_report_progress(ctx, sent, None, _job_message(job))
+    while True:
+        left = int(deadline - time.monotonic())
+        if left < 1:
+            return
+        job = _extraction_job(await client.get_behavioural_model(
+            model_id, view="status", wait_seconds=min(_WAIT_SLICE_SECONDS, left)))
+        sent += 1
+        await _safe_report_progress(ctx, sent, None, _job_message(job))
+        if _job_signature(job) != seen:
+            return
+
+
+@mcp.tool()
+async def get_behavioural_model(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    view: Literal["full", "status", "questions"] = "full",
+    wait_seconds: int = 0,
+    offset: int = 0,
+    limit: int = _QUESTIONS_PAGE_DEFAULT,
+) -> dict:
+    """Read a model's behavioural model: what the system does, as elements,
+    actions and zones taken from its description. Read-only.
+
+    ``status``: ``none`` (``extract_behavioural_model`` gives it one),
+    ``needs_answers``, ``extracted``, ``confirmed``, ``stale`` (the
+    description changed since) or ``extracting``. ``questions`` are the open
+    ones, answered with ``answer_behavioural_questions``; one carrying
+    ``structured`` takes a structured answer, one with ``awaiting_fix`` was
+    answered. ``pending_answers``: collected, not extracted. ``ir_hash`` is
+    what ``confirm_behavioural_model`` names. ``waiting_on``:
+    ``extraction``, ``acceptance``, ``answers``, ``generation`` or
+    ``nothing``. ``extraction.job``: the extraction running in the
+    background (null when none), its ``progress`` (pass, calls done and
+    expected, estimated finish); ``extraction.dropped_elements``: what it
+    could not keep, with the sentence to answer. ``generation_ready``: call
+    ``generate_from_behavioural_model``.
+
+    ``view="status"`` serves no IR and no questions: use it to follow an
+    extraction. ``view="questions"``: that and the open questions from
+    ``offset``, ``limit`` of them (default 50, at most 200), with ``total``
+    and ``next_offset``. ``wait_seconds`` (0 to 50) waits for the job's
+    state, pass or calls completed to change, sending progress ("call 3 of
+    5: actions") meanwhile; at once when no job runs. Read again after
+    ``poll_after_seconds``.
 
     Args:
         model_id: ID of the threat model.
+        view: ``full`` (default), ``status`` or ``questions``.
+        wait_seconds: 0 (default) answers at once.
+        offset: ``questions`` view only.
+        limit: ``questions`` view only.
     """
+    if view not in _BEHAVIOURAL_VIEWS:
+        raise ToolError(f"view must be one of {', '.join(_BEHAVIOURAL_VIEWS)}.")
+    if not 0 <= wait_seconds <= _WAIT_MAX_SECONDS:
+        raise ToolError(f"wait_seconds must be between 0 and {_WAIT_MAX_SECONDS}.")
+    if offset < 0 or not 1 <= limit <= _PAGE_MAX:
+        raise ToolError(f"offset must be 0 or more and limit between 1 and {_PAGE_MAX}.")
     try:
-        return _dump(await _get_client().get_behavioural_model(model_id))
+        client = _get_client()
+        if wait_seconds:
+            await _wait_for_extraction(client, model_id, wait_seconds, ctx)
+        if view == "questions":
+            return _dump(await client.get_behavioural_model(
+                model_id, view=view, offset=offset, limit=limit))
+        return _dump(await client.get_behavioural_model(model_id, view=view))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7240,42 +7419,46 @@ async def answer_behavioural_questions(
     model_id: str,
     answers: str = "[]",
     extract_now: bool = False,
+    dry_run: bool = False,
 ) -> dict:
     """Answer open behavioural questions, many in one call. Mutating; creates
     a model version.
 
-    Answer only from what the code or the owner shows; say ``unknown`` rather
-    than guess. Answer what each question asks, in a sentence or two. Answer
-    every owner question before an extraction: it runs once all have an
-    answer, or on ``extract_now=True`` (with no answers, refused 409
-    ``questions_open`` while one is open, and 409 ``extraction_running`` while
-    one is queued or running, or when no answer was given since it started:
-    poll it instead), billed to the caller (402 if the balance cannot cover
-    it).
+    Answer only from what the code or the owner shows; say ``unknown``
+    rather than guess, in a sentence or two. An extraction runs once every
+    owner question has an answer, or on ``extract_now=True`` (with no
+    answers, refused 409 ``questions_open`` while one is open, and 409
+    ``extraction_running`` while one is queued or running, or with no answer
+    since it started: poll it), billed to the caller (402 when short).
 
-    An answer is a fact (``text``), or a ``disposition`` its question's
-    ``dispositions`` lists: ``not_needed``, ``not_behaviour``, ``unknown``,
-    ``as_stated``; ``text`` is then a note. A question about the model's own
-    structure carries ``structured``: answer it with ``structured`` naming
-    the ids offered, ``{"classes": [...]}`` or ``{"public": true}``,
-    ``{"zones": {id: zone}}``, ``{"zone": z}``, ``{"actions": [...]}``,
-    ``{"changes": {field: [actions]}}``, ``{"receivers": [...]}``. Where the
-    offer carries ``new_zones``, a zone it does not list may be named and is
-    added; where it carries ``new_actors``, a receiver it does not list may be
-    named and is added as an outside party holding a credential of its own
-    (409 ``id_in_use`` when the id names something else). The model
-    is edited at once, with no extraction (the server instructions say
-    more). Where the code does more or less than the question's sentence,
-    add ``contradicts: {"direction": "code_does_more" | "code_does_less",
-    "quote"?}``: the drift is reported with the answer (409
-    ``drift_is_defect`` over a defect's sentence).
+    ``dry_run=True`` records nothing (no version, no escalation) and returns
+    ``outcome``: whether the answers extract (``extracts``, ``estimate``),
+    the questions left or ``raised``. Dry-run, answer what is raised, then
+    submit once.
+
+    An answer is a fact (``text``), or a ``disposition`` its question lists:
+    ``not_needed``, ``not_behaviour``, ``unknown``, ``as_stated``; ``text``
+    is then a note. A question about the model's own structure carries
+    ``structured``: answer with ``structured`` naming the ids offered,
+    ``{"classes": [...]}`` or ``{"public": true}``, ``{"zones": {id:
+    zone}}``, ``{"zone": z}``, ``{"actions": [...]}``, ``{"changes": {field:
+    [actions]}}``, ``{"receivers": [...]}``, ``{"elements": [id |
+    {"id", "secret": true}]}`` (a zone's contents: an id not offered is a
+    new element there; ``not_needed`` says it holds nothing). An offer with
+    ``new_zones``
+    takes a zone it does not list, one with ``new_actors`` a receiver it
+    does not list, each added (409 ``id_in_use`` when the id names something
+    else). It edits the model at once. Where the code does more or less than
+    the sentence, add ``contradicts: {"direction": "code_does_more" |
+    "code_does_less", "quote"?}`` (409 ``drift_is_defect`` over a defect's
+    sentence).
 
     A program's answer is a judgment: refused with 403 and an
     ``escalation_id`` unless delegated. Do not retry; poll
     ``list_proposals``.
 
-    Returns at once. With an extraction asked for, ``queued`` is true: poll
-    ``get_behavioural_model`` until ``extraction.job`` is null.
+    With an extraction asked for, ``queued`` is true: follow it with
+    ``get_behavioural_model(view="status", wait_seconds=50)``.
 
     Args:
         model_id: ID of the threat model.
@@ -7284,6 +7467,8 @@ async def answer_behavioural_questions(
             "text": "Only the owner deletes."}, {"question_id": "q3",
             "structured": {"classes": ["org_admin"]}}]'.
         extract_now: Extract now, with the answers collected.
+        dry_run: Return what the answers would do (``outcome``) and record
+            nothing. Default False.
     """
     parsed = _json_value(
         answers, "answers", list,
@@ -7313,7 +7498,8 @@ async def answer_behavioural_questions(
         raise ToolError("Give at least one answer, or pass extract_now=True.")
     try:
         return _dump(await _get_client().answer_behavioural_questions(
-            model_id, parsed, extract_now=extract_now))
+            model_id, parsed, extract_now=extract_now,
+            **({"dry_run": True} if dry_run else {})))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7491,6 +7677,158 @@ async def accept_behavioural_link_proposals(
         raise _api_error(exc) from exc
 
 
+def _class_list(raw: str) -> list[str]:
+    """Comma-separated credential class ids, as a list without blanks."""
+    return [c.strip() for c in (raw or "").split(",") if c.strip()]
+
+
+@mcp.tool()
+async def get_behavioural_attackers(server_version: str, model_id: str) -> dict:
+    """Read the attacker closure of a model: the attackers its behavioural
+    model says are missing from the inventory, and what its attackers hold.
+    Read-only: no model is called and nothing is written.
+
+    Returns ``{applies, credential_classes, proposals, dismissed,
+    questions}``. ``applies`` is false where the closure is not offered (a
+    model with no inventory, or whose behavioural model decides nothing
+    yet). ``credential_classes`` are the behavioural model's classes, by id.
+    Each of ``proposals`` is an attacker no attacker of the inventory stands
+    for: its ``credential_classes``, the ``privileges_required`` they give,
+    its ``capability`` and the ``objectives`` adding it adds; add it with
+    ``add_proposed_attacker`` or dismiss it with
+    ``dismiss_proposed_attacker``. ``dismissed`` lists those dismissed, with
+    ``reason``, ``dismissed_by`` and ``dismissed_at``. ``questions`` ask what
+    an attacker holds: answer each with ``answer_attacker_credentials``.
+    Relay the proposals to the person before acting on them.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_behavioural_attackers(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def answer_attacker_credentials(
+    server_version: str,
+    model_id: str,
+    attacker_id: str,
+    credential_classes: str = "",
+) -> dict:
+    """Say which of the behavioural model's credential classes an attacker
+    holds. Mutating; creates a model version.
+
+    Answer from what the code or the owner shows. Empty means it holds no
+    credential. Its privileges follow from what it holds, by rule: ``None``
+    with none, ``High`` when a class may invoke an action that writes what
+    decides authority, ``Low`` otherwise; ``edit_attacker`` then refuses a
+    privileges change (409 ``privileges_from_holdings``). A holder of a
+    per-tenant class is placed at every tenant-isolation boundary,
+    suggested. Refused with 422 ``unknown_class`` (a class the model does not
+    have), 409 ``closure_not_offered`` (``get_behavioural_attackers`` reads
+    ``applies: false``), 404 ``no_attacker``.
+
+    A program's answer is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the closure as ``get_behavioural_attackers`` does, with the
+    ``attacker`` as it now stands.
+
+    Args:
+        model_id: ID of the threat model.
+        attacker_id: The attacker (e.g. "T3").
+        credential_classes: Comma-separated class ids from
+            ``credential_classes``; empty for none.
+    """
+    if not attacker_id.strip():
+        raise ToolError("attacker_id is required.")
+    try:
+        return _dump(await _get_client().answer_attacker_credentials(
+            model_id, attacker_id.strip(), _class_list(credential_classes)))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def add_proposed_attacker(
+    server_version: str,
+    model_id: str,
+    credential_classes: str = "",
+) -> dict:
+    """Add the attacker the attacker closure proposes for a credential set.
+    Mutating; creates a model version.
+
+    Name the proposal by its ``credential_classes`` as
+    ``get_behavioural_attackers`` lists it (a dismissed one may be added).
+    The attacker holds them, with the privileges they give and no position
+    but the tenant-isolation boundaries a per-tenant holder is placed at;
+    its rating factors are left unrated (set them with ``edit_attacker`` or
+    ``reevaluate_threat_model_factors``). Refused with 409 ``not_proposed``
+    when no attacker is proposed for exactly that set now (read the
+    attackers again), 409 ``closure_not_offered``, 422 ``unknown_class``.
+
+    A program's addition is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the closure as ``get_behavioural_attackers`` does, with
+    ``added``, the new attacker's id.
+
+    Args:
+        model_id: ID of the threat model.
+        credential_classes: Comma-separated class ids of the proposal; empty
+            for the one holding none.
+    """
+    try:
+        return _dump(await _get_client().add_proposed_attacker(
+            model_id, _class_list(credential_classes)))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def dismiss_proposed_attacker(
+    server_version: str,
+    model_id: str,
+    reason: str,
+    credential_classes: str = "",
+) -> dict:
+    """Dismiss the attacker the attacker closure proposes for a credential
+    set, with why. Mutating; creates a model version.
+
+    The dismissal is kept on the model: the proposal is no longer offered
+    while it stands. Refused with 409 ``not_proposed`` (no attacker is
+    proposed for exactly that set now), 409 ``dismissed_already``, 409
+    ``closure_not_offered``, 422 ``unknown_class``.
+
+    A program's dismissal is a judgment. Unless the workspace's delegation
+    policy admits it, it is refused with 403 and an ``escalation_id`` and
+    parked for a person. Do not retry: report the ``escalation_id`` and poll
+    ``list_proposals``.
+
+    Returns the closure as ``get_behavioural_attackers`` does, with
+    ``dismissed_set``.
+
+    Args:
+        model_id: ID of the threat model.
+        reason: Why the attacker does not apply (required).
+        credential_classes: Comma-separated class ids of the proposal; empty
+            for the one holding none.
+    """
+    if not reason.strip():
+        raise ToolError("reason is required: say why the attacker does not apply.")
+    try:
+        return _dump(await _get_client().dismiss_proposed_attacker(
+            model_id, _class_list(credential_classes), reason.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 @mcp.tool()
 async def get_control_delta(
     server_version: str,
@@ -7663,7 +8001,14 @@ async def declare_control_delta(
 
 
 @mcp.tool()
-async def get_behavioural_threats(server_version: str, model_id: str) -> dict:
+async def get_behavioural_threats(
+    server_version: str,
+    model_id: str,
+    co_id: str = "",
+    offset: int = 0,
+    limit: int = _THREATS_PAGE_DEFAULT,
+    standing: str = "",
+) -> dict:
     """Read the possible threats the behavioural analysis finds for each
     control objective of a model. Read-only: nothing is judged, written or
     paid for.
@@ -7675,6 +8020,15 @@ async def get_behavioural_threats(server_version: str, model_id: str) -> dict:
     ``decides: false`` while the behavioural model is absent, asks an owner
     question, or has not been extracted.
 
+    A page at a time, in the model's order of objectives: ``offset`` and
+    ``limit`` (default 25, at most 200), ``co_id`` one objective (404
+    ``unknown_objective`` for one the model does not hold live),
+    ``standing`` only the objectives of that standing (``possible_threat``,
+    ``undecided``, ...). The answer carries ``total`` (the objectives
+    matching), ``next_offset`` (where the next page starts, null at the end)
+    and ``truncated`` (the page was cut short to stay under the size a
+    client can take; read on from ``next_offset``).
+
     A possible threat is not a finding yet. RELAY IT TO THE PERSON with its
     default questions first: an answer that settles a default removes the
     threat, and only a threat the person confirms is worth a control. Answer
@@ -7682,9 +8036,19 @@ async def get_behavioural_threats(server_version: str, model_id: str) -> dict:
 
     Args:
         model_id: ID of the threat model.
+        co_id: One objective (e.g. "CO5"); empty for every one.
+        offset: The first objective of the page (default 0).
+        limit: Objectives per page (default 25, at most 200).
+        standing: Only objectives of this standing; empty for every one.
     """
+    if offset < 0 or not 1 <= limit <= _PAGE_MAX:
+        raise ToolError(f"offset must be 0 or more and limit between 1 and {_PAGE_MAX}.")
+    if len(co_id) > 128 or len(standing) > 64:
+        raise ToolError("co_id is at most 128 characters and standing at most 64.")
     try:
-        return _dump(await _get_client().get_behavioural_threats(model_id))
+        return _dump(await _get_client().get_behavioural_threats(
+            model_id, co_id=co_id.strip(), offset=offset, limit=limit,
+            standing=standing.strip()))
     except Exception as exc:
         raise _api_error(exc) from exc
 

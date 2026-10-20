@@ -217,15 +217,111 @@ async def test_check_status_and_its_controls(mock_env: None) -> None:
         assert out["code"] == "not_running", tail
 
 
+STREAM = "https://test.api.mipiti.io/api/model/stream"
+
+
+def _sse(*events: tuple[str, dict]) -> httpx.Response:
+    payload = "".join(f"event: {e}\ndata: {json.dumps(d)}\n\n" for e, d in events)
+    return httpx.Response(200, content=payload.encode(),
+                          headers={"content-type": "text/event-stream"})
+
+
+_RESULT = {"type": "result", "markdown": "", "csv": "", "model_id": "tm-1", "version": 2,
+           "threat_model": {"id": "tm-1", "title": "T", "version": 2}}
+
+
 @pytest.mark.asyncio
-async def test_generation_names_the_model_it_resumes(mock_env: None) -> None:
+@respx.mock
+async def test_a_new_generation_names_no_model_and_asks_no_resume(mock_env: None) -> None:
+    route = respx.post(STREAM).mock(return_value=_sse(("result", _RESULT)))
+    await MipitiClient().generate_threat_model("desc")
+    body = _body(route)
+    assert body["intent"] == "generate"
+    assert "model_id" not in body and "resume" not in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_generating_from_the_behavioural_model_asks_a_resume_of_it(
+        mock_env: None) -> None:
+    route = respx.post(STREAM).mock(return_value=_sse(("result", _RESULT)))
+    out = await MipitiClient().generate_from_behavioural_model("tm-1")
+    assert out.model_id == "tm-1"
+    body = _body(route)
+    assert (body["intent"], body["model_id"], body["resume"]) == ("generate", "tm-1", True)
+    # The message names the model, as the request's model_id does.
+    assert "tm-1" in body["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("code", ["not_awaiting_generation", "generation_in_progress"])
+async def test_a_refused_resume_comes_back_as_data(mock_env: None, code: str) -> None:
+    respx.post(STREAM).mock(return_value=httpx.Response(
+        409, json={"detail": {"code": code, "message": "m", "model_id": "tm-1"}}))
+    out = await MipitiClient().generate_from_behavioural_model("tm-1")
+    assert out == {"generated": False, "http_status": 409, "code": code,
+                   "message": "m", "model_id": "tm-1"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_resume_of_a_model_that_is_not_there_raises(mock_env: None) -> None:
+    respx.post(STREAM).mock(return_value=httpx.Response(
+        404, json={"detail": "Threat model not found."}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().generate_from_behavioural_model("tm-1")
+    assert err.value.response.status_code == 404
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_reads_send_their_view_wait_and_page(mock_env: None) -> None:
     client = MipitiClient()
-    stream = AsyncMock(return_value={"type": "chat_response", "content": "c"})
-    with patch.object(client, "_stream_model", stream):
-        await client.generate_threat_model("desc", model_id="tm-1")
-        await client.generate_threat_model("desc")
-    assert stream.await_args_list[0].kwargs["model_id"] == "tm-1"
-    assert stream.await_args_list[1].kwargs["model_id"] is None
+    read = respx.get(BASE).mock(return_value=httpx.Response(200, json={"view": "x"}))
+    await client.get_behavioural_model("tm-1")
+    assert dict(read.calls.last.request.url.params) == {}
+    await client.get_behavioural_model("tm-1", view="status", wait_seconds=10)
+    assert dict(read.calls.last.request.url.params) == {"view": "status",
+                                                        "wait_seconds": "10"}
+    await client.get_behavioural_model("tm-1", view="questions", offset=50, limit=20)
+    assert dict(read.calls.last.request.url.params) == {"view": "questions",
+                                                        "offset": "50", "limit": "20"}
+    threats = respx.get(BASE + "/threats").mock(
+        return_value=httpx.Response(200, json={"total": 0}))
+    await client.get_behavioural_threats("tm-1")
+    assert dict(threats.calls.last.request.url.params) == {}
+    await client.get_behavioural_threats("tm-1", co_id="CO5", offset=25, limit=10,
+                                         standing="possible_threat")
+    assert dict(threats.calls.last.request.url.params) == {
+        "co_id": "CO5", "standing": "possible_threat", "offset": "25", "limit": "10"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("entity_type,entity_id", [
+    ("asset", "A1"), ("attacker", "T1"), ("component", "CMP1"),
+    ("trust_boundary", "TB1"), ("assumption", "AS1")])
+async def test_a_removal_starts_its_job(mock_env: None, entity_type: str,
+                                        entity_id: str) -> None:
+    route = respx.post(
+        f"https://test.api.mipiti.io/api/models/tm-1/entities/{entity_type}/"
+        f"{entity_id}/remove-job").mock(return_value=httpx.Response(200, json={"job_id": "j"}))
+    out = await MipitiClient().start_remove_entity("tm-1", entity_type, entity_id)
+    assert out == {"job_id": "j"} and route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_dry_run_is_sent_only_when_asked(mock_env: None) -> None:
+    route = respx.post(BASE + "/answers").mock(return_value=httpx.Response(
+        200, json={"dry_run": True, "outcome": {"extracts": False}}))
+    client = MipitiClient()
+    await client.answer_behavioural_questions("tm-1", [{"question_id": "q1", "text": "x"}],
+                                              dry_run=True)
+    assert _body(route)["dry_run"] is True
+    await client.answer_behavioural_questions("tm-1", [{"question_id": "q1", "text": "x"}])
+    assert "dry_run" not in _body(route)
 
 
 @pytest.mark.asyncio
@@ -334,6 +430,28 @@ async def test_a_zone_or_receiver_the_offer_does_not_list_is_forwarded_unchanged
             server_version="0", model_id="tm-1", answers=json.dumps(answers))
     client.answer_behavioural_questions.assert_awaited_once_with(
         "tm-1", answers, extract_now=False)
+
+
+@pytest.mark.asyncio
+async def test_a_contents_answer_and_its_dismissal_are_forwarded_unchanged() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "structured": {"elements": [
+                    "batch_feed", {"id": "vendor_api_key", "secret": True}]}},
+               {"question_id": "q2", "disposition": "not_needed",
+                "text": "The provider only receives a redirect."}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+def test_the_contents_form_is_published() -> None:
+    assert '``{"elements": [id |' in _descriptions()["answer_behavioural_questions"]
+    instructions = build_instructions("pro", "user")
+    for term in ("`zone_contents`", '`structured: {"elements": [...]}`',
+                 "422 `structured_malformed`", "`unknown` is refused"):
+        assert term in instructions, term
 
 
 @pytest.mark.asyncio
@@ -546,15 +664,199 @@ async def test_the_reads_forward_their_ids() -> None:
                      get_behavioural_threats={"objectives": []},
                      get_control_delta={"status": "absent"})
     with patch("mipiti_mcp.server._get_client", return_value=client):
-        await server.get_behavioural_model(server_version="0", model_id="tm-1")
+        await server.get_behavioural_model(server_version="0", model_id="tm-1",
+                                           ctx=AsyncMock())
         await server.get_behavioural_links(server_version="0", model_id="tm-1")
         await server.get_behavioural_threats(server_version="0", model_id="tm-1")
         await server.get_control_delta(
             server_version="0", model_id="tm-1", control_id="CTRL-1")
-    client.get_behavioural_model.assert_awaited_once_with("tm-1")
+    client.get_behavioural_model.assert_awaited_once_with("tm-1", view="full")
     client.get_behavioural_links.assert_awaited_once_with("tm-1")
-    client.get_behavioural_threats.assert_awaited_once_with("tm-1")
+    client.get_behavioural_threats.assert_awaited_once_with(
+        "tm-1", co_id="", offset=0, limit=25, standing="")
     client.get_control_delta.assert_awaited_once_with("tm-1", "CTRL-1")
+
+
+@pytest.mark.asyncio
+async def test_the_questions_view_is_read_a_page_at_a_time() -> None:
+    client = _client(get_behavioural_model={"view": "questions", "total": 120,
+                                            "next_offset": 70})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.get_behavioural_model(
+            server_version="0", model_id="tm-1", ctx=AsyncMock(), view="questions",
+            offset=20, limit=50)
+    client.get_behavioural_model.assert_awaited_once_with(
+        "tm-1", view="questions", offset=20, limit=50)
+    assert out["next_offset"] == 70
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [
+    {"view": "everything"}, {"wait_seconds": 51}, {"wait_seconds": -1},
+    {"view": "questions", "limit": 0}, {"view": "questions", "limit": 201},
+    {"view": "questions", "offset": -1},
+])
+async def test_a_behavioural_read_outside_the_api_bounds_is_refused(kwargs) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.get_behavioural_model(
+                server_version="0", model_id="tm-1", ctx=AsyncMock(), **kwargs)
+    client.get_behavioural_model.assert_not_awaited()
+
+
+def _status(job) -> dict:
+    return {"view": "status", "status": "extracting", "extraction": {"job": job}}
+
+
+def _running(pass_name: str, completed: int, started: bool = True) -> dict:
+    return {"state": "running", "progress": {
+        "pass": pass_name, "calls_completed": completed, "calls_expected": 5,
+        "call_started_at": "2026-10-19T10:00:00+00:00" if started else "",
+        "estimated_finish": None}}
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_read_reports_the_job_until_it_moves() -> None:
+    reads = [_status(_running("actions", 2)), _status(_running("actions", 2)),
+             _status(_running("links", 3)), {"view": "full", "status": "extracting"}]
+    client = AsyncMock()
+    client.get_behavioural_model = AsyncMock(side_effect=reads)
+    ctx = AsyncMock()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.get_behavioural_model(
+            server_version="0", model_id="tm-1", ctx=ctx, wait_seconds=50)
+    assert out == {"view": "full", "status": "extracting"}
+    calls = client.get_behavioural_model.await_args_list
+    assert calls[0].kwargs == {"view": "status"}
+    assert calls[1].kwargs == {"view": "status", "wait_seconds": 10}
+    assert calls[-1].kwargs == {"view": "full"}
+    notes = ctx.report_progress.await_args_list
+    assert [n.args for n in notes] == [(1, None), (2, None), (3, None)]
+    assert notes[0].kwargs["message"] == "call 3 of 5: actions"
+    assert notes[-1].kwargs["message"] == "call 4 of 5: links"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job", [None, {"state": "failed", "error": "ask again"}])
+async def test_a_waiting_read_with_no_job_running_answers_at_once(job) -> None:
+    client = AsyncMock()
+    client.get_behavioural_model = AsyncMock(side_effect=[
+        _status(job), {"view": "status", "status": "extracted"}])
+    ctx = AsyncMock()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.get_behavioural_model(
+            server_version="0", model_id="tm-1", ctx=ctx, view="status", wait_seconds=50)
+    assert out["status"] == "extracted"
+    assert client.get_behavioural_model.await_count == 2
+    ctx.report_progress.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_read_stops_at_its_bound() -> None:
+    job = _status(_running("state", 1, started=False))
+    client = AsyncMock()
+    client.get_behavioural_model = AsyncMock(return_value=job)
+    clock = iter([0, 0, 40, 51])
+    with patch("mipiti_mcp.server._get_client", return_value=client), \
+            patch("mipiti_mcp.server.time") as fake_time:
+        fake_time.monotonic = lambda: next(clock)
+        await server.get_behavioural_model(
+            server_version="0", model_id="tm-1", ctx=AsyncMock(), wait_seconds=50)
+    waits = [c.kwargs.get("wait_seconds") for c in client.get_behavioural_model.await_args_list]
+    assert waits == [None, 10, 10, None]
+
+
+def test_the_job_is_named_in_words() -> None:
+    assert server._job_message(None) == "extraction finished"
+    assert server._job_message({"state": "queued"}) == "extraction queued"
+    assert server._job_message({"state": "running", "progress": {}}) == "extraction running"
+    assert server._job_message(_running("actions", 2, started=False)) == \
+        "call 2 of 5: actions"
+    finishing = _running("links", 3)
+    finishing["progress"]["estimated_finish"] = "2026-10-19T10:20:00+00:00"
+    assert server._job_message(finishing) == \
+        "call 4 of 5: links, estimated finish 2026-10-19T10:20:00+00:00"
+    assert server._job_message({"state": "failed", "error": "ask again"}) == \
+        "extraction failed: ask again"
+
+
+@pytest.mark.asyncio
+async def test_the_threats_page_is_forwarded_and_bounded() -> None:
+    client = _client(get_behavioural_threats={"total": 300, "next_offset": 50,
+                                              "truncated": True})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.get_behavioural_threats(
+            server_version="0", model_id="tm-1", co_id=" CO5 ", offset=25, limit=25,
+            standing="possible_threat")
+        for bad in ({"limit": 0}, {"limit": 201}, {"offset": -1}, {"co_id": "x" * 129},
+                    {"standing": "x" * 65}):
+            with pytest.raises(ToolError):
+                await server.get_behavioural_threats(
+                    server_version="0", model_id="tm-1", **bad)
+    client.get_behavioural_threats.assert_awaited_once_with(
+        "tm-1", co_id="CO5", offset=25, limit=25, standing="possible_threat")
+    assert (out["total"], out["next_offset"], out["truncated"]) == (300, 50, True)
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_is_forwarded() -> None:
+    client = _client(answer_behavioural_questions={"dry_run": True, "outcome": {}})
+    answers = [{"question_id": "q1", "structured": {"actions": ["a1"]}}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers),
+            dry_run=True)
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False, dry_run=True)
+    assert out["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_generating_from_the_behavioural_model_returns_the_generation() -> None:
+    from mipiti_mcp.types import GenerateResult
+
+    result = GenerateResult.model_validate({**_RESULT, "controls_status": "proposed"})
+    client = _client(generate_from_behavioural_model=result)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.generate_from_behavioural_model(
+            server_version="0", model_id=" tm-1 ", ctx=AsyncMock())
+    assert client.generate_from_behavioural_model.await_args.args == ("tm-1",)
+    assert (out["model_id"], out["version"], out["controls_status"]) == \
+        ("tm-1", 2, "proposed")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_generation_from_the_behavioural_model_is_data() -> None:
+    refusal = {"generated": False, "http_status": 409, "code": "not_awaiting_generation",
+               "message": "m"}
+    client = _client(generate_from_behavioural_model=refusal)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.generate_from_behavioural_model(
+            server_version="0", model_id="tm-1", ctx=AsyncMock())
+        with pytest.raises(ToolError, match="model_id"):
+            await server.generate_from_behavioural_model(
+                server_version="0", model_id=" ", ctx=AsyncMock())
+    assert out == refusal
+
+
+@pytest.mark.asyncio
+async def test_an_entity_job_reports_progress_while_it_waits() -> None:
+    client = AsyncMock()
+    client.start_add_attacker = AsyncMock(return_value={"job_id": "j1"})
+    client.get_operation = AsyncMock(side_effect=[
+        {"status": "running", "poll_after_seconds": 0},
+        {"status": "running", "poll_after_seconds": 0},
+        {"status": "completed", "result": {"model": {"id": "tm-1"}}}])
+    ctx = AsyncMock()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.add_attacker(
+            server_version="0", model_id="tm-1", capability="From the network, the "
+            "attacker can read requests.", ctx=ctx)
+    assert out == {"model": {"id": "tm-1"}}
+    notes = ctx.report_progress.await_args_list
+    assert [n.args for n in notes] == [(1, None), (2, None)]
+    assert notes[0].kwargs["message"] == "job j1: running"
 
 
 @pytest.mark.asyncio
@@ -624,25 +926,57 @@ async def test_a_generation_stopped_on_questions_returns_them() -> None:
     with patch("mipiti_mcp.server._get_client", return_value=client):
         out = await server.generate_threat_model(
             server_version="0", feature_description="desc", ctx=AsyncMock())
+    next_step = out.pop("next")
     assert out == {"generated": False, "needs_answers": True, "model_id": "tm-9",
                    "version": 1, "questions": questions, "message": "answer these"}
+    assert "generate_from_behavioural_model(model_id='tm-9')" in next_step
+    assert "answer_behavioural_questions" in next_step
 
 
 @pytest.mark.asyncio
-async def test_a_generation_names_the_model_it_resumes_only_when_given() -> None:
+async def test_a_model_saved_extracting_names_the_tool_that_generates_it() -> None:
+    from mipiti_mcp.types import ChatResponse
+
+    saved = ChatResponse.model_validate({
+        "type": "chat_response", "content": "Saved.",
+        "extracting": {"model_id": "tm-9", "version": 1, "job": {"state": "queued"}}})
+    client = _client(generate_threat_model=saved)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.generate_threat_model(
+            server_version="0", feature_description="desc", ctx=AsyncMock())
+    assert "view='status', wait_seconds=50" in out["next"]
+    assert "generate_from_behavioural_model(model_id='tm-9')" in out["next"]
+
+
+@pytest.mark.asyncio
+async def test_a_model_id_with_a_description_is_refused_before_the_call() -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match="resume_takes_no_description"):
+            await server.generate_threat_model(
+                server_version="0", feature_description="desc", ctx=AsyncMock(),
+                model_id="tm-9")
+        with pytest.raises(ToolError, match="feature_description"):
+            await server.generate_threat_model(
+                server_version="0", feature_description=" ", ctx=AsyncMock())
+    client.generate_threat_model.assert_not_awaited()
+    client.generate_from_behavioural_model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_model_id_alone_generates_from_the_behavioural_model() -> None:
     from mipiti_mcp.types import ChatResponse
 
     prose = ChatResponse.model_validate({"type": "chat_response", "content": "c"})
-    client = _client(generate_threat_model=prose)
+    client = _client(generate_from_behavioural_model=prose, generate_threat_model=prose)
     with patch("mipiti_mcp.server._get_client", return_value=client):
         out = await server.generate_threat_model(
-            server_version="0", feature_description="desc", ctx=AsyncMock(),
+            server_version="0", feature_description="", ctx=AsyncMock(),
             model_id=" tm-9 ")
         await server.generate_threat_model(
             server_version="0", feature_description="desc", ctx=AsyncMock())
-    calls = client.generate_threat_model.await_args_list
-    assert calls[0].kwargs["model_id"] == "tm-9"
-    assert calls[1].kwargs["model_id"] is None
+    assert client.generate_from_behavioural_model.await_args.args == ("tm-9",)
+    assert "model_id" not in client.generate_threat_model.await_args.kwargs
     assert out == {"generated": False, "message": "c"}
 
 
@@ -652,12 +986,15 @@ async def test_a_generation_names_the_model_it_resumes_only_when_given() -> None
 
 _TOOLS = (
     "get_behavioural_model", "extract_behavioural_model",
+    "generate_from_behavioural_model",
     "answer_behavioural_questions", "edit_behavioural_element",
     "confirm_behavioural_model", "get_behavioural_links",
     "declare_behavioural_link", "accept_behavioural_link_proposals",
     "get_control_delta", "submit_control_delta", "request_delta_second_reading",
     "declare_control_delta", "get_behavioural_threats",
     "request_model_check", "get_model_check", "manage_model_check",
+    "get_behavioural_attackers", "answer_attacker_credentials",
+    "add_proposed_attacker", "dismiss_proposed_attacker",
 )
 
 
@@ -699,13 +1036,40 @@ def test_a_stopped_generation_says_how_it_resumes() -> None:
     text = _descriptions()["generate_threat_model"]
     assert "needs_answers" in text and "RELAY THE QUESTIONS TO THE PERSON" in text
     assert "generation_ready" in text
-    assert "needs_answers" in build_instructions("developer", "user")
+    assert "``generate_from_behavioural_model``" in text
+    assert "Deprecated" in text and "``resume_takes_no_description``" in text
+    instructions = build_instructions("developer", "user")
+    assert "needs_answers" in instructions
+    for term in ("generate_from_behavioural_model", "resume_takes_no_description",
+                 "dry_run=true", 'view="status", wait_seconds=50', "next_offset"):
+        assert term in instructions, term
+    assert "call `generate_threat_model` again" not in instructions
+
+
+def test_the_resume_tool_says_what_it_takes_and_how_it_is_refused() -> None:
+    text = _descriptions()["generate_from_behavioural_model"]
+    assert "takes no description" in text
+    for code in ("not_awaiting_generation", "generation_in_progress"):
+        assert f"``{code}``" in text, code
+
+
+def test_the_new_reads_publish_their_bounds() -> None:
+    model = _descriptions()["get_behavioural_model"]
+    for term in ('``view="status"``', "``wait_seconds`` (0 to 50)", "``waiting_on``",
+                 "``poll_after_seconds``", "at most 200"):
+        assert term in model, term
+    threats = _descriptions()["get_behavioural_threats"]
+    for term in ("``total``", "``next_offset``", "``truncated``", "default 25"):
+        assert term in threats, term
+    assert "``dry_run=True`` records nothing" in _descriptions()[
+        "answer_behavioural_questions"]
 
 
 def test_judgments_name_the_refusal_and_the_no_retry_rule() -> None:
     for name in ("answer_behavioural_questions", "edit_behavioural_element",
                  "confirm_behavioural_model", "declare_behavioural_link",
-                 "accept_behavioural_link_proposals"):
+                 "accept_behavioural_link_proposals", "answer_attacker_credentials",
+                 "add_proposed_attacker", "dismiss_proposed_attacker"):
         text = _descriptions()[name]
         assert "403" in text and "escalation_id" in text, name
         assert "Do not retry" in text, name
@@ -757,6 +1121,109 @@ def test_a_cross_check_finding_is_relayed_and_dismissed_by_a_person() -> None:
     delta = " ".join(_descriptions()["get_control_delta"].split())
     assert "RELAY OPEN FINDINGS TO THE PERSON" in delta
     assert "never a program's" in delta
-    assert not any("dismiss" in name for name in _descriptions())
+    # The one dismissing tool dismisses a proposed attacker, a judgment a
+    # program takes under delegation; none dismisses a cross-check finding.
+    assert [n for n in _descriptions() if "dismiss" in n] == ["dismiss_proposed_attacker"]
     sufficiency = " ".join(_descriptions()["get_sufficiency"].split())
     assert "``commitments``" in sufficiency and "declaration" in sufficiency
+
+
+# ------------------------------------------------------------------
+# The attacker closure
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_attacker_closure_reaches_its_routes(mock_env: None) -> None:
+    client = MipitiClient()
+    ok = httpx.Response(200, json={"applies": True})
+    read = respx.get(BASE + "/attackers").mock(return_value=ok)
+    assert (await client.get_behavioural_attackers("tm-1"))["applies"] is True
+    assert read.called
+    creds = respx.put(BASE + "/attackers/T3/credentials").mock(return_value=ok)
+    await client.answer_attacker_credentials("tm-1", "T3", ["tenant_user"])
+    assert _body(creds) == {"credential_classes": ["tenant_user"]}
+    await client.answer_attacker_credentials("tm-1", "T3", [])
+    assert _body(creds) == {"credential_classes": []}
+    add = respx.post(BASE + "/attackers/proposals/add").mock(return_value=ok)
+    await client.add_proposed_attacker("tm-1", ["db_reader"])
+    assert _body(add) == {"credential_classes": ["db_reader"]}
+    dismiss = respx.post(BASE + "/attackers/proposals/dismiss").mock(return_value=ok)
+    await client.dismiss_proposed_attacker("tm-1", ["db_reader"], "Not deployed.")
+    assert _body(dismiss) == {"credential_classes": ["db_reader"], "reason": "Not deployed."}
+
+
+@pytest.mark.asyncio
+async def test_the_attacker_tools_split_the_classes_and_forward_them() -> None:
+    client = _client(get_behavioural_attackers={"applies": True},
+                     answer_attacker_credentials={"attacker": {"id": "T3"}},
+                     add_proposed_attacker={"added": "T9"},
+                     dismiss_proposed_attacker={"dismissed_set": ["db_reader"]})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.get_behavioural_attackers(server_version="0", model_id="tm-1")
+        await server.answer_attacker_credentials(
+            server_version="0", model_id="tm-1", attacker_id=" T3 ",
+            credential_classes=" tenant_user, ,admin ")
+        await server.answer_attacker_credentials(
+            server_version="0", model_id="tm-1", attacker_id="T4")
+        out = await server.add_proposed_attacker(
+            server_version="0", model_id="tm-1", credential_classes="db_reader")
+        await server.dismiss_proposed_attacker(
+            server_version="0", model_id="tm-1", credential_classes="db_reader",
+            reason=" Not deployed. ")
+    client.get_behavioural_attackers.assert_awaited_once_with("tm-1")
+    assert client.answer_attacker_credentials.await_args_list[0].args == (
+        "tm-1", "T3", ["tenant_user", "admin"])
+    assert client.answer_attacker_credentials.await_args_list[1].args == ("tm-1", "T4", [])
+    client.add_proposed_attacker.assert_awaited_once_with("tm-1", ["db_reader"])
+    client.dismiss_proposed_attacker.assert_awaited_once_with(
+        "tm-1", ["db_reader"], "Not deployed.")
+    assert out["added"] == "T9"
+
+
+@pytest.mark.asyncio
+async def test_an_attacker_act_missing_what_it_needs_is_refused_before_the_call() -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match="attacker_id"):
+            await server.answer_attacker_credentials(
+                server_version="0", model_id="tm-1", attacker_id=" ")
+        with pytest.raises(ToolError, match="reason"):
+            await server.dismiss_proposed_attacker(
+                server_version="0", model_id="tm-1", credential_classes="x", reason=" ")
+    client.answer_attacker_credentials.assert_not_awaited()
+    client.dismiss_proposed_attacker.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(409, "not_proposed"), (409, "dismissed_already"),
+                                         (422, "unknown_class"), (403, "delegation_required")])
+async def test_an_attacker_act_refused_names_its_code(status: int, code: str) -> None:
+    request = httpx.Request("POST", "http://x/dismiss")
+    refusal = httpx.HTTPStatusError(
+        "refused", request=request, response=httpx.Response(
+            status, json={"detail": {"code": code, "escalation_id": "E-1"}},
+            request=request))
+    client = AsyncMock()
+    client.dismiss_proposed_attacker = AsyncMock(side_effect=refusal)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match=f"{status}.*{code}"):
+            await server.dismiss_proposed_attacker(
+                server_version="0", model_id="tm-1", credential_classes="x", reason="r")
+
+
+def test_the_attacker_closure_is_published() -> None:
+    text = _descriptions()["answer_attacker_credentials"]
+    for term in ("``unknown_class``", "``closure_not_offered``", "``no_attacker``",
+                 "``privileges_from_holdings``"):
+        assert term in text, term
+    assert "``not_proposed``" in _descriptions()["add_proposed_attacker"]
+    assert "``dismissed_already``" in _descriptions()["dismiss_proposed_attacker"]
+    assert "``privileges_from_holdings``" in " ".join(
+        _descriptions()["edit_attacker"].split())
+    instructions = build_instructions("pro", "user")
+    for name in ("get_behavioural_attackers", "answer_attacker_credentials",
+                 "add_proposed_attacker", "dismiss_proposed_attacker",
+                 "privileges_from_holdings"):
+        assert f"`{name}`" in instructions, name
