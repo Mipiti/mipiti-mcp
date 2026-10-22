@@ -9,6 +9,21 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.91.0] - 2026-10-22
+
+### Added
+
+- `get_inventory_judgements`, `request_inventory_checks`, `decide_inventory_pair`, `declare_inventory_tags`: read what the per-entity checks found about an inventory (entries that may be one entity, entities whose taxonomy tags are unchecked), queue the checks it lacks, decide that two entries are or are not one entity, and declare the primitives an entity answers. A program's decision or declaration is refused with 403 and an `escalation_id` unless delegated (`inventory_pair_decided`, `inventory_tag_declared`). (#333)
+- `dismiss_proposed_attacker` takes `zones`: the zones of the grouped proposal no attacker reaches are dismissed alone, and the proposal stands for the rest. (#333)
+
+### Changed
+
+- `get_threat_model` counts the answers to the model's questions (`clarification_count`) and leaves them out unless `include_clarifications=True`, which pages them. A read longer than 200,000 characters is cut in a stated order, and `cuts` names each cut and the read that serves it. (#333)
+- Entity writes (add, edit, remove, restore of every kind, and an asset's component scope) answer with the model's id, version and title and, under `entities`, the records they wrote, not the whole model. The reconciliation apply, a lift, a split, an undo and the quality revalidation name each model the same way. (#333)
+- The attacker closure's acts answer with the closure's counts rather than its lists. (#333)
+- `list_decisions` takes `inventory_pair_decided`, `inventory_tag_declared` and `behavioural_confirmation_withdrawn`. (#333)
+- `get_review_queue` documents the `behavioural_attacker` and `inventory_judgement` rows. (#333)
+
 ## [0.90.0] - 2026-10-20
 
 ### Added
