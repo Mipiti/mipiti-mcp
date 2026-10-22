@@ -91,10 +91,10 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
 - **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
-- `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving, and both return the entity-change result with the model as it now stands.
+- `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
 - `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
-- `get_threat_model` — retrieve a model's full structure (excludes COs by default; use `include_cos=True` to include them). `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and its `mcp_arguments`, ready to send once the angle-bracketed values are filled).
+- `get_threat_model` — retrieve a model's structure (excludes COs by default; use `include_cos=True` to include them). The answers to its questions are counted and left out unless `include_clarifications=True`, which pages them. A read longer than 200,000 characters is cut, and `cuts` names what was cut and the read that serves it. `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and its `mcp_arguments`, ready to send once the angle-bracketed values are filled).
 - `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
 - `list_threat_models` — browse existing models.
 - `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
@@ -142,7 +142,7 @@ Sufficiency is evaluated automatically server-side when assertions are submitted
 
 Before implementing a control call `get_control_work_order`; reconcile with `reconcile_model`; check `list_decisions` before proposing; a refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) is parked for a person — do not retry, poll `list_proposals`.
 
-**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them and answer them. One that returns `extracting` saved the model and extracts its behaviour in the background. Follow an extraction with `get_behavioural_model(view="status", wait_seconds=50)`, which answers when the job moves and reports its progress meanwhile, until `extraction.job` is null; `view="questions"` pages the open questions without the whole model. Once it reports `generation_ready`, call `generate_from_behavioural_model` with the `model_id`: it takes no description (a `generate_threat_model` naming a `model_id` with a description is refused, `resume_takes_no_description`). Before submitting answers, call `answer_behavioural_questions` with `dry_run=true`: it records nothing and says whether they extract and which questions they leave or raise, so you answer those too and submit once. `get_behavioural_threats` is paged (`offset`, `limit`, `co_id`, `standing`): read on from `next_offset`. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. Where the offer carries `new_zones` or `new_actors`, an answer may name a zone or a receiver the model lacks, and it is added. A question about what a zone holds (closure `zone_contents`: "What does the system keep in, or send to, <zone>?", or "<action> sends <values> over <channel> to <zone>, and the model holds none of it as an element") offers the `contents` form: `structured: {"elements": [...]}`, each element an id, or `{"id": "<id>", "secret": true}` for one that holds a secret. An id the offer lists under `elements` names an element already in the zone; any other id is a new element, declared in that zone, kept there, with one field (a secret where marked, else a plain value). The answer closes the question at once, with no extraction, and only widens what is analysed. An id another element holds elsewhere is refused 409 `id_in_use`; an empty or malformed list is refused 422 `structured_malformed`. The question takes one dismissal besides a fact: `disposition: "not_needed"`, saying the zone holds nothing of the system's; it stands while the zone, or what is sent there, is as it was asked about. `unknown` is refused. `get_behavioural_attackers` reads the attacker closure on a generated model: the attackers its credential classes say the inventory lacks (`add_proposed_attacker`, or `dismiss_proposed_attacker` with why) and questions asking what an attacker holds (`answer_attacker_credentials`, whose answer sets its privileges by rule; `edit_attacker` then refuses a privileges change, 409 `privileges_from_holdings`). Each act is a judgment, as an answer is. `extraction.dropped_elements` lists what an extraction could not keep, with the sentence each came from: answer that sentence's question. Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused (409 `extraction_running`): poll it instead. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
+**Behavioural model.** A model can carry a behavioural model: what the system does, as elements, actions and zones taken from its description. `get_behavioural_model` reads it and reports whether it has none, needs answers, is extracted, is confirmed, or has gone stale; `extract_behavioural_model` gives one to a model that has none. An extraction is paid: call it for the estimate, RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree; never confirm on your own. `get_behavioural_threats` returns the possible threats per objective: relay a possible threat to the person together with its default questions first, since an answer that settles a default removes it. Open behavioural questions appear on `get_review_queue` (`behavioural_question`, and `behavioural_link` for an element not yet linked to an asset or trust boundary). Answer a question only from what the code or the owner shows, and say unknown otherwise. Answers (`answer_behavioural_questions`), element edits (`edit_behavioural_element`), link declarations (`declare_behavioural_link`, `accept_behavioural_link_proposals`) and confirmation (`confirm_behavioural_model`) are judgments: a program's is refused with 403 and an `escalation_id` unless the workspace delegates it, so do not retry. An answer, an element edit and a confirmation each create a model version. A control's delta is read with `get_control_delta`, each edit in words beside its quotes; `submit_control_delta` stores a draft, checked and never declared. Declaring a delta is a person's act: `request_delta_second_reading` reads the text a second time (paid: RELAY THE ESTIMATE TO THE PERSON first), `declare_control_delta` without `confirm` previews the declaration and its differences, which you relay, and a program's confirmation is always parked for a person. A declared control's sufficiency is judged against its declaration (`get_sufficiency`'s `commitments`), and a cross-check asks whether its text commits to more; an open finding of it keeps the control insufficient until a person dismisses it in the app, which is never a program's act, so relay it. A `generate_threat_model` that returns `needs_answers` stopped on questions only the description's owner can answer: relay them and answer them. One that returns `extracting` saved the model and extracts its behaviour in the background. Follow an extraction with `get_behavioural_model(view="status", wait_seconds=50)`, which answers when the job moves and reports its progress meanwhile, until `extraction.job` is null; `view="questions"` pages the open questions without the whole model. Once it reports `generation_ready`, call `generate_from_behavioural_model` with the `model_id`: it takes no description (a `generate_threat_model` naming a `model_id` with a description is refused, `resume_takes_no_description`). Before submitting answers, call `answer_behavioural_questions` with `dry_run=true`: it records nothing and says whether they extract and which questions they leave or raise, so you answer those too and submit once. `get_behavioural_threats` is paged (`offset`, `limit`, `co_id`, `standing`): read on from `next_offset`. A question about the model's own structure carries `structured`, the ids its answer may name: answer it with `structured`, which edits the model at once with no extraction, where words are only read by the next extraction. Where the offer carries `new_zones` or `new_actors`, an answer may name a zone or a receiver the model lacks, and it is added. A question about what a zone holds (closure `zone_contents`: "What does the system keep in, or send to, <zone>?", or "<action> sends <values> over <channel> to <zone>, and the model holds none of it as an element") offers the `contents` form: `structured: {"elements": [...]}`, each element an id, or `{"id": "<id>", "secret": true}` for one that holds a secret. An id the offer lists under `elements` names an element already in the zone; any other id is a new element, declared in that zone, kept there, with one field (a secret where marked, else a plain value). The answer closes the question at once, with no extraction, and only widens what is analysed. An id another element holds elsewhere is refused 409 `id_in_use`; an empty or malformed list is refused 422 `structured_malformed`. The question takes one dismissal besides a fact: `disposition: "not_needed"`, saying the zone holds nothing of the system's; it stands while the zone, or what is sent there, is as it was asked about. `unknown` is refused. `get_behavioural_attackers` reads the attacker closure on a generated model: the attackers its credential classes say the inventory lacks (`add_proposed_attacker`, or `dismiss_proposed_attacker` with why, the whole proposal or, for the grouped one, the `zones` no attacker reaches) and questions asking what an attacker holds (`answer_attacker_credentials`, whose answer sets its privileges by rule; `edit_attacker` then refuses a privileges change, 409 `privileges_from_holdings`). Each act is a judgment, as an answer is, and answers with the closure's counts rather than its lists. `get_inventory_judgements` reads what the per-entity checks found about the inventory: entries that may be one entity, and entities whose taxonomy tags are unchecked; `request_inventory_checks` queues the checks owed, `decide_inventory_pair` records that two entries are or are not one entity, and `declare_inventory_tags` the primitives an entity answers. Both are judgments (`inventory_pair_decided`, `inventory_tag_declared`), and nothing merges or removes an entity. `extraction.dropped_elements` lists what an extraction could not keep, with the sentence each came from: answer that sentence's question. Asking to extract again while an extraction is queued or running, or with no answer given since it started, is refused (409 `extraction_running`): poll it instead. `public` lets anyone invoke an action and authorises no one to change or read what it touches; an element changed from outside takes no writer (409 `outside_default`: answer its default question). A question marked `awaiting_fix` was answered; there is nothing more to answer. Where the code does more or less than a sentence, `decide_drift_intent` says whether that was intended or a defect (or propose it with `create_proposal` kind `drift_intent`), and a `description_revision` proposal revises the description when `drift.revision_suggested` is true. Obligations the analysis cannot settle can be model-checked: `request_model_check` is paid, so call it for the estimate, RELAY THE ESTIMATE AND ITS NOTICES TO THE PERSON, and confirm only when they agree; poll `get_model_check`, and `manage_model_check` pauses, resumes or discards it.
 
 **Diagnosing "implemented but not verified" — check in this order.** A control that is marked implemented but still reads `partially_verified` is the most common state you will meet, and the fields are easy to misread. Work down this list and stop at the first hit; do NOT skip to a recompute.
 
@@ -649,6 +649,140 @@ def _dump(obj: Any) -> dict:
     if isinstance(obj, list):
         return {"items": [_dump(item) for item in obj]}
     return obj
+
+
+#: The collection each entity kind lives in on a model.
+_COLLECTIONS = {
+    "asset": "assets", "attacker": "attackers", "component": "components",
+    "trust_boundary": "trust_boundaries", "assumption": "assumptions",
+}
+
+#: The keys under which a write's answer carries a whole model, or a list of
+#: them: an entity write's ``model``, a lift's three, a split's and an undo's.
+_MODEL_KEYS = ("model", "lca_model", "descendant_a_model", "descendant_b_model",
+               "ancestor_model", "descendant_models", "source_descendant_models")
+
+
+def _model_ref(model: Any) -> Any:
+    """A whole model as a write's answer names it: its id, version and title.
+    The model itself is read with ``get_threat_model``."""
+    if not isinstance(model, dict):
+        return model
+    return {k: model[k] for k in ("id", "version", "title") if k in model}
+
+
+def _without_models(answer: Any) -> Any:
+    """``answer`` with every whole model it carries under ``_MODEL_KEYS``, at
+    its top level or under ``models``, replaced by its ``_model_ref``; every
+    other key as sent."""
+    if not isinstance(answer, dict):
+        return answer
+    out = dict(answer)
+    for key in _MODEL_KEYS:
+        value = out.get(key)
+        if isinstance(value, list):
+            out[key] = [_model_ref(m) for m in value]
+        elif isinstance(value, dict):
+            out[key] = _model_ref(value)
+    if isinstance(out.get("models"), dict):
+        out["models"] = _without_models(out["models"])
+    return out
+
+
+def _entity_change(answer: Any, kind: str, entity_ids: tuple = ()) -> Any:
+    """An entity write's answer as an agent reads it: every key the platform
+    sent, ``model`` reduced to its id, version and title, and ``entities``:
+    by collection, the records of the entities the write named (``entity_ids``,
+    those it ``added``, the one an add restored instead). An answer with no
+    model (a refusal, a rejection) is returned as sent."""
+    if not isinstance(answer, dict) or not isinstance(answer.get("model"), dict):
+        return answer
+    model = answer["model"]
+    named: dict = {_COLLECTIONS[kind]: [*entity_ids,
+                                        answer.get(f"restored_{kind}_id") or ""]}
+    for collection, ids in (answer.get("added") or {}).items():
+        named.setdefault(collection, []).extend(ids or [])
+    entities: dict = {}
+    for collection, ids in named.items():
+        by_id = {e.get("id"): e for e in model.get(collection) or [] if isinstance(e, dict)}
+        found = [by_id[i] for i in dict.fromkeys(ids) if i and i in by_id]
+        if found:
+            entities[collection] = found
+    return {**_without_models(answer), "entities": entities}
+
+
+def _closure_change(answer: Any) -> Any:
+    """An act on the attacker closure as an agent reads it: what the act did
+    (``added``, ``attacker``, ``dismissed_set``, ``dismissed_zones_now``), the
+    model's ``credential_classes`` and how many of each list the closure now
+    holds (``counts``); the lists themselves are read with
+    ``get_behavioural_attackers``."""
+    if not isinstance(answer, dict) or "proposals" not in answer:
+        return answer
+    lists = ("proposals", "dismissed", "dismissed_zones", "reported", "questions")
+    out = {k: v for k, v in answer.items() if k not in lists}
+    out["counts"] = {k: len(answer.get(k) or []) for k in lists if k in answer}
+    return out
+
+
+#: The most characters a model read answers with before it cuts, each cut
+#: stated: the bound the behavioural threats read keeps.
+_MODEL_READ_MAX_CHARS = 200_000
+_CLARIFICATIONS_PAGE_DEFAULT = 50
+#: What a compacted collection keeps of each entity: what names it. The
+#: entity is read whole with ``get_entity``.
+_COMPACT_FIELDS = {
+    "assets": ("id", "name", "security_properties", "deleted"),
+    "attackers": ("id", "capability", "deleted"),
+    "trust_boundaries": ("id", "description", "deleted"),
+    "components": ("id", "name", "deleted"),
+    "assumptions": ("id", "description", "status", "deleted"),
+}
+
+
+def _chars(obj: Any) -> int:
+    return len(json.dumps(obj, default=str))
+
+
+def _compact(entity: Any, keep: tuple) -> Any:
+    if not isinstance(entity, dict):
+        return entity
+    return {k: entity[k] for k in keep
+            if k in entity and (k != "deleted" or entity[k])}
+
+
+def _bounded_model(read: dict) -> dict:
+    """``read`` within ``_MODEL_READ_MAX_CHARS``, every cut stated under
+    ``cuts`` with the read that serves what it left out: the objectives first
+    (``get_control_objectives``), then the page of clarifications (a smaller
+    page here), then each entity collection, largest first, compacted to the
+    fields that name its entities (``get_entity``). A read within the bound is
+    returned as it is, with no ``cuts``."""
+    if _chars(read) <= _MODEL_READ_MAX_CHARS:
+        return read
+    out = dict(read)
+    cuts: list = []
+    if "control_objectives" in out:
+        cuts.append({"field": "control_objectives",
+                     "omitted": len(out.pop("control_objectives") or []),
+                     "read_with": "get_control_objectives (offset, limit)"})
+    if _chars(out) > _MODEL_READ_MAX_CHARS and "clarifications" in out:
+        out.pop("clarifications_next_offset", None)
+        cuts.append({"field": "clarifications",
+                     "omitted": len(out.pop("clarifications") or []),
+                     "read_with": "get_threat_model (a smaller clarifications_limit)"})
+    for name in sorted(_COMPACT_FIELDS, key=lambda n: -_chars(out.get(n) or [])):
+        if _chars(out) <= _MODEL_READ_MAX_CHARS:
+            break
+        entities = out.get(name)
+        if not isinstance(entities, list) or not entities:
+            continue
+        keep = _COMPACT_FIELDS[name]
+        out[name] = [_compact(e, keep) for e in entities]
+        cuts.append({"field": name, "compacted": len(entities), "kept": list(keep),
+                     "read_with": "get_entity"})
+    out["cuts"] = cuts
+    return out
 
 
 def _api_error(exc: Exception) -> ToolError:
@@ -1421,11 +1555,20 @@ async def get_threat_model(
     version: Optional[int] = None,
     include_cos: bool = False,
     include_inventory_completeness: bool = False,
+    include_clarifications: bool = False,
+    clarifications_offset: int = 0,
+    clarifications_limit: int = _CLARIFICATIONS_PAGE_DEFAULT,
 ) -> dict:
-    """Get a specific threat model by ID.
+    """Get a threat model by ID: its trust boundaries, assets, attackers,
+    assumptions and components. Read-only.
 
-    Returns the full threat model including trust boundaries, assets,
-    attackers, control objectives, and assumptions.
+    The answers to its questions are counted (``clarification_count``) and
+    left out unless ``include_clarifications=True``, which pages them
+    (``clarifications_offset``, ``clarifications_limit``: default 50, at most
+    200; ``clarifications_next_offset`` null at the end). A read over 200,000
+    characters is cut, and ``cuts`` says what and how to read it: the
+    objectives, then the clarifications, then each entity collection,
+    largest first, kept as rows that name its entities.
 
     ``include_inventory_completeness=True`` (latest version only) adds
     ``inventory_completeness``: how much of the inventory the claims rest on,
@@ -1460,21 +1603,34 @@ async def get_threat_model(
             with ``get_control_objectives``).
         include_inventory_completeness: Add the completeness record and
             its ``grounding_gaps`` (default False).
+        include_clarifications: Include a page of the answers to the
+            model's questions (default False).
+        clarifications_offset: The first answer of the page.
+        clarifications_limit: Answers per page.
     """
     if include_inventory_completeness and version is not None:
         raise ToolError(
             "include_inventory_completeness reads the latest version; omit version.")
+    if clarifications_offset < 0 or not 1 <= clarifications_limit <= _PAGE_MAX:
+        raise ToolError(f"clarifications_offset must be 0 or more and "
+                        f"clarifications_limit between 1 and {_PAGE_MAX}.")
     try:
         if include_inventory_completeness:
             model = await _get_client().get_model(
                 model_id, version, include="inventory_completeness")
         else:
             model = await _get_client().get_model(model_id, version)
-        if include_cos:
-            return model.model_dump()
-        return model.model_dump(exclude={"control_objectives"})
     except Exception as exc:
         raise _api_error(exc) from exc
+    out = model.model_dump() if include_cos else model.model_dump(
+        exclude={"control_objectives"})
+    clarifications = out.pop("clarifications", None) or []
+    out["clarification_count"] = len(clarifications)
+    if include_clarifications:
+        end = clarifications_offset + clarifications_limit
+        out["clarifications"] = clarifications[clarifications_offset:end]
+        out["clarifications_next_offset"] = end if end < len(clarifications) else None
+    return _bounded_model(out)
 
 
 @mcp.tool()
@@ -2372,7 +2528,7 @@ async def decide_reconciliation_candidate(
       divergence. The server re-validates the pair (400 when the model has
       moved since: refresh the list). Bumps the model version; returns
       ``{model, controls_carried, controls_orphaned,
-      orphaned_control_ids}``.
+      orphaned_control_ids}``, ``model`` being its id, version and title.
     - ``decision="reject"`` records "these are NOT duplicates" at org scope,
       so the pair leaves the active queue for everyone. Idempotent on the
       pair; no new version. Returns the record; keep its ``id``.
@@ -2394,10 +2550,10 @@ async def decide_reconciliation_candidate(
     try:
         client = _get_client()
         if decision == "apply":
-            return _dump(await client.apply_certain_reconciliation_match(
+            return _without_models(_dump(await client.apply_certain_reconciliation_match(
                 model_id, kind, own_qid, inherited_qid,
                 confirm_heuristic=confirm_heuristic,
-            ))
+            )))
         if decision == "reject":
             return _dump(await client.reject_reconciliation_candidate(
                 model_id, kind, own_qid, inherited_qid,
@@ -2482,14 +2638,9 @@ async def lift_composition_entity(
         skip_overapplication_gate: When True, bypass the gate after
             explicit operator confirmation. Default False.
 
-    Returns::
-
-        {"lift_id": str,
-         "lca_model": <ThreatModel>,
-         "descendant_a_model": <ThreatModel>,
-         "descendant_b_model": <ThreatModel>,
-         "applied_migrations": [...],
-         "lift_event": {...}}
+    Returns ``{lift_id, lca_model, descendant_a_model, descendant_b_model,
+    applied_migrations, lift_event}``, each model being its id, version and
+    title (read one with ``get_threat_model``).
 
     Errors: 400 if required fields are missing, no LCA exists, conflict
     resolutions are stale, or the lift is structurally refused
@@ -2512,7 +2663,7 @@ async def lift_composition_entity(
     if not lca_model_id or not lca_model_id.strip():
         raise ToolError("lca_model_id is required and must be non-empty.")
     try:
-        return _dump(
+        return _without_models(_dump(
             await _get_client().lift_composition_entity(
                 model_id,
                 kind,
@@ -2527,7 +2678,7 @@ async def lift_composition_entity(
                 attached_state_resolutions=attached_state_resolutions,
                 skip_overapplication_gate=skip_overapplication_gate,
             ),
-        )
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2565,13 +2716,9 @@ async def split_composition_entity(
         target_descendants: Non-empty list of descendant model ids that
             should each take a copy.
 
-    Returns::
-
-        {"split_id": str,
-         "ancestor_model": <ThreatModel>,
-         "descendant_models": [<ThreatModel>, ...],
-         "applied_duplications": [...],
-         "split_event": {...}}
+    Returns ``{split_id, ancestor_model, descendant_models,
+    applied_duplications, split_event}``, each model being its id, version
+    and title (read one with ``get_threat_model``).
 
     Errors: 400 if required fields are missing or the split is
     structurally refused; 404 if the ancestor or any target descendant is
@@ -2588,14 +2735,14 @@ async def split_composition_entity(
             "target_descendants is required and must be a non-empty list.",
         )
     try:
-        return _dump(
+        return _without_models(_dump(
             await _get_client().split_composition_entity(
                 model_id,
                 kind,
                 ancestor_local_id,
                 target_descendants,
             ),
-        )
+        ))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -2958,7 +3105,9 @@ async def get_review_queue(server_version: str) -> dict:
     the behavioural model contradicts: under a confirmed model it no longer
     counts, under an unconfirmed one it still does; ask the person to revise
     or revoke it, or to confirm the model), ``position_disagreement`` (an
-    attested attacker position a producer would place elsewhere), or
+    attested attacker position a producer would place elsewhere),
+    ``behavioural_attacker`` (``get_behavioural_attackers``),
+    ``inventory_judgement`` (``get_inventory_judgements``), or
     ``stale_control`` (an implemented/verified
     control whose assertions have not been checked in 90+ days). Rows are
     ranked: escalations, then proposals and the behavioural rows by risk
@@ -3019,9 +3168,10 @@ async def add_asset(
     that asset (``auto_restored: true``, ``restored_asset_id``,
     ``discarded_fields``; its CO tombstones revive) or is refused as similar
     (``{accepted: false, classification: "similar", candidate_restore_id}``,
-    nothing saved). A normal create returns ``{model, controls_carried,
-    ...}``. 503: an evaluator is unavailable, retry with backoff; 502: it
-    answered malformed, retry.
+    nothing saved). A normal create returns ``{model, entities,
+    controls_carried, ...}``: ``model`` is the model's id, version and title,
+    ``entities.assets`` the asset as created. 503: an evaluator is
+    unavailable, retry with backoff; 502: it answered malformed, retry.
 
     Args:
         model_id: ID of the threat model.
@@ -3047,7 +3197,8 @@ async def add_asset(
     try:
         client = _get_client()
         started = await client.start_add_asset(model_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
+        return _entity_change(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True), "asset")
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3091,8 +3242,9 @@ async def edit_asset(
     security_properties). Factor and notes edits skip the gate.
 
     Outcomes when identity fields change:
-    - **Accepted edit** (LLM classifies as ``preserve``) — normal
-      envelope response.
+    - **Accepted edit** (LLM classifies as ``preserve``) — ``{model,
+      entities, controls_carried, ...}``: the model's id, version and title,
+      and the asset as it now stands.
     - **Rejected edit** (LLM classifies as ``replace`` /
       ``ambiguous``) — ``{"accepted": False, ...}``; nothing saved.
       Soft-delete + add-new instead.
@@ -3157,7 +3309,8 @@ async def edit_asset(
     try:
         client = _get_client()
         started = await client.start_edit_asset(model_id, asset_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
+        return _entity_change(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True), "asset", (asset_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3209,8 +3362,9 @@ async def add_attacker(
     Override one later via ``edit_attacker`` with a ``change_reason``.
 
     Three outcomes (normal create / auto-restore / similar-rejection)
-    mirror ``add_asset``. 503 on factor-reasoning or restore-candidate
-    evaluator outage, 502 on malformed restore-candidate response.
+    mirror ``add_asset`` (``entities`` holds the attacker). 503 on
+    factor-reasoning or restore-candidate evaluator outage, 502 on malformed
+    restore-candidate response.
 
     ``surface_extent`` says how much of the reached interface this
     attacker's operations range over. An attacker ranging over the whole
@@ -3277,7 +3431,8 @@ async def add_attacker(
     try:
         client = _get_client()
         started = await client.start_add_attacker(model_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
+        return _entity_change(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True), "attacker")
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3311,7 +3466,9 @@ async def edit_attacker(
     ``quality_warning``. Identity fields are LLM-gated. The composed
     ``likelihood`` comes from the factors. An edit of ``attack_vector`` or
     ``privileges_required`` creates a model version (reachability reads
-    both); other factor edits are recorded as rating revisions.
+    both); other factor edits are recorded as rating revisions. The answer's
+    ``model`` is the model's id, version and title; ``entities.attackers``
+    the attacker as it now stands.
 
     Attesting is a judgment: a person's edit attests what it writes
     (``trust_boundary_ids``, ``privileges_required``, ``surface_extent``)
@@ -3389,7 +3546,8 @@ async def edit_attacker(
     try:
         client = _get_client()
         started = await client.start_edit_attacker(model_id, attacker_id, **body)
-        return await _await_backend_job(client, started["job_id"], ctx, heartbeat=True)
+        return _entity_change(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True), "attacker", (attacker_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3823,12 +3981,15 @@ async def add_component(
         trust_boundary_ids: Comma-separated trust boundary IDs that
             this component spans (its deployment zone). Drives reach
             decisions for any asset scoped to this component.
+
+    Returns ``{model, entities, ...}``: the model's id, version and title,
+    and ``entities.components`` the component as created.
     """
     tb_ids = [t.strip() for t in trust_boundary_ids.split(",") if t.strip()] if trust_boundary_ids else []
     try:
-        return _dump(await _get_client().add_component(
+        return _entity_change(_dump(await _get_client().add_component(
             model_id, name, repo_url, path, tb_ids or None,
-        ))
+        )), "component")
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -3866,6 +4027,9 @@ async def edit_component(
             For components subject to CC certification.
         fips_level: FIPS 140-3 Security Level (1-4) for the
             cryptographic module embedded in this component.
+
+    Returns ``{model, entities, ...}``: the model's id, version and title,
+    and ``entities.components`` the component as it now stands.
     """
     fields: dict = {}
     if name:
@@ -3883,7 +4047,8 @@ async def edit_component(
     if fips_level is not None:
         fields["fips_level"] = fips_level
     try:
-        return _dump(await _get_client().edit_component(model_id, component_id, **fields))
+        return _entity_change(_dump(await _get_client().edit_component(
+            model_id, component_id, **fields)), "component", (component_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4720,7 +4885,9 @@ async def add_trust_boundary(
     passes: Optional[str] = None,
     sealed: Optional[bool] = None,
 ) -> dict:
-    """Add a trust boundary. Creates a new model version.
+    """Add a trust boundary. Creates a new model version. Returns ``{model,
+    entities, ...}``: the model's id, version and title, and
+    ``entities.trust_boundaries`` the boundary as created.
 
     Args:
         model_id: ID of the threat model.
@@ -4747,10 +4914,10 @@ async def add_trust_boundary(
         [v.strip() for v in passes.split(",") if v.strip()] if passes is not None else None
     )
     try:
-        return await _get_client().add_trust_boundary(
+        return _entity_change(await _get_client().add_trust_boundary(
             model_id, description, parsed_crosses or None, parsed_passes,
             sealed=sealed,
-        )
+        ), "trust_boundary")
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4765,7 +4932,9 @@ async def edit_trust_boundary(
     seal_source: Optional[str] = None,
     change_reason: Optional[str] = None,
 ) -> dict:
-    """Edit a trust boundary. Creates a new model version.
+    """Edit a trust boundary. Creates a new model version. Returns ``{model,
+    entities, ...}``: the model's id, version and title, and
+    ``entities.trust_boundaries`` the boundary as it now stands.
 
     Attesting the seal is a judgment: a person's edit attests it; a
     program's only under a workspace rule delegating ``seal_attested``,
@@ -4815,7 +4984,8 @@ async def edit_trust_boundary(
     if change_reason is not None:
         kwargs["change_reason"] = change_reason
     try:
-        return await _get_client().edit_trust_boundary(model_id, tb_id, **kwargs)
+        return _entity_change(await _get_client().edit_trust_boundary(
+            model_id, tb_id, **kwargs), "trust_boundary", (tb_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4835,7 +5005,9 @@ async def add_assumption(
     exclusion_property_match: Optional[str] = None,
     exclusion_co_ids: Optional[str] = None,
 ) -> dict:
-    """Add an assumption. Creates a new model version.
+    """Add an assumption. Creates a new model version. Returns ``{model,
+    entities, ...}``: the model's id, version and title, and
+    ``entities.assumptions`` the assumption as created.
 
     Assumptions represent security properties outside the system owner's
     trust boundary. When linked to COs and attested, they mitigate those
@@ -4898,11 +5070,11 @@ async def add_assumption(
             ),
         }
     try:
-        return await _get_client().add_assumption(
+        return _entity_change(await _get_client().add_assumption(
             model_id, description, parsed,
             assumption_type=assumption_type,
             exclusion=exclusion,
-        )
+        ), "assumption")
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -4920,7 +5092,9 @@ async def edit_assumption(
     exclusion_co_ids: Optional[str] = None,
     clear_exclusion: bool = False,
 ) -> dict:
-    """Edit an assumption. Creates a new model version.
+    """Edit an assumption. Creates a new model version. Returns ``{model,
+    entities, ...}``: the model's id, version and title, and
+    ``entities.assumptions`` the assumption as it now stands.
 
     Exclusion predicate semantics on edit:
       - If any ``exclusion_*`` param is set: replace the existing
@@ -4979,7 +5153,8 @@ async def edit_assumption(
     elif clear_exclusion:
         kwargs["exclusion"] = None
     try:
-        return await _get_client().edit_assumption(model_id, assumption_id, **kwargs)
+        return _entity_change(await _get_client().edit_assumption(
+            model_id, assumption_id, **kwargs), "assumption", (assumption_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5616,6 +5791,10 @@ async def remove_entity(
       ``assumption_groups`` name it keep their groups, which credit
       nothing through it while it is deleted.
 
+    Returns ``{model, entities, controls_carried, controls_orphaned,
+    orphaned_control_ids}``: the model's id, version and title, and the
+    entity as removed.
+
     Args:
         model_id: ID of the threat model.
         entity_type: Which entity to soft-delete — one of ``asset``,
@@ -5631,8 +5810,8 @@ async def remove_entity(
     try:
         client = _get_client()
         started = await client.start_remove_entity(model_id, entity_type, entity_id)
-        return _dump(await _await_backend_job(
-            client, started["job_id"], ctx, heartbeat=True))
+        return _entity_change(_dump(await _await_backend_job(
+            client, started["job_id"], ctx, heartbeat=True)), entity_type, (entity_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -5666,8 +5845,10 @@ async def restore_entity(
       with ``edit_assumption``), and re-attestation is required before it
       counts anywhere it is linked or grouped.
 
-    Returns the entity-change result: ``{"model": <ThreatModel>,
-    "controls_carried", "controls_orphaned", "orphaned_control_ids", ...}``.
+    Returns the entity-change result: ``{"model": {id, version, title},
+    "entities", "controls_carried", "controls_orphaned",
+    "orphaned_control_ids", ...}``, ``entities`` holding the entity as
+    restored.
 
     Args:
         model_id: ID of the threat model.
@@ -5690,7 +5871,8 @@ async def restore_entity(
             "trust_boundary": client.restore_trust_boundary,
             "assumption": client.restore_assumption,
         }[entity_type]
-        return _dump(await restorer(model_id, entity_id))
+        return _entity_change(_dump(await restorer(model_id, entity_id)),
+                              entity_type, (entity_id,))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -6268,7 +6450,7 @@ async def undo_composition_event(
     recorded. Returns ``{undone_event_id, original_event_id,
     applied_state_ops, models}``; ``models`` is ``{lca_model,
     source_descendant_models}`` for a lift and ``{ancestor_model,
-    descendant_models}`` for a split.
+    descendant_models}`` for a split, each model its id, version and title.
 
     503 where composition is not available.
     """
@@ -6289,7 +6471,7 @@ async def undo_composition_event(
             result = await client.undo_lift(model_id, event_id)
         else:
             result = await client.undo_split(model_id, event_id)
-        return _dump(result)
+        return _without_models(_dump(result))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -6480,7 +6662,9 @@ async def assign_to_components(
       instance). ``target_id`` is the asset ID (e.g. "A1").
 
     Both variants are mechanical / non-AI-gated and validate only that
-    every referenced component exists on the model.
+    every referenced component exists on the model. An asset's answer
+    carries the model's id, version and title, and ``entities.assets`` the
+    asset as it now stands.
 
     Args:
         model_id: ID of the threat model.
@@ -6502,9 +6686,9 @@ async def assign_to_components(
     try:
         client = _get_client()
         if target_type == "asset":
-            result = await client.assign_asset_to_components(
+            result = _entity_change(await client.assign_asset_to_components(
                 model_id, target_id, parsed, change_reason.strip(),
-            )
+            ), "asset", (target_id,))
         else:
             result = await client.assign_control_to_components(
                 model_id, target_id, parsed, change_reason.strip(),
@@ -6615,14 +6799,15 @@ async def revalidate_entity_quality(
     May consume credits for the entities that need the deeper review; a model
     already in good shape costs nothing. Returns at once with
     ``{"accepted": true, "queued": <entities queued>, "model": {...}}``, where
-    ``model`` is the model as it stands before the re-validation lands.
+    ``model`` is the id, version and title of the model as it stands before
+    the re-validation lands.
 
     Args:
         model_id: ID of the threat model whose assets and attackers to
             re-validate.
     """
     try:
-        return _dump(await _get_client().revalidate_entities(model_id))
+        return _without_models(_dump(await _get_client().revalidate_entities(model_id)))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7122,6 +7307,7 @@ _DECISION_KINDS = (
     "behavioural_model_confirmed",
     "behavioural_delta_declared",
     "behavioural_cross_check_dismissed",
+    "behavioural_confirmation_withdrawn",
     "seal_attested",
     "position_attested",
     "privileges_attested",
@@ -7129,6 +7315,8 @@ _DECISION_KINDS = (
     "escalation_resolved",
     "drift_intent_decided",
     "description_revised",
+    "inventory_pair_decided",
+    "inventory_tag_declared",
 )
 
 
@@ -7146,9 +7334,10 @@ async def list_decisions(
     declared, proposal accepted / rejected / reverted, assumption accepted,
     behavioural model answered / confirmed, a control's delta declared, a
     finding of its cross-check dismissed, a seal, position, privileges or
-    surface extent attested, escalation resolved), newest first, with who
-    made it and whether it was within the workspace's delegation policy.
-    Read-only; no side effects.
+    surface extent attested, escalation resolved, an inventory pair decided
+    or an entity's tags declared), newest first, with who made it and
+    whether it was within the workspace's delegation policy. Read-only; no
+    side effects.
 
     Call this BEFORE raising a proposal or asking for a judgment, so you
     do not propose what a person rejected or ask again for what was
@@ -7175,13 +7364,17 @@ async def list_decisions(
             (an answer, an element edit or a link declared),
             ``behavioural_model_confirmed``, ``behavioural_delta_declared``,
             ``behavioural_cross_check_dismissed`` (a person set aside a
-            finding of a declaration's cross-check), ``seal_attested``,
-            ``position_attested``, ``privileges_attested``,
+            finding of a declaration's cross-check),
+            ``behavioural_confirmation_withdrawn`` (a confirmation withdrawn
+            by a report that the code does more than the description),
+            ``seal_attested``, ``position_attested``, ``privileges_attested``,
             ``extent_attested``, ``escalation_resolved``,
             ``drift_intent_decided`` (whether a description-drift finding was
             intended or a defect of the code), ``description_revised`` (a
-            revised description accepted). Empty (default) returns every
-            kind.
+            revised description accepted), ``inventory_pair_decided`` (two
+            inventory entries decided one entity or not),
+            ``inventory_tag_declared`` (an entity's taxonomy tags declared).
+            Empty (default) returns every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,
@@ -7689,17 +7882,21 @@ async def get_behavioural_attackers(server_version: str, model_id: str) -> dict:
     Read-only: no model is called and nothing is written.
 
     Returns ``{applies, credential_classes, proposals, dismissed,
-    questions}``. ``applies`` is false where the closure is not offered (a
-    model with no inventory, or whose behavioural model decides nothing
-    yet). ``credential_classes`` are the behavioural model's classes, by id.
-    Each of ``proposals`` is an attacker no attacker of the inventory stands
-    for: its ``credential_classes``, the ``privileges_required`` they give,
-    its ``capability`` and the ``objectives`` adding it adds; add it with
-    ``add_proposed_attacker`` or dismiss it with
-    ``dismiss_proposed_attacker``. ``dismissed`` lists those dismissed, with
-    ``reason``, ``dismissed_by`` and ``dismissed_at``. ``questions`` ask what
-    an attacker holds: answer each with ``answer_attacker_credentials``.
-    Relay the proposals to the person before acting on them.
+    dismissed_zones, reported, questions}``. ``applies`` is false where the
+    closure is not offered (a model with no inventory, or whose behavioural
+    model decides nothing yet); ``computing`` while what the threats reach
+    is still being analysed, when nothing is proposed. Each of ``proposals``
+    is an attacker no attacker of the inventory stands for: its ``kind``
+    (``own``: a class proposed on its own; ``grouped``: every open zone, one
+    proposal, with an ``entries`` row per zone), ``credential_classes``,
+    ``privileges_required``, ``capability``, ``objectives`` and ``zones``;
+    add it with ``add_proposed_attacker`` or dismiss it, or some zones of a
+    grouped one, with ``dismiss_proposed_attacker``. ``dismissed`` and
+    ``dismissed_zones`` carry ``reason``, ``dismissed_by`` and
+    ``dismissed_at``. ``reported`` lists narrower holders beside an attacker
+    that stands for them. ``questions`` ask what an attacker holds: answer
+    each with ``answer_attacker_credentials``. Relay the proposals to the
+    person before acting on them.
 
     Args:
         model_id: ID of the threat model.
@@ -7735,8 +7932,10 @@ async def answer_attacker_credentials(
     parked for a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
-    Returns the closure as ``get_behavioural_attackers`` does, with the
-    ``attacker`` as it now stands.
+    Returns ``{model_id, model_version, applies, credential_classes, counts,
+    attacker}``: how many proposals, dismissals and questions the closure now
+    holds (read them with ``get_behavioural_attackers``) and the ``attacker``
+    as it now stands.
 
     Args:
         model_id: ID of the threat model.
@@ -7747,8 +7946,8 @@ async def answer_attacker_credentials(
     if not attacker_id.strip():
         raise ToolError("attacker_id is required.")
     try:
-        return _dump(await _get_client().answer_attacker_credentials(
-            model_id, attacker_id.strip(), _class_list(credential_classes)))
+        return _closure_change(_dump(await _get_client().answer_attacker_credentials(
+            model_id, attacker_id.strip(), _class_list(credential_classes))))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7776,8 +7975,9 @@ async def add_proposed_attacker(
     parked for a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
-    Returns the closure as ``get_behavioural_attackers`` does, with
-    ``added``, the new attacker's id.
+    Returns ``{model_id, model_version, applies, credential_classes, counts,
+    added}``: how many proposals, dismissals and questions the closure now
+    holds and ``added``, the new attacker's id.
 
     Args:
         model_id: ID of the threat model.
@@ -7785,8 +7985,8 @@ async def add_proposed_attacker(
             for the one holding none.
     """
     try:
-        return _dump(await _get_client().add_proposed_attacker(
-            model_id, _class_list(credential_classes)))
+        return _closure_change(_dump(await _get_client().add_proposed_attacker(
+            model_id, _class_list(credential_classes))))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -7797,34 +7997,205 @@ async def dismiss_proposed_attacker(
     model_id: str,
     reason: str,
     credential_classes: str = "",
+    zones: str = "",
 ) -> dict:
     """Dismiss the attacker the attacker closure proposes for a credential
-    set, with why. Mutating; creates a model version.
+    set, with why, or some zones of the grouped proposal. Mutating; creates a
+    model version.
 
     The dismissal is kept on the model: the proposal is no longer offered
-    while it stands. Refused with 409 ``not_proposed`` (no attacker is
-    proposed for exactly that set now), 409 ``dismissed_already``, 409
-    ``closure_not_offered``, 422 ``unknown_class``.
+    while it stands. ``zones`` names zones of the grouped proposal (its
+    ``kind`` is ``grouped``) that no attacker reaches: those alone are
+    dismissed, and the proposal stands for the rest. Refused with 409
+    ``not_proposed`` (no attacker is proposed for exactly that set now), 409
+    ``dismissed_already``, 409 ``closure_not_offered``, 422 ``unknown_class``,
+    422 ``unknown_zone`` (a zone the grouped proposal does not offer now),
+    422 ``zones_of_own`` (zones of a class proposed on its own).
 
     A program's dismissal is a judgment. Unless the workspace's delegation
     policy admits it, it is refused with 403 and an ``escalation_id`` and
     parked for a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
-    Returns the closure as ``get_behavioural_attackers`` does, with
-    ``dismissed_set``.
+    Returns ``{model_id, model_version, applies, credential_classes, counts,
+    dismissed_set, dismissed_zones_now?}``: how many proposals, dismissals and
+    questions the closure now holds, and what was dismissed.
 
     Args:
         model_id: ID of the threat model.
         reason: Why the attacker does not apply (required).
         credential_classes: Comma-separated class ids of the proposal; empty
             for the one holding none.
+        zones: Comma-separated zones of the grouped proposal to dismiss
+            alone; empty dismisses the proposal whole.
     """
     if not reason.strip():
         raise ToolError("reason is required: say why the attacker does not apply.")
+    named_zones = _class_list(zones)
     try:
-        return _dump(await _get_client().dismiss_proposed_attacker(
-            model_id, _class_list(credential_classes), reason.strip()))
+        return _closure_change(_dump(await _get_client().dismiss_proposed_attacker(
+            model_id, _class_list(credential_classes), reason.strip(),
+            **({"zones": named_zones} if named_zones else {}))))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+# === Inventory judgements ===
+#
+# What the per-entity checks found about a model's inventory: entries that may
+# be one entity, and the taxonomy primitives each entity answers. Nothing here
+# merges, removes or rewrites an entity.
+
+_INVENTORY_KINDS = ("asset", "attacker")
+
+
+@mcp.tool()
+async def get_inventory_judgements(server_version: str, model_id: str) -> dict:
+    """Read what the per-entity checks found about a model's inventory.
+    Read-only: no model is called and nothing is queued.
+
+    Returns ``{model_id, version, duplicates, tags}``. ``duplicates``, per
+    kind (``assets``, ``attackers``): ``groups`` (shown as one entity: both
+    sides' current checks say so, their texts are identical, or a person
+    decided it), ``disputed`` and ``one_sided`` (one check says the same and
+    the other does not, or only one side answered), ``overlaps`` (part and
+    whole), ``decided`` (the decisions in force), ``status`` (``complete``
+    when every pair a check is owed for is covered, ``partial`` with
+    ``uncovered`` counting the rest as queued, failed or never asked,
+    ``not_evaluated`` with a ``reason``) and ``legacy`` (a report from
+    before the per-entity checks). ``tags``: the entities whose tags are
+    neither current nor declared (``unchecked``) and the declarations in
+    force. The same rows reach ``get_review_queue`` as
+    ``inventory_judgement``.
+
+    Relay a disputed pair to the person; ``decide_inventory_pair`` records
+    the decision and ``request_inventory_checks`` asks for the checks owed.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_inventory_judgements(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def request_inventory_checks(server_version: str, model_id: str) -> dict:
+    """Queue the checks a model's inventory lacks: the tag check of every
+    entity whose tags are not current, and the duplicate check of every entry
+    on a pair no current check covers. Mutating: queues background work.
+
+    Those the platform made stale are recorded as its own request, the rest
+    under the caller. Returns ``{model_id, queued, platform}``: the checks
+    queued by kind, and the platform's share. Read the results with
+    ``get_inventory_judgements`` once they land.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().request_inventory_checks(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def decide_inventory_pair(
+    server_version: str,
+    model_id: str,
+    entity_kind: Literal["asset", "attacker"],
+    a: str,
+    b: str,
+    verdict: Literal["same", "different"],
+    rationale: str = "",
+) -> dict:
+    """Decide that two entries of a model's inventory are, or are not, one
+    entity. Mutating; creates no model version; a judgment.
+
+    The decision is bound to both entries' texts: while it stands it replaces
+    the checks' answers for the pair, and an edit of either entry voids it.
+    ``same`` keeps the pair shown until a person removes one of the two
+    (``remove_entity``); nothing is merged. Refused 422 ``two_elements`` for
+    two assets that are each an element of the behavioural model (two
+    elements are two things), 422 ``same_entity``, 404 ``unknown_entity``.
+
+    A program's decision is refused with 403 and an ``escalation_id`` unless
+    the workspace's delegation policy names ``inventory_pair_decided``.
+    Do not retry: report the ``escalation_id`` and poll ``list_proposals``.
+
+    Returns ``{pair, entity_kind, verdict, decided_at, objectives}``,
+    ``objectives`` counting those resting on the two entries.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_kind: ``asset`` or ``attacker``.
+        a: One entry's id (e.g. "A-12").
+        b: The other entry's id.
+        verdict: ``same`` or ``different``.
+        rationale: Why (at most 2000 characters).
+    """
+    if entity_kind not in _INVENTORY_KINDS:
+        raise ToolError(f"entity_kind must be one of {', '.join(_INVENTORY_KINDS)}.")
+    if verdict not in ("same", "different"):
+        raise ToolError("verdict must be 'same' or 'different'.")
+    if not a.strip() or not b.strip():
+        raise ToolError("a and b are required: the two entries' ids.")
+    if len(rationale) > 2000:
+        raise ToolError("rationale is at most 2000 characters.")
+    try:
+        return _dump(await _get_client().decide_inventory_pair(
+            model_id, entity_kind, a.strip(), b.strip(), verdict, rationale=rationale))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def declare_inventory_tags(
+    server_version: str,
+    model_id: str,
+    entity_kind: Literal["asset", "attacker"],
+    entity_id: str,
+    tags: str = "[]",
+    rationale: str = "",
+) -> dict:
+    """Declare the taxonomy primitives an entity of a model's inventory
+    answers. Mutating; creates no model version; a judgment.
+
+    The declaration is bound to the entity's text: it witnesses each
+    primitive whatever the tagger answers, and an edit of the entity voids
+    it. Every pair must be one the taxonomy admits for the kind (422
+    ``inadmissible_tag``); an empty list declares that the entity answers
+    none. 404 ``unknown_entity``.
+
+    A program's declaration is refused with 403 and an ``escalation_id``
+    unless the workspace's delegation policy names ``inventory_tag_declared``.
+    Do not retry: report the ``escalation_id`` and poll ``list_proposals``.
+
+    Returns ``{entity_id, entity_kind, tags, declared_at}``.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_kind: ``asset`` or ``attacker``.
+        entity_id: The entity (e.g. "T-04").
+        tags: JSON array of ``{"primitive", "implied_type"}``.
+        rationale: Why (at most 2000 characters).
+    """
+    if entity_kind not in _INVENTORY_KINDS:
+        raise ToolError(f"entity_kind must be one of {', '.join(_INVENTORY_KINDS)}.")
+    if not entity_id.strip():
+        raise ToolError("entity_id is required.")
+    if len(rationale) > 2000:
+        raise ToolError("rationale is at most 2000 characters.")
+    parsed = _json_value(tags, "tags", list,
+                         '[{"primitive": "...", "implied_type": "..."}]')
+    for t in parsed:
+        if not (isinstance(t, dict) and str(t.get("primitive", "")).strip()
+                and str(t.get("implied_type", "")).strip()):
+            raise ToolError("each tag is an object with a primitive and an implied_type.")
+    try:
+        return _dump(await _get_client().declare_inventory_tags(
+            model_id, entity_kind, entity_id.strip(), parsed, rationale=rationale))
     except Exception as exc:
         raise _api_error(exc) from exc
 

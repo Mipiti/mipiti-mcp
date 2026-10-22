@@ -853,7 +853,7 @@ async def test_an_entity_job_reports_progress_while_it_waits() -> None:
         out = await server.add_attacker(
             server_version="0", model_id="tm-1", capability="From the network, the "
             "attacker can read requests.", ctx=ctx)
-    assert out == {"model": {"id": "tm-1"}}
+    assert out == {"model": {"id": "tm-1"}, "entities": {}}
     notes = ctx.report_progress.await_args_list
     assert [n.args for n in notes] == [(1, None), (2, None)]
     assert notes[0].kwargs["message"] == "job j1: running"
@@ -995,6 +995,8 @@ _TOOLS = (
     "request_model_check", "get_model_check", "manage_model_check",
     "get_behavioural_attackers", "answer_attacker_credentials",
     "add_proposed_attacker", "dismiss_proposed_attacker",
+    "get_inventory_judgements", "request_inventory_checks",
+    "decide_inventory_pair", "declare_inventory_tags",
 )
 
 
@@ -1069,7 +1071,8 @@ def test_judgments_name_the_refusal_and_the_no_retry_rule() -> None:
     for name in ("answer_behavioural_questions", "edit_behavioural_element",
                  "confirm_behavioural_model", "declare_behavioural_link",
                  "accept_behavioural_link_proposals", "answer_attacker_credentials",
-                 "add_proposed_attacker", "dismiss_proposed_attacker"):
+                 "add_proposed_attacker", "dismiss_proposed_attacker",
+                 "decide_inventory_pair", "declare_inventory_tags"):
         text = _descriptions()[name]
         assert "403" in text and "escalation_id" in text, name
         assert "Do not retry" in text, name
@@ -1104,7 +1107,8 @@ def test_instructions_route_open_questions_to_the_review_queue() -> None:
 def test_review_queue_names_the_new_item_types() -> None:
     text = _descriptions()["get_review_queue"]
     for item in ("behavioural_question", "behavioural_link",
-                 "not_applicable_refuted"):
+                 "not_applicable_refuted", "behavioural_attacker",
+                 "inventory_judgement"):
         assert item in text, item
 
 
@@ -1113,6 +1117,9 @@ def test_decision_filter_accepts_the_behavioural_kinds() -> None:
     assert "behavioural_model_confirmed" in server._DECISION_KINDS
     assert "behavioural_delta_declared" in server._DECISION_KINDS
     assert "behavioural_cross_check_dismissed" in server._DECISION_KINDS
+    assert "behavioural_confirmation_withdrawn" in server._DECISION_KINDS
+    assert "inventory_pair_decided" in server._DECISION_KINDS
+    assert "inventory_tag_declared" in server._DECISION_KINDS
 
 
 def test_a_cross_check_finding_is_relayed_and_dismissed_by_a_person() -> None:
@@ -1180,6 +1187,50 @@ async def test_the_attacker_tools_split_the_classes_and_forward_them() -> None:
     client.dismiss_proposed_attacker.assert_awaited_once_with(
         "tm-1", ["db_reader"], "Not deployed.")
     assert out["added"] == "T9"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_zones_of_the_grouped_proposal_are_sent_only_when_named(mock_env: None) -> None:
+    route = respx.post(BASE + "/attackers/proposals/dismiss").mock(
+        return_value=httpx.Response(200, json={"applies": True}))
+    client = MipitiClient()
+    await client.dismiss_proposed_attacker("tm-1", [], "No attacker stands there.",
+                                           zones=["backup_zone", "ci_zone"])
+    assert _body(route) == {"credential_classes": [], "reason": "No attacker stands there.",
+                            "zones": ["backup_zone", "ci_zone"]}
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.dismiss_proposed_attacker(
+            server_version="0", model_id="tm-1", reason="r", zones=" backup_zone, , ci_zone ")
+        assert _body(route)["zones"] == ["backup_zone", "ci_zone"]
+        await server.dismiss_proposed_attacker(server_version="0", model_id="tm-1", reason="r")
+    assert "zones" not in _body(route)
+
+
+_CLOSURE = {"model_id": "tm-1", "model_version": 7, "applies": True,
+            "credential_classes": ["tenant_user"],
+            "proposals": [{"kind": "grouped", "zones": ["z1", "z2"],
+                           "entries": [{"zone": "z1"}, {"zone": "z2"}]}],
+            "dismissed": [], "dismissed_zones": [{"zone": "z3", "reason": "r"}],
+            "reported": [], "questions": [{"question_id": "q1"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool,method,kwargs,extra", [
+    ("answer_attacker_credentials", "answer_attacker_credentials",
+     {"attacker_id": "T3"}, {"attacker": {"id": "T3"}}),
+    ("add_proposed_attacker", "add_proposed_attacker", {}, {"added": "T9"}),
+    ("dismiss_proposed_attacker", "dismiss_proposed_attacker",
+     {"reason": "r", "zones": "z3"}, {"dismissed_set": [], "dismissed_zones_now": ["z3"]}),
+])
+async def test_an_act_on_the_closure_answers_with_counts(tool, method, kwargs, extra) -> None:
+    client = _client(**{method: {**_CLOSURE, **extra}})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await getattr(server, tool)(server_version="0", model_id="tm-1", **kwargs)
+    assert out == {"model_id": "tm-1", "model_version": 7, "applies": True,
+                   "credential_classes": ["tenant_user"], **extra,
+                   "counts": {"proposals": 1, "dismissed": 0, "dismissed_zones": 1,
+                              "reported": 0, "questions": 1}}
 
 
 @pytest.mark.asyncio
