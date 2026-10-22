@@ -92,7 +92,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
-- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model. Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
+- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
 - `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
 - `get_threat_model` — retrieve a model's structure (excludes COs by default; use `include_cos=True` to include them). The answers to its questions are counted and left out unless `include_clarifications=True`, which pages them. A read longer than 200,000 characters is cut, and `cuts` names what was cut and the read that serves it. `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and its `mcp_arguments`, ready to send once the angle-bracketed values are filled).
 - `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
@@ -3558,68 +3558,63 @@ async def reevaluate_threat_model_factors(
     model_id: str,
     ctx: Context,
     change_reason: Optional[str] = None,
+    entity_ids: str = "",
+    unrated_only: bool = False,
 ) -> dict:
-    """Re-run the LLM factor judgment on every asset and attacker in
-    a threat model. Useful for re-baselining factors after a bug fix
-    or feature-description change, without regenerating the whole
-    model (which would destroy controls, assertions, components).
+    """Re-run the LLM factor judgment on a model's live assets and
+    attackers: every one, those ``entity_ids`` names, or only those nobody
+    rated (``unrated_only``; with both, the unrated among those named).
+    Re-baselines factors after a bug fix or description change, or rates
+    what reads "not rated", without regenerating the model (which would
+    destroy controls, assertions, components). One call per entity in
+    scope; an id naming no live asset or attacker is refused (400) before
+    any call; a scope naming none makes no call.
 
     Each entity's factors and rationale are replaced with a fresh
-    LLM-judged decomposition; the composed impact / likelihood is
-    re-derived deterministically from the new factors. Each re-rating
-    is recorded as a rating revision in the audit trail with
-    ``change_reason`` (default: "LLM factor re-evaluation") so the
-    starting-point regeneration is distinguishable from operator-
-    supplied factor overrides via ``edit_asset`` / ``edit_attacker``.
+    decomposition and its impact / likelihood re-derived from them. Each
+    re-rating is a rating revision recorded with ``change_reason``
+    (default "LLM factor re-evaluation"), told apart from overrides made
+    with ``edit_asset`` / ``edit_attacker``. The judgment is a starting
+    point: layer deployment-specific factors on top with those, and a
+    ``change_reason`` saying why.
 
-    The platform's LLM factor judgment is a *starting point*. For
-    deployment-specific factor adjustments (e.g., elevated
-    regulatory_scope because your tenant is HIPAA-covered, or
-    Commodity prevalence because your endpoint is public-internet
-    exposed), use ``edit_asset`` / ``edit_attacker`` afterward with a
-    ``change_reason`` documenting the operator override.
+    Per-entity soft-fail: a failure on one entity lands in
+    ``failed_entities`` (``id``, ``kind``, ``reason``) and the rest still
+    persist; 503 only when every entity in scope failed, with nothing
+    persisted. Soft-deleted entities are skipped.
 
-    Per-entity soft-fail: an LLM failure on one entity is recorded in
-    the response's ``failed_entities`` list (with ``id``, ``kind``, and
-    ``reason``); the remaining entities are still re-evaluated and
-    their rating revisions persisted as they complete. The endpoint
-    returns 503 only when *every* live entity failed — in which case
-    nothing was persisted; retry when the evaluator is reachable.
-
-    Soft-deleted assets and attackers are skipped.
-
-    Re-ratings are rating revisions and keep the model version, except
-    where an answer changes an attacker's ``attack_vector`` or
-    ``privileges_required``: reachability reads both, so the run saves one
-    new version carrying every answer, and a proposal reviewed before it
-    reads ``review_stale``. Privileges an answer changes are no longer
-    attested.
+    Re-ratings keep the model version, except where an answer changes an
+    attacker's ``attack_vector`` or ``privileges_required``: reachability
+    reads both, so the run saves one new version carrying every answer,
+    and a proposal reviewed before it reads ``review_stale``. Privileges an
+    answer changes are no longer attested.
 
     Args:
         model_id: ID of the threat model to re-rate.
-        change_reason: Optional override of the audit-trail reason
-            (default: "LLM factor re-evaluation"). Use this to thread
-            a higher-level reason like "Re-eval after refinement bug
-            fix shipped in vN.N.N" when running the tool as part of a
-            broader workflow.
+        change_reason: Optional audit-trail reason (default "LLM factor
+            re-evaluation").
+        entity_ids: Optional comma-separated asset and attacker ids (e.g.
+            "A-03,T-14"); omit for every live entity.
+        unrated_only: Only entities whose ``rating_source`` is
+            ``unrated``. Default False.
 
-    Returns:
-        Dict with:
-        - model_id
-        - assets_reevaluated: count of assets re-rated successfully
-        - attackers_reevaluated: count of attackers re-rated
-          successfully
-        - deltas.assets / deltas.attackers: per-entity before/after
-          factor values and composed rating (only successful entities)
-        - failed_entities: list of ``{"id", "kind", "reason"}`` entries
-          for per-entity LLM failures; ``[]`` on the happy path
+    Returns ``{model_id, in_scope, assets_reevaluated,
+    attackers_reevaluated, deltas: {assets, attackers}, failed_entities}``:
+    ``in_scope`` how many entities the scope named, ``deltas`` each
+    re-rated entity's factors and composed rating before and after.
     """
+    ids = _class_list(entity_ids)
+    scope: dict[str, Any] = {}
+    if ids:
+        scope["entity_ids"] = ids
+    if unrated_only:
+        scope["unrated_only"] = True
     try:
         client = _get_client()
         # Runs as a background job (scales with entity count); poll it so the
         # work stays off the backend event loop and the transport stays warm.
         started = await client.start_reevaluate_factors(
-            model_id, change_reason=change_reason,
+            model_id, change_reason=change_reason, **scope,
         )
         return await _await_backend_job(client, started["job_id"], ctx)
     except Exception as exc:
@@ -7964,11 +7959,15 @@ async def add_proposed_attacker(
     Name the proposal by its ``credential_classes`` as
     ``get_behavioural_attackers`` lists it (a dismissed one may be added).
     The attacker holds them, with the privileges they give and no position
-    but the tenant-isolation boundaries a per-tenant holder is placed at;
-    its rating factors are left unrated (set them with ``edit_attacker`` or
-    ``reevaluate_threat_model_factors``). Refused with 409 ``not_proposed``
-    when no attacker is proposed for exactly that set now (read the
-    attackers again), 409 ``closure_not_offered``, 422 ``unknown_class``.
+    but the tenant-isolation boundaries a per-tenant holder is placed at.
+    It is rated as ``add_attacker`` rates: one call before the write,
+    charged to the caller, its privileges the ones it holds gives. Where no
+    rating answers, or when a person accepts a parked addition, it is added
+    unrated (``rating_source: "unrated"``), and
+    ``reevaluate_threat_model_factors`` with ``unrated_only`` rates it.
+    Refused with 409 ``not_proposed`` when no attacker is proposed for
+    exactly that set now (read the attackers again), 409
+    ``closure_not_offered``, 422 ``unknown_class``.
 
     A program's addition is a judgment. Unless the workspace's delegation
     policy admits it, it is refused with 403 and an ``escalation_id`` and
@@ -7976,8 +7975,9 @@ async def add_proposed_attacker(
     ``list_proposals``.
 
     Returns ``{model_id, model_version, applies, credential_classes, counts,
-    added}``: how many proposals, dismissals and questions the closure now
-    holds and ``added``, the new attacker's id.
+    added, rating_source}``: how many proposals, dismissals and questions the
+    closure now holds, ``added``, the new attacker's id, and whether a
+    rating answered (``unrated`` when none did).
 
     Args:
         model_id: ID of the threat model.
