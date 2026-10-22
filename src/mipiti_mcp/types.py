@@ -271,6 +271,7 @@ class ReviewQueueResponse(_Base):
     """What needs a person, ranked; each row's ``item_type`` names its kind
     (escalation, proposal, unaccepted_assumption, open_assumption,
     behavioural_question, behavioural_link, not_applicable_refuted,
+    position_disagreement, behavioural_attacker, inventory_judgement,
     stale_control)."""
     items: list[dict[str, Any]] = []
 

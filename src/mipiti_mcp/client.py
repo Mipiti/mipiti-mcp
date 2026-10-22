@@ -3258,16 +3258,72 @@ class MipitiClient:
 
     async def dismiss_proposed_attacker(
         self, model_id: str, credential_classes: list[str], reason: str,
+        zones: list[str] | None = None,
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/attackers/proposals/dismiss.
 
         Dismisses the attacker the closure proposes for the credential set,
-        with why. Creates a model version.
+        with why; ``zones`` dismisses those zones of the grouped proposal
+        alone, sent only when given. Creates a model version.
         """
+        body: dict[str, Any] = {"credential_classes": list(credential_classes),
+                                "reason": reason}
+        if zones:
+            body["zones"] = list(zones)
         return await self._post(
-            self._behavioural(model_id, "/attackers/proposals/dismiss"),
-            {"credential_classes": list(credential_classes), "reason": reason},
-        )
+            self._behavioural(model_id, "/attackers/proposals/dismiss"), body)
+
+    # ------------------------------------------------------------------
+    # Inventory judgements
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _inventory(model_id: str, tail: str) -> str:
+        return f"/api/models/{model_id}/inventory{tail}"
+
+    async def get_inventory_judgements(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/inventory/judgements.
+
+        Read-only. What the per-entity checks found about duplicate entries
+        and taxonomy tags, with the decisions and declarations in force.
+        """
+        return await self._get(self._inventory(model_id, "/judgements"))
+
+    async def request_inventory_checks(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/inventory/judgements/request.
+
+        Queues the checks the inventory lacks. Returns ``{model_id, queued,
+        platform}``.
+        """
+        return await self._post(self._inventory(model_id, "/judgements/request"), {})
+
+    async def decide_inventory_pair(
+        self, model_id: str, entity_kind: str, a: str, b: str, verdict: str,
+        rationale: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/inventory/pairs.
+
+        Decides that two entries of one kind are, or are not, one entity; a
+        refusal surfaces as an HTTP 403 whose detail carries
+        ``escalation_id``.
+        """
+        return await self._post(self._inventory(model_id, "/pairs"), {
+            "entity_kind": entity_kind, "a": a, "b": b, "verdict": verdict,
+            "rationale": rationale})
+
+    async def declare_inventory_tags(
+        self, model_id: str, entity_kind: str, entity_id: str, tags: list[dict],
+        rationale: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/inventory/tags.
+
+        Declares the taxonomy primitives an entity answers, each ``{primitive,
+        implied_type}``; a refusal surfaces as an HTTP 403 whose detail
+        carries ``escalation_id``.
+        """
+        return await self._post(self._inventory(model_id, "/tags"), {
+            "entity_kind": entity_kind, "entity_id": entity_id,
+            "tags": list(tags), "rationale": rationale})
 
     async def get_control_delta(self, model_id: str, control_id: str) -> dict:
         """GET /api/models/{model_id}/behavioural-model/controls/{control_id}/delta.

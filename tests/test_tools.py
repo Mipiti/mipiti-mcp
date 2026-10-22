@@ -3905,9 +3905,9 @@ class TestDecideReconciliationCandidate:
 
 class TestApplyCertainReconciliationMatch:
     @pytest.mark.asyncio
-    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+    async def test_happy_path_names_the_model_and_keeps_the_rest(self) -> None:
         envelope = {
-            "model": {"id": "tm-001", "assets": [{"id": "A1"}]},
+            "model": {"id": "tm-001", "version": 4, "assets": [{"id": "A1"}]},
             "controls_carried": 2,
             "controls_orphaned": 1,
             "orphaned_control_ids": ["CTRL-09"],
@@ -3923,7 +3923,7 @@ class TestApplyCertainReconciliationMatch:
                 own_qid="child:A1",
                 inherited_qid="parent:A1",
             )
-        assert result == envelope
+        assert result == {**envelope, "model": {"id": "tm-001", "version": 4}}
         mock.apply_certain_reconciliation_match.assert_awaited_once_with(
             "tm-001", "assets", "child:A1", "parent:A1",
             confirm_heuristic=False,
@@ -4444,7 +4444,7 @@ class TestListReconciliationRejections:
 
 class TestLiftCompositionEntity:
     @pytest.mark.asyncio
-    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+    async def test_happy_path_names_the_models_and_keeps_the_rest(self) -> None:
         envelope = {
             "lift_id": "lift-XYZ",
             "lca_model": {"id": "tm-lca", "assets": [{"id": "A1"}]},
@@ -4479,7 +4479,9 @@ class TestLiftCompositionEntity:
                 descendant_b_id="tm-db",
                 lca_model_id="tm-lca",
             )
-        assert result == envelope
+        assert result == {**envelope, "lca_model": {"id": "tm-lca"},
+                          "descendant_a_model": {"id": "tm-da"},
+                          "descendant_b_model": {"id": "tm-db"}}
         mock.lift_composition_entity.assert_awaited_once_with(
             "tm-ctx",
             "assets",
@@ -4729,7 +4731,7 @@ class TestLiftCompositionEntity:
 
 class TestSplitCompositionEntity:
     @pytest.mark.asyncio
-    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+    async def test_happy_path_names_the_models_and_keeps_the_rest(self) -> None:
         envelope = {
             "split_id": "split-XYZ",
             "ancestor_model": {"id": "tm-anc", "assets": []},
@@ -4762,7 +4764,8 @@ class TestSplitCompositionEntity:
                 ancestor_local_id="A1",
                 target_descendants=["tm-d1", "tm-d2"],
             )
-        assert result == envelope
+        assert result == {**envelope, "ancestor_model": {"id": "tm-anc"},
+                          "descendant_models": [{"id": "tm-d1"}, {"id": "tm-d2"}]}
         mock.split_composition_entity.assert_awaited_once_with(
             "tm-anc", "assets", "A1", ["tm-d1", "tm-d2"],
         )
@@ -5006,7 +5009,7 @@ class TestPreviewUndoLiftComposition:
 
 class TestUndoLiftCompositionEvent:
     @pytest.mark.asyncio
-    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+    async def test_happy_path_names_the_models_and_keeps_the_rest(self) -> None:
         envelope = {
             "undone_event_id": "undo-001",
             "original_event_id": "lift-XYZ",
@@ -5030,7 +5033,10 @@ class TestUndoLiftCompositionEvent:
                 model_id="tm-lca",
                 event_type="lift", event_id="lift-XYZ",
             )
-        assert result == envelope
+        assert result == {**envelope, "models": {
+            "lca_model": {"id": "tm-lca", "version": 5},
+            "source_descendant_models": [{"id": "tm-da", "version": 7},
+                                         {"id": "tm-db", "version": 7}]}}
         mock.undo_lift.assert_awaited_once_with("tm-lca", "lift-XYZ")
 
     @pytest.mark.asyncio
@@ -5249,7 +5255,7 @@ class TestPreviewUndoSplitComposition:
 
 class TestUndoSplitCompositionEvent:
     @pytest.mark.asyncio
-    async def test_happy_path_returns_envelope_unchanged(self) -> None:
+    async def test_happy_path_names_the_models_and_keeps_the_rest(self) -> None:
         envelope = {
             "undone_event_id": "undo-002",
             "original_event_id": "split-XYZ",
@@ -5277,7 +5283,10 @@ class TestUndoSplitCompositionEvent:
                 model_id="tm-anc",
                 event_type="split", event_id="split-XYZ",
             )
-        assert result == envelope
+        assert result == {**envelope, "models": {
+            "ancestor_model": {"id": "tm-anc", "version": 8},
+            "descendant_models": [{"id": "tm-d1", "version": 6},
+                                  {"id": "tm-d2", "version": 6}]}}
         mock.undo_split.assert_awaited_once_with("tm-anc", "split-XYZ")
 
     @pytest.mark.asyncio
