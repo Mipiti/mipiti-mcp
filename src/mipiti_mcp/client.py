@@ -1942,24 +1942,37 @@ class MipitiClient:
         return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
 
     async def start_reevaluate_factors(
-        self, model_id: str, change_reason: Optional[str] = None,
+        self,
+        model_id: str,
+        change_reason: Optional[str] = None,
+        entity_ids: list[str] | None = None,
+        unrated_only: bool = False,
     ) -> dict:
         """Kick off the bulk factor re-evaluation as a background job.
 
-        Bulk re-runs the LLM factor judgment on every live asset and attacker.
-        It scales with entity count, so it runs as a job (returns
-        ``{"job_id": ...}`` to poll) rather than a long synchronous request the
-        MCP transport would time out. The job result is the response envelope:
-        ``{"model_id", "assets_reevaluated", "attackers_reevaluated", "deltas":
+        Re-runs the LLM factor judgment on the live assets and attackers in
+        scope: every one by default, those ``entity_ids`` names, and of those
+        only the ones nobody rated when ``unrated_only``. An id that names no
+        live asset or attacker is refused (400) before any call. It scales
+        with entity count, so it runs as a job (returns ``{"job_id": ...}`` to
+        poll) rather than a long synchronous request the MCP transport would
+        time out. The job result is the response envelope: ``{"model_id",
+        "in_scope", "assets_reevaluated", "attackers_reevaluated", "deltas":
         {"assets": [...], "attackers": [...]}, "failed_entities": [...]}`` —
-        per-entity soft-fail (a single LLM error surfaces in ``failed_entities``
-        and successful revisions still persist); the job fails only when every
-        live entity failed. Body optional; an omitted ``change_reason`` defaults
-        to ``"LLM factor re-evaluation"``. Soft-deleted entities are skipped.
+        per-entity soft-fail (a single LLM error surfaces in
+        ``failed_entities`` and successful revisions still persist); the job
+        fails only when every entity in scope failed. Body optional; an
+        omitted ``change_reason`` defaults to ``"LLM factor re-evaluation"``.
+        ``entity_ids`` and ``unrated_only`` are sent only when given.
+        Soft-deleted entities are skipped.
         """
         body: dict[str, Any] = {}
         if change_reason is not None:
             body["change_reason"] = change_reason
+        if entity_ids is not None:
+            body["entity_ids"] = list(entity_ids)
+        if unrated_only:
+            body["unrated_only"] = True
         return await self._post(
             f"/api/models/{model_id}/factors/reevaluate-job", body,
         )
@@ -3248,8 +3261,9 @@ class MipitiClient:
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/attackers/proposals/add.
 
-        Adds the attacker the closure proposes for the credential set.
-        Creates a model version.
+        Adds the attacker the closure proposes for the credential set, rated
+        by one call charged to the caller (``rating_source`` says whether a
+        rating answered). Creates a model version.
         """
         return await self._post(
             self._behavioural(model_id, "/attackers/proposals/add"),
