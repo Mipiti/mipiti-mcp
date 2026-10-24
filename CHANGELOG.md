@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.92.0] - 2026-10-24
+
+### Added
+
+- `reevaluate_threat_model_factors` can re-rate only the entities named (`entity_ids`) or only those not yet rated (`unrated_only`). (#335)
+- `add_proposed_attacker` rates the attacker it adds and reports `rating_source`. (#335)
+
 ## [0.91.0] - 2026-10-22
 
 ### Added
