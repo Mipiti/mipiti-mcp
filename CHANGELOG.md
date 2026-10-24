@@ -9,6 +9,17 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.92.0] - 2026-10-24
+
+### Added
+
+- `reevaluate_threat_model_factors` can re-rate only the entities named (`entity_ids`) or only those not yet rated (`unrated_only`). (#335)
+- `add_proposed_attacker` rates the attacker it adds and reports `rating_source`. (#335)
+
+### Fixed
+
+- Requires fastmcp 3.4.10 or later (GHSA-7xgj-8392-5q4r). (#337)
+
 ## [0.91.0] - 2026-10-22
 
 ### Added
