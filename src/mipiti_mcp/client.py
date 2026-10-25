@@ -2182,8 +2182,17 @@ class MipitiClient:
 
     async def assess_model(
         self, model_id: str, summary_only: bool = False,
-        status: str = "", offset: int = 0, limit: int = 0,
+        status: str = "", offset: int = 0, limit: int = 0, snapshot: str = "",
     ) -> _Base:
+        """The model's assessment, or a page of it. A paged read with pages
+        left names a ``snapshot`` of the whole assessment; ``snapshot`` passes
+        it back, so a later page is served from it, as of its
+        ``evaluated_at``, and is sent only when given.
+
+        A snapshot that expired, or is not this model's, is an answer, not an
+        error: the 410 comes back as ``{"http_status": 410, "code":
+        "snapshot_expired", "message"}`` so a caller reads again without it.
+        Any other failure raises."""
         params: dict[str, Any] = {}
         if summary_only:
             params["summary_only"] = "true"
@@ -2193,8 +2202,15 @@ class MipitiClient:
             params["offset"] = offset
         if limit:
             params["limit"] = limit
-        data = await self._post(f"/api/models/{model_id}/assess", params=params)
-        return _Base.model_validate(data)
+        if snapshot:
+            params["snapshot"] = snapshot
+        resp = await self._request_with_idempotency(
+            "POST", f"/api/models/{model_id}/assess", params=params)
+        if resp.status_code == 410:
+            return _Base.model_validate(
+                {"http_status": resp.status_code, **self._refusal(resp)})
+        resp.raise_for_status()
+        return _Base.model_validate(resp.json())
 
     async def get_review_queue(self) -> ReviewQueueResponse:
         data = await self._get("/api/review-queue")

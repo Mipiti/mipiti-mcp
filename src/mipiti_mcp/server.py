@@ -167,7 +167,7 @@ If the alternative drops a framework binding the original carried, the platform 
 
 ## Assurance posture
 
-- `assess_model` — deterministic assessment of all control objectives. Returns mitigated/at_risk/unassessed counts and progressive metrics (defined/implemented/verified COs). Use `summary_only=True` for a compact response with just the counts and a contextual `message` explaining the current state (e.g., "13 controls not implemented, blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate. Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` and `unassessed` COs require action.
+- `assess_model` — deterministic assessment of all control objectives. Returns mitigated/at_risk/unassessed counts and progressive metrics (defined/implemented/verified COs). Use `summary_only=True` for a compact response with just the counts and a contextual `message` explaining the current state (e.g., "13 controls not implemented, blocking 35 COs"). Use `status` to filter, `offset`/`limit` to paginate, passing back the `snapshot` the first page names so every page comes from one evaluation. Each CO assessment includes `mitigated_by: "controls" | "assumption" | null` — `"assumption"` is a fully resolved state, not a gap. Only `at_risk` and `unassessed` COs require action.
 
 **Reachability and risk reason**: Reachability per CO is exposed by `get_reachability_verdicts` (deterministic-computation provenance — re-derived from structural primitives, never persisted). Each CO assessment also includes:
 - `risk_reason` — why a non-mitigated CO is at risk: `missing_controls` (implement controls), `pending_attestation` (submit an attestation for the linked boundary assumption), `expired_attestation` (renew an expired attestation), `unassessed` (generate controls or create an assumption), `coverage_gap` (controls are implemented but do not span the CO's full threat — add controls to close the gap, or dismiss/accept if intentional), `insufficient_by_design` (the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented — a design gap, not an implementation gap; redesign or add controls so the group can span the threat), `no_mitigation_group` (controls address the objective and none of them is grouped, so nothing states which are required together), `awaiting_judgement` (a group is built and nothing has judged whether it covers the objective). `insufficient_by_design` is more binding than `missing_controls` and takes precedence over it.
@@ -3057,6 +3057,7 @@ async def assess_model(
     status: Optional[str] = None,
     offset: int = 0,
     limit: int = 0,
+    snapshot: str = "",
 ) -> dict:
     """Run the deterministic assurance assessment over a threat model. Read-only — no LLM calls, no mutation.
 
@@ -3070,17 +3071,28 @@ async def assess_model(
     Use summary_only=True to get just the counts without per-CO
     assessments.
 
+    Paging: a read with ``limit`` that leaves pages beyond its own names a
+    ``snapshot`` of the whole assessment, with ``snapshot_expires_at``. Pass
+    it back with each later page: the pages are then served from that one
+    evaluation, as of its ``evaluated_at``, so they agree with each other and
+    nothing is evaluated again. A snapshot that expired comes back as
+    ``{http_status: 410, code: "snapshot_expired", message}``: read again
+    without it, from the first page.
+
     Args:
         model_id: ID of the threat model to assess.
         summary_only: If True, return only summary counts (no per-CO details).
         status: Optional filter — "mitigated", "at_risk", or "unassessed".
         offset: Skip the first N control objectives.
         limit: Max control objectives to return (0 = all).
+        snapshot: The ``snapshot`` an earlier page named; empty (default)
+            evaluates the model now.
     """
     try:
         return _dump(await _get_client().assess_model(
             model_id, summary_only=summary_only,
             status=status or "", offset=offset, limit=limit,
+            snapshot=snapshot.strip(),
         ))
     except Exception as exc:
         raise _api_error(exc) from exc
