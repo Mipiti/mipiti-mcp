@@ -1,5 +1,5 @@
 """A paged assessment read passes back the snapshot its first page named, so
-every page comes from one evaluation, and an expired snapshot is an answer."""
+every page comes from one evaluation, and a snapshot not found is an answer."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -44,13 +44,13 @@ async def test_a_later_page_names_the_snapshot(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_an_expired_snapshot_comes_back_as_data(mock_env: None) -> None:
+async def test_a_snapshot_not_found_comes_back_as_data(mock_env: None) -> None:
     respx.post(ASSESS_URL).mock(return_value=httpx.Response(
-        410, json={"detail": {"code": "snapshot_expired", "message": "read again"}}))
+        410, json={"detail": {"code": "snapshot_not_found", "message": "read again"}}))
     out = (await MipitiClient().assess_model(
         "tm-1", offset=1, limit=1, snapshot="snap-1")).model_dump()
     assert out["http_status"] == 410
-    assert out["code"] == "snapshot_expired" and out["message"] == "read again"
+    assert out["code"] == "snapshot_not_found" and out["message"] == "read again"
 
 
 @pytest.mark.asyncio

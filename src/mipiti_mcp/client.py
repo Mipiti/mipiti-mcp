@@ -2189,9 +2189,10 @@ class MipitiClient:
         it back, so a later page is served from it, as of its
         ``evaluated_at``, and is sent only when given.
 
-        A snapshot that expired, or is not this model's, is an answer, not an
-        error: the 410 comes back as ``{"http_status": 410, "code":
-        "snapshot_expired", "message"}`` so a caller reads again without it.
+        A snapshot not found (expired, replaced by newer ones of the model, or
+        not this model's) is an answer, not an error: the 410 comes back as
+        ``{"http_status": 410, "code": "snapshot_not_found", "message"}`` so a
+        caller reads again without it.
         Any other failure raises."""
         params: dict[str, Any] = {}
         if summary_only:

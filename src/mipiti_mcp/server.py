@@ -3075,9 +3075,11 @@ async def assess_model(
     ``snapshot`` of the whole assessment, with ``snapshot_expires_at``. Pass
     it back with each later page: the pages are then served from that one
     evaluation, as of its ``evaluated_at``, so they agree with each other and
-    nothing is evaluated again. A snapshot that expired comes back as
-    ``{http_status: 410, code: "snapshot_expired", message}``: read again
-    without it, from the first page.
+    nothing is evaluated again. A snapshot is kept for 10 minutes, and only
+    the 5 newest of a model, so other paged reads of the model can replace
+    it sooner. One not found comes back as ``{http_status: 410, code:
+    "snapshot_not_found", message}``: read again without it, from the first
+    page.
 
     Args:
         model_id: ID of the threat model to assess.
