@@ -995,6 +995,7 @@ _TOOLS = (
     "request_model_check", "get_model_check", "manage_model_check",
     "get_behavioural_attackers", "answer_attacker_credentials",
     "add_proposed_attacker", "dismiss_proposed_attacker",
+    "split_grouped_attacker", "keep_attacker_whole",
     "get_inventory_judgements", "request_inventory_checks",
     "decide_inventory_pair", "declare_inventory_tags",
 )
@@ -1072,6 +1073,7 @@ def test_judgments_name_the_refusal_and_the_no_retry_rule() -> None:
                  "confirm_behavioural_model", "declare_behavioural_link",
                  "accept_behavioural_link_proposals", "answer_attacker_credentials",
                  "add_proposed_attacker", "dismiss_proposed_attacker",
+                 "split_grouped_attacker", "keep_attacker_whole",
                  "decide_inventory_pair", "declare_inventory_tags"):
         text = _descriptions()[name]
         assert "403" in text and "escalation_id" in text, name
@@ -1207,6 +1209,63 @@ async def test_zones_of_the_grouped_proposal_are_sent_only_when_named(mock_env: 
     assert "zones" not in _body(route)
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_part_is_named_by_its_zone_only_when_given(mock_env: None) -> None:
+    add = respx.post(BASE + "/attackers/proposals/add").mock(
+        return_value=httpx.Response(200, json={"applies": True}))
+    dismiss = respx.post(BASE + "/attackers/proposals/dismiss").mock(
+        return_value=httpx.Response(200, json={"applies": True}))
+    client = MipitiClient()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.add_proposed_attacker(
+            server_version="0", model_id="tm-1", credential_classes="k", zone=" vendor_b ")
+        assert _body(add) == {"credential_classes": ["k"], "zone": "vendor_b"}
+        await server.add_proposed_attacker(server_version="0", model_id="tm-1",
+                                           credential_classes="k")
+        assert _body(add) == {"credential_classes": ["k"]}
+        await server.dismiss_proposed_attacker(
+            server_version="0", model_id="tm-1", credential_classes="k", reason="r",
+            zone="vendor_b")
+        assert _body(dismiss) == {"credential_classes": ["k"], "reason": "r",
+                                  "zone": "vendor_b"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_split_names_each_part_and_keeping_whole_says_why(mock_env: None) -> None:
+    split = respx.post(BASE + "/attackers/T7/split").mock(
+        return_value=httpx.Response(200, json={"applies": True}))
+    keep = respx.post(BASE + "/attackers/T7/split/dismiss").mock(
+        return_value=httpx.Response(200, json={"applies": True}))
+    client = MipitiClient()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.split_grouped_attacker(
+            server_version="0", model_id="tm-1", attacker_id=" T7 ",
+            parts=" host ; vendor_a, vendor_c ;; partner ")
+        assert _body(split) == {"parts": [["host"], ["vendor_a", "vendor_c"], ["partner"]]}
+        await server.keep_attacker_whole(
+            server_version="0", model_id="tm-1", attacker_id="T7", reason=" one supplier ")
+        assert _body(keep) == {"reason": "one supplier"}
+
+
+@pytest.mark.asyncio
+async def test_a_split_missing_what_it_needs_is_refused_before_the_call() -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match="parts"):
+            await server.split_grouped_attacker(
+                server_version="0", model_id="tm-1", attacker_id="T7", parts="host")
+        with pytest.raises(ToolError, match="attacker_id"):
+            await server.split_grouped_attacker(
+                server_version="0", model_id="tm-1", attacker_id=" ", parts="a;b")
+        with pytest.raises(ToolError, match="reason"):
+            await server.keep_attacker_whole(
+                server_version="0", model_id="tm-1", attacker_id="T7", reason=" ")
+    client.split_grouped_attacker.assert_not_awaited()
+    client.keep_attacker_whole.assert_not_awaited()
+
+
 _CLOSURE = {"model_id": "tm-1", "model_version": 7, "applies": True,
             "credential_classes": ["tenant_user"],
             "proposals": [{"kind": "grouped", "zones": ["z1", "z2"],
@@ -1222,6 +1281,10 @@ _CLOSURE = {"model_id": "tm-1", "model_version": 7, "applies": True,
     ("add_proposed_attacker", "add_proposed_attacker", {}, {"added": "T9"}),
     ("dismiss_proposed_attacker", "dismiss_proposed_attacker",
      {"reason": "r", "zones": "z3"}, {"dismissed_set": [], "dismissed_zones_now": ["z3"]}),
+    ("split_grouped_attacker", "split_grouped_attacker",
+     {"attacker_id": "T7", "parts": "z1;z2"}, {"split": "T7", "added": ["T8", "T9"]}),
+    ("keep_attacker_whole", "keep_attacker_whole",
+     {"attacker_id": "T7", "reason": "r"}, {"dismissed_split": "T7"}),
 ])
 async def test_an_act_on_the_closure_answers_with_counts(tool, method, kwargs, extra) -> None:
     client = _client(**{method: {**_CLOSURE, **extra}})
@@ -1276,5 +1339,9 @@ def test_the_attacker_closure_is_published() -> None:
     instructions = build_instructions("pro", "user")
     for name in ("get_behavioural_attackers", "answer_attacker_credentials",
                  "add_proposed_attacker", "dismiss_proposed_attacker",
+                 "split_grouped_attacker", "keep_attacker_whole",
                  "privileges_from_holdings"):
         assert f"`{name}`" in instructions, name
+    assert "``ambiguous_proposal``" in _descriptions()["add_proposed_attacker"]
+    for term in ("``review_stale``", "``split_not_offered``"):
+        assert term in _descriptions()["split_grouped_attacker"], term
