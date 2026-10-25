@@ -3257,35 +3257,69 @@ class MipitiClient:
         )
 
     async def add_proposed_attacker(
-        self, model_id: str, credential_classes: list[str],
+        self, model_id: str, credential_classes: list[str], zone: str | None = None,
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/attackers/proposals/add.
 
         Adds the attacker the closure proposes for the credential set, rated
         by one call charged to the caller (``rating_source`` says whether a
-        rating answered). Creates a model version.
+        rating answered); ``zone``, sent only when given, names a part of the
+        open zones where another proposal holds the same set. Creates a model
+        version.
         """
+        body: dict[str, Any] = {"credential_classes": list(credential_classes)}
+        if zone:
+            body["zone"] = zone
         return await self._post(
-            self._behavioural(model_id, "/attackers/proposals/add"),
-            {"credential_classes": list(credential_classes)},
-        )
+            self._behavioural(model_id, "/attackers/proposals/add"), body)
 
     async def dismiss_proposed_attacker(
         self, model_id: str, credential_classes: list[str], reason: str,
-        zones: list[str] | None = None,
+        zones: list[str] | None = None, zone: str | None = None,
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/attackers/proposals/dismiss.
 
         Dismisses the attacker the closure proposes for the credential set,
-        with why; ``zones`` dismisses those zones of the grouped proposal
-        alone, sent only when given. Creates a model version.
+        with why; ``zones`` dismisses those zones of a part of the open zones
+        alone, and ``zone`` names the part; each sent only when given.
+        Creates a model version.
         """
         body: dict[str, Any] = {"credential_classes": list(credential_classes),
                                 "reason": reason}
         if zones:
             body["zones"] = list(zones)
+        if zone:
+            body["zone"] = zone
         return await self._post(
             self._behavioural(model_id, "/attackers/proposals/dismiss"), body)
+
+    async def split_grouped_attacker(
+        self, model_id: str, attacker_id: str, parts: list[list[str]],
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/attackers/{attacker_id}/split.
+
+        Splits a grouped attacker into the parts offered, each named by its
+        zones as reviewed: the parts added (one rating call each, charged to
+        the caller), its control mappings carried to the parts of its
+        privilege, and it removed. Creates a model version.
+        """
+        return await self._post(
+            self._behavioural(model_id, f"/attackers/{attacker_id}/split"),
+            {"parts": [list(p) for p in parts]},
+        )
+
+    async def keep_attacker_whole(
+        self, model_id: str, attacker_id: str, reason: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/attackers/{attacker_id}/split/dismiss.
+
+        Keeps a grouped attacker whole, with why: its split is no longer
+        offered while that stands. Creates a model version.
+        """
+        return await self._post(
+            self._behavioural(model_id, f"/attackers/{attacker_id}/split/dismiss"),
+            {"reason": reason},
+        )
 
     # ------------------------------------------------------------------
     # Inventory judgements
