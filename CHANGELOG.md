@@ -9,6 +9,18 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.93.0] - 2026-10-25
+
+### Added
+
+- `split_grouped_attacker`: split an attacker standing for zones of several capabilities into one attacker per capability, its control mappings moved to the parts. (#340)
+- `keep_attacker_whole`: keep such an attacker whole, with why. (#340)
+- `add_proposed_attacker` and `dismiss_proposed_attacker` take `zone`, naming a part where two proposals hold the same credential classes. (#340)
+
+### Changed
+
+- The release workflow publishes with pypa/gh-action-pypi-publish v1.14.3 (GHSA-5xjx-3w67-w9x9). (#339)
+
 ## [0.92.0] - 2026-10-24
 
 ### Added
