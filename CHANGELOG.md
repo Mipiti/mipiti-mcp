@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.94.0] - 2026-10-25
+
+### Added
+
+- `assess_model` takes `snapshot`: pass back the one a paged read names, and every page comes from one evaluation. A snapshot no longer served comes back as data (`http_status: 410`, `code: snapshot_not_found`): read again from the first page. (#342)
+
 ## [0.93.0] - 2026-10-25
 
 ### Added
