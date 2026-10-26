@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.95.1] - 2026-10-26
+
+### Changed
+
+- `apply_entity_proposals` documents the refusal of a correction that names internal identifiers of the behavioural model, and a defect withheld without a correction. (#346)
+
 ## [0.95.0] - 2026-10-26
 
 ### Added
