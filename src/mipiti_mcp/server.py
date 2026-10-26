@@ -8354,10 +8354,16 @@ async def apply_entity_proposals(
     it is an edit of the entity's own words (an asset's name, description and
     security properties; an attacker's capability, position and archetype):
     it never moves a position, credentials, a rating or components, and the
-    corrected text is checked again as any edit is.
+    corrected text is checked again as any edit is. A ``defect`` may carry no
+    ``proposed``: the correction the check found named internal identifiers
+    of the behavioural model rather than the system's words, and was
+    withheld; its warning says so.
 
     Each entity reports one ``outcome``: ``applied``; ``rejected`` (the
-    correction reads as a different entity, or duplicates one); ``stale``
+    correction reads as a different entity, or duplicates one, or names
+    internal identifiers of the behavioural model, which ``reason`` lists:
+    check the entity again with ``revalidate_entity_quality`` for a
+    correction in words); ``stale``
     (the entity, or what it is judged with, changed since the verdict: read
     it again); ``none`` (no correction stands); ``unavailable`` (the identity
     check could not answer: try again). One entity never stops the others.
