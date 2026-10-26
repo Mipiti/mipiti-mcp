@@ -110,13 +110,18 @@ async def test_a_read_within_the_bound_is_returned_whole() -> None:
 
 @pytest.mark.asyncio
 async def test_a_read_past_the_bound_cuts_in_order_and_says_so() -> None:
+    """The collections are compacted before the page of answers asked for is
+    dropped: an entity is read whole with get_entity, the answers by no other
+    read."""
     out = await _read(_large_model(assets=150, attackers=40, clarifications=60),
                       include_cos=True, include_clarifications=True)
     assert len(json.dumps(out)) <= server._MODEL_READ_MAX_CHARS
     fields = [c["field"] for c in out["cuts"]]
-    assert fields[:3] == ["control_objectives", "clarifications", "assets"]
-    assert "control_objectives" not in out and "clarifications" not in out
-    assert "clarifications_next_offset" not in out
+    assert fields[:2] == ["control_objectives", "assets"]
+    assert "control_objectives" not in out
+    # Compacting was enough: the page of answers asked for is served.
+    assert "clarifications" not in fields
+    assert len(out["clarifications"]) == 50 and out["clarifications_next_offset"] == 50
     assert out["clarification_count"] == 60
     # Every asset is still named, its text read whole with get_entity.
     assert len(out["assets"]) == 150
@@ -137,6 +142,20 @@ async def test_the_largest_collection_is_compacted_first() -> None:
     assert out["attackers"][5] == {"id": "T-005",
                                    "capability": "From zone 5, the attacker can read records."}
     assert out["assets"][1]["description"] == "x" * 1500
+
+
+def test_the_answers_are_dropped_only_when_compacting_is_not_enough() -> None:
+    long_answer = "y" * 4000
+    read = {"id": "m",
+            "assets": [{"id": f"A{i}", "name": "n", "description": "d" * 3000}
+                       for i in range(20)],
+            "clarifications": [{"question_id": f"q{i}", "answer": long_answer}
+                               for i in range(60)],
+            "clarifications_next_offset": 60}
+    cut = server._bounded_model(read)
+    assert [c["field"] for c in cut["cuts"]] == ["assets", "clarifications"]
+    assert "clarifications" not in cut and "clarifications_next_offset" not in cut
+    assert next(c for c in cut["cuts"] if c["field"] == "clarifications")["omitted"] == 60
 
 
 def test_the_bound_is_measured_on_what_it_returns() -> None:

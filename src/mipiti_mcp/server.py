@@ -89,7 +89,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
-- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` must name the *operations performable from its position* — phrase it as "From [position], the attacker can [concrete operations] …" — not just the access or vantage point. Assets and attackers that fall short are flagged with a `quality_warning` and yield under-specified control objectives; sharpen them with `edit_asset` / `edit_attacker`, or re-run the check with `revalidate_entity_quality`.
+- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words — apply them with `apply_entity_proposals`, naming the verdict's `input_hash`; `question`, one question for the owner — answer it with `answer_entity_question` from the documentation or the code, never a guess; or `invalid`. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. Re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
@@ -756,10 +756,12 @@ def _compact(entity: Any, keep: tuple) -> Any:
 def _bounded_model(read: dict) -> dict:
     """``read`` within ``_MODEL_READ_MAX_CHARS``, every cut stated under
     ``cuts`` with the read that serves what it left out: the objectives first
-    (``get_control_objectives``), then the page of clarifications (a smaller
-    page here), then each entity collection, largest first, compacted to the
-    fields that name its entities (``get_entity``). A read within the bound is
-    returned as it is, with no ``cuts``."""
+    (``get_control_objectives``), then each entity collection, largest first,
+    compacted to the fields that name its entities (``get_entity`` reads one
+    whole), and only then, if the read is still over the bound, the page of
+    clarifications asked for (a smaller page here). The clarifications go last
+    because no other read serves them as this one does. A read within the
+    bound is returned as it is, with no ``cuts``."""
     if _chars(read) <= _MODEL_READ_MAX_CHARS:
         return read
     out = dict(read)
@@ -768,11 +770,6 @@ def _bounded_model(read: dict) -> dict:
         cuts.append({"field": "control_objectives",
                      "omitted": len(out.pop("control_objectives") or []),
                      "read_with": "get_control_objectives (offset, limit)"})
-    if _chars(out) > _MODEL_READ_MAX_CHARS and "clarifications" in out:
-        out.pop("clarifications_next_offset", None)
-        cuts.append({"field": "clarifications",
-                     "omitted": len(out.pop("clarifications") or []),
-                     "read_with": "get_threat_model (a smaller clarifications_limit)"})
     for name in sorted(_COMPACT_FIELDS, key=lambda n: -_chars(out.get(n) or [])):
         if _chars(out) <= _MODEL_READ_MAX_CHARS:
             break
@@ -783,6 +780,11 @@ def _bounded_model(read: dict) -> dict:
         out[name] = [_compact(e, keep) for e in entities]
         cuts.append({"field": name, "compacted": len(entities), "kept": list(keep),
                      "read_with": "get_entity"})
+    if _chars(out) > _MODEL_READ_MAX_CHARS and "clarifications" in out:
+        out.pop("clarifications_next_offset", None)
+        cuts.append({"field": "clarifications",
+                     "omitted": len(out.pop("clarifications") or []),
+                     "read_with": "get_threat_model (a smaller clarifications_limit)"})
     out["cuts"] = cuts
     return out
 
@@ -5718,7 +5720,12 @@ async def get_entity(
 
     - ``asset`` — the asset's typed fields. Soft-deleted assets carry
       ``deleted: true``; the caller decides whether to surface them.
-      ``entity_id`` e.g. ``A-01``.
+      ``entity_id`` e.g. ``A-01``. A live asset or attacker also carries
+      ``quality``: the quality check's ``outcome`` (``clean``, ``advice``,
+      ``defect``, ``question``, ``invalid``, or ``unchecked`` while none
+      answers it as it stands), the ``warning``, the ``proposed`` correction
+      or the ``question``, and the ``input_hash`` that
+      ``apply_entity_proposals`` and ``answer_entity_question`` name.
     - ``attacker`` — the attacker with its factor decomposition, its
       ``surface_extent`` (``unset`` / ``point`` / ``whole``) and
       ``surface_extent_source``, which says whether a person attested it.
@@ -8326,6 +8333,104 @@ async def declare_inventory_tags(
     try:
         return _dump(await _get_client().declare_inventory_tags(
             model_id, entity_kind, entity_id.strip(), parsed, rationale=rationale))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def apply_entity_proposals(
+    server_version: str,
+    model_id: str,
+    proposals: str,
+) -> dict:
+    """Apply the corrections the quality check proposed for assets and
+    attackers. Mutating: creates one new model version for the whole batch.
+
+    An asset or attacker the check finds defective carries a proposed
+    correction of its words: read it as ``quality`` on ``get_entity`` (or in
+    the build proposal's flagged entities, or the review queue's
+    ``entity_quality`` row), where ``outcome`` is ``defect``, ``proposed``
+    holds the corrected fields and ``input_hash`` names the verdict. Applying
+    it is an edit of the entity's own words (an asset's name, description and
+    security properties; an attacker's capability, position and archetype):
+    it never moves a position, credentials, a rating or components, and the
+    corrected text is checked again as any edit is.
+
+    Each entity reports one ``outcome``: ``applied``; ``rejected`` (the
+    correction reads as a different entity, or duplicates one); ``stale``
+    (the entity, or what it is judged with, changed since the verdict: read
+    it again); ``none`` (no correction stands); ``unavailable`` (the identity
+    check could not answer: try again). One entity never stops the others.
+
+    Returns ``{results: [{entity_id, outcome, reason?}], version?}``, the
+    model version written when anything was applied.
+
+    Args:
+        model_id: ID of the threat model.
+        proposals: JSON array of ``{"entity_id", "input_hash"}``, each
+            ``input_hash`` as the verdict was read.
+    """
+    parsed = _json_value(proposals, "proposals", list,
+                         '[{"entity_id": "A-03", "input_hash": "..."}]')
+    if not parsed:
+        raise ToolError("proposals names at least one entity.")
+    for p in parsed:
+        if not (isinstance(p, dict) and str(p.get("entity_id", "")).strip()
+                and str(p.get("input_hash", "")).strip()):
+            raise ToolError("each proposal is an object with an entity_id and an input_hash.")
+    try:
+        answer = await _get_client().apply_entity_proposals(
+            model_id, [{"entity_id": str(p["entity_id"]).strip(),
+                        "input_hash": str(p["input_hash"]).strip()} for p in parsed])
+    except Exception as exc:
+        raise _api_error(exc) from exc
+    return _without_models(_dump(answer)) if isinstance(answer, dict) else answer
+
+
+@mcp.tool()
+async def answer_entity_question(
+    server_version: str,
+    model_id: str,
+    entity_id: str,
+    text: str,
+    input_hash: str,
+) -> dict:
+    """Answer the question the quality check asked about an asset or
+    attacker. Mutating; creates no model version.
+
+    Where the check finds an entity real but too under-specified to correct,
+    its ``quality`` (on ``get_entity``, the build proposal's flagged entities
+    or the review queue's ``entity_quality`` row) has ``outcome``
+    ``question``, the ``question`` and the ``input_hash`` of the verdict.
+    Answer it from the documentation or the code, stating what the system
+    does; never guess. The answer is kept with the entity, shown to every
+    later check of it, and queues that entity's check again (and no other's),
+    which may then propose a correction to apply with
+    ``apply_entity_proposals``.
+
+    Refused 409 ``stale`` when the entity, or what it is judged with, changed
+    since the question (read it again), 409 ``no_question`` when none stands,
+    404 for an entity the model does not hold.
+
+    Returns ``{entity_id, answer_id, answered_at, question, queued}``.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_id: The asset or attacker (e.g. "T-04").
+        text: The answer (at most 4000 characters).
+        input_hash: The verdict's ``input_hash`` as it was read.
+    """
+    if not entity_id.strip():
+        raise ToolError("entity_id is required.")
+    if not text.strip():
+        raise ToolError("text is required: the answer.")
+    if len(text) > 4000:
+        raise ToolError("text is at most 4000 characters.")
+    if not input_hash.strip():
+        raise ToolError("input_hash is required: the verdict's, as it was read.")
+    try:
+        return _dump(await _get_client().answer_entity_question(
+            model_id, entity_id.strip(), text.strip(), input_hash.strip()))
     except Exception as exc:
         raise _api_error(exc) from exc
 
