@@ -9,6 +9,17 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.95.0] - 2026-10-26
+
+### Added
+
+- `apply_entity_proposals` applies the corrections the quality check proposed for assets and attackers, named by `entity_id` and the verdict's `input_hash` (read as `quality` on `get_entity`), in one model version, with an outcome per entity. (#344)
+- `answer_entity_question` answers the question the quality check asked about an asset or attacker; the entity is checked again with the answer, and no version is created. (#344)
+
+### Changed
+
+- A model read past its size bound compacts the entity collections before it drops the page of clarifications asked for. (#344)
+
 ## [0.94.0] - 2026-10-25
 
 ### Added
