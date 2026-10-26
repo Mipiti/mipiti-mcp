@@ -86,7 +86,7 @@ uvx mipiti-mcp
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->156<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->158<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -111,6 +111,8 @@ uvx mipiti-mcp
 | `add_asset` / `edit_asset` / `remove_entity (entity_type="asset")` | Targeted single-entity changes for assets. Creates a new version. Adds and edits of assets and attackers, and `remove_entity` of every type, run as background jobs and report progress while they wait; a job a client stops waiting for finishes or fails on its own. Every entity write (of any kind, `restore_entity` included) answers with the model's id, version and title and, under `entities`, the records it wrote, not the whole model. |
 | `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. `surface_extent` (`whole`: the attacker's operations range over any entry of the interface it reaches; `point`: one named entry) is a declaration: supplying it requires `change_reason` on either tool, a person's call attests it, and an attested `whole` makes the objectives that attacker anchors for-all obligations. A create declares only `whole`; narrowing is an `edit_attacker` call, checked against the objectives the attacker anchors. `edit_attacker` also attests the position (`attest_position`), the privileges (`attest_privileges`) or the extent (`attest_surface_extent`) as they stand, and naming `trust_boundary_ids` on either tool attests the position it writes. Every attestation (a seal, a position, privileges, an extent) is a judgment: a program takes it only under a workspace delegation rule; otherwise its edit lands unattested and the answer's `attestation` names the escalation parked for a person, never a 403. A change to what was attested voids the attestation. |
 | `revalidate_entity_quality` | Judge every live asset's and attacker's quality warning again, in the background. Creates no version; returns `{accepted, queued, model}` (`model` its id, version and title), and the refreshed warnings appear on the next read of the model. |
+| `apply_entity_proposals` | Apply the corrections the quality check proposed for assets and attackers, each named by `entity_id` and the verdict's `input_hash` (read as `quality` on `get_entity`), in one new model version. A correction changes only the entity's words, never its position, credentials, rating or components. Each entity reports `applied`, `rejected`, `stale`, `none` or `unavailable`; one never stops the others. |
+| `answer_entity_question` | Answer the question the quality check asked about an asset or attacker, naming the verdict's `input_hash`. Kept with the entity and shown to every later check of it; queues that entity's check alone. Creates no version. Refused 409 `stale` or `no_question`. |
 | `get_entity` | Read one entity of any kind. An attacker also carries `surface_extent` and `surface_extent_source`, which says whether a person attested it. |
 
 ### Trust Boundaries

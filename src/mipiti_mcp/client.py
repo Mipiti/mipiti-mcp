@@ -3390,6 +3390,26 @@ class MipitiClient:
             "entity_kind": entity_kind, "entity_id": entity_id,
             "tags": list(tags), "rationale": rationale})
 
+    async def apply_entity_proposals(self, model_id: str, proposals: list[dict]) -> dict:
+        """POST /api/models/{model_id}/entities/apply-proposals.
+
+        Applies the quality check's correction of each named entity, each
+        ``{entity_id, input_hash}``, in one new model version; answers one
+        outcome per entity.
+        """
+        return await self._post(f"/api/models/{model_id}/entities/apply-proposals",
+                                {"proposals": [dict(p) for p in proposals]})
+
+    async def answer_entity_question(self, model_id: str, entity_id: str, text: str,
+                                     input_hash: str) -> dict:
+        """POST /api/models/{model_id}/entities/{entity_id}/answer.
+
+        Answers the question the quality check asked about an entity, under
+        the ``input_hash`` its verdict was read with.
+        """
+        return await self._post(f"/api/models/{model_id}/entities/{entity_id}/answer",
+                                {"text": text, "input_hash": input_hash})
+
     async def get_control_delta(self, model_id: str, control_id: str) -> dict:
         """GET /api/models/{model_id}/behavioural-model/controls/{control_id}/delta.
 
