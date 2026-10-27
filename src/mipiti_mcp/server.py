@@ -15,6 +15,7 @@ from anyio import BrokenResourceError, ClosedResourceError
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
+from . import catalog
 from .assertion_types import (
     COVERS_MAX,
     COVERS_PATTERN,
@@ -31,15 +32,12 @@ from .types import ChatResponse
 # Instructions (tier-aware)
 # ------------------------------------------------------------------
 
-# SERVER_VERSION env var is the authoritative version identifier sent
-# to clients on every tool call. Required at startup. The value must
-# change exactly when this package's runtime behavior changes —
-# instructions block, tool docstrings, tool schemas, tool function
-# bodies — so connected clients invalidate cached MCP guidance and
-# pick up the new surface. A commit SHA of this package's source is
-# the typical value; deployment tooling sets it. Local runs can set
-# it to any string ("dev", a feature-branch name, etc.).
-_SERVER_VERSION = os.environ["SERVER_VERSION"]
+# The version sent to clients on every tool call names the catalog a client
+# pins when its session starts: every tool's contract and the instructions
+# (catalog.py). It is computed once the tools are registered, at the end of
+# this module, and written into the instructions where this marker stands.
+# SERVER_VERSION, where set, overrides it (tests and local runs).
+_VERSION_MARKER = "<<SERVER_VERSION>>"
 
 _INSTRUCTIONS_UPDATE_MESSAGE = (
     "Server instructions have been updated since your session started. "
@@ -58,7 +56,7 @@ _INSTRUCTIONS_UPDATE_MESSAGE = (
 _INSTRUCTIONS_BASE = """\
 Mipiti generates threat models from feature descriptions and tracks security controls with machine-verifiable assertions.
 
-Every tool call must include `server_version` set to """ + f"`{_SERVER_VERSION}`" + """. If the server responds with an `instructions_updated` field, relay the message to the user, in a way appropriate to your environment, then continue with the current task.
+Every tool call must include `server_version` set to `""" + _VERSION_MARKER + """`. If the server responds with an `instructions_updated` field, relay the message to the user, in a way appropriate to your environment, then continue with the current task.
 
 ## When to use
 
@@ -89,7 +87,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
-- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words — apply them with `apply_entity_proposals`, naming the verdict's `input_hash`; `question`, one question for the owner — answer it with `answer_entity_question` from the documentation or the code, never a guess; or `invalid`. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. Re-run the check with `revalidate_entity_quality`.
+- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words — apply them with `apply_entity_proposals`, naming the verdict's `input_hash`; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. Re-run the check with `revalidate_entity_quality`.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
@@ -397,14 +395,23 @@ def build_instructions(tier: str = "pro", role: str = "user") -> str:
               regardless of tier.
     """
     if tier in ("pro", "organization", "enterprise") or role in ("admin", "superadmin"):
-        return _INSTRUCTIONS_BASE + _INSTRUCTIONS_COMPLIANCE + _INSTRUCTIONS_ASYNC
-    return _INSTRUCTIONS_BASE + _INSTRUCTIONS_ASYNC
+        text = _INSTRUCTIONS_BASE + _INSTRUCTIONS_COMPLIANCE + _INSTRUCTIONS_ASYNC
+    else:
+        text = _INSTRUCTIONS_BASE + _INSTRUCTIONS_ASYNC
+    return text.replace(_VERSION_MARKER, _SERVER_VERSION)
 
 
-mcp = FastMCP(
-    "Mipiti",
-    instructions=build_instructions("pro"),
-)
+#: The instructions' text a catalog covers: every tier's parts, before the
+#: version is written into them.
+_INSTRUCTION_PARTS = [_INSTRUCTIONS_BASE, _INSTRUCTIONS_COMPLIANCE, _INSTRUCTIONS_ASYNC]
+
+# Set at the end of this module, once every tool is registered.
+_SERVER_VERSION = ""
+CATALOG: dict = {}
+CATALOG_VERSION = ""
+_CATALOG_HISTORY: dict = {}
+
+mcp = FastMCP("Mipiti")
 
 
 # ------------------------------------------------------------------
@@ -415,26 +422,46 @@ from fastmcp.server.middleware import Middleware
 
 
 class VersionCheckMiddleware(Middleware):
-    """Block tool calls from clients with stale instructions.
+    """Run a tool call only under the contract its session pinned
+    (catalog.compatible).
 
-    If the client's server_version doesn't match, return the update
-    message WITHOUT executing the tool. This forces reconnection
-    before serving data under wrong instructions.
+    A call naming the current version runs. A call naming a recorded catalog
+    in which the called tool's contract is the one it has now runs, and its
+    result carries ``instructions_updated``: the session's instructions are
+    older, its tool is not. Any other call is refused with the update message
+    without executing the tool: an unknown or missing version, or a tool
+    whose contract changed. A missing version is refused, never treated as
+    current, or omitting it would run a call under any contract.
     """
 
     async def on_call_tool(self, context, call_next):
-        args = (context.message.arguments or {}) if context.message and hasattr(context.message, "arguments") else {}
-        client_version = args.get("server_version", "")
-        # Empty client_version is treated as stale (rejected) — the prior
-        # ``if client_version and ...`` guard let agents bypass the safety
-        # check by omitting the field. The pin exists so the server can
-        # refuse calls under a stale tool catalog (renamed params, new
-        # required fields, removed tools); a bypass via empty defeats
-        # that guarantee.
-        if client_version != _SERVER_VERSION:
-            from fastmcp.exceptions import ToolError
+        message = context.message if context else None
+        args = (getattr(message, "arguments", None) or {}) if message else {}
+        tool = getattr(message, "name", "") or ""
+        decision = catalog.compatible(
+            args.get("server_version", "") or "", tool, _SERVER_VERSION, CATALOG,
+            _CATALOG_HISTORY)
+        if decision == "refuse":
             raise ToolError(_INSTRUCTIONS_UPDATE_MESSAGE)
-        return await call_next(context)
+        result = await call_next(context)
+        if decision == "notice":
+            return _with_notice(result)
+        return result
+
+
+def _with_notice(result):
+    """The result with ``instructions_updated`` beside it: a content block the
+    agent reads, and the same key in the result's metadata."""
+    from fastmcp.tools import ToolResult
+    from mcp.types import TextContent
+
+    notice = {"instructions_updated": _INSTRUCTIONS_UPDATE_MESSAGE}
+    return ToolResult(
+        content=[*result.content, TextContent(type="text", text=json.dumps(notice))],
+        structured_content=result.structured_content,
+        meta={**(result.meta or {}), **notice},
+        is_error=result.is_error,
+    )
 
 
 mcp.add_middleware(VersionCheckMiddleware())
@@ -8401,22 +8428,28 @@ async def answer_entity_question(
     text: str,
     input_hash: str,
 ) -> dict:
-    """Answer the question the quality check asked about an asset or
-    attacker. Mutating; creates no model version.
+    """Answer, with a fact, the flag the quality check raised about an asset
+    or attacker. Mutating; creates no model version.
 
-    Where the check finds an entity real but too under-specified to correct,
-    its ``quality`` (on ``get_entity``, the build proposal's flagged entities
-    or the review queue's ``entity_quality`` row) has ``outcome``
-    ``question``, the ``question`` and the ``input_hash`` of the verdict.
-    Answer it from the documentation or the code, stating what the system
-    does; never guess. The answer is kept with the entity, shown to every
-    later check of it, and queues that entity's check again (and no other's),
-    which may then propose a correction to apply with
-    ``apply_entity_proposals``.
+    An entity's ``quality`` (on ``get_entity``, the build proposal's flagged
+    entities or the review queue's ``entity_quality`` row) carries the
+    verdict's ``outcome`` and ``input_hash``. Any flag may be answered:
+    ``question`` (answer its ``question``), ``defect`` or ``invalid`` (answer
+    its ``warning``, for instance where it reads a true claim as not
+    established and the documentation or the code establishes it). Answer
+    from the documentation or the code, stating what the system does and
+    where that is shown; never guess, and never weaken a true claim to clear
+    a flag. The answer is kept with the entity, shown to every later check of
+    it, and queues that entity's check again (and no other's). It decides
+    nothing: the verdict stands until that check runs, and the check may
+    still flag the entity, or propose a correction to apply with
+    ``apply_entity_proposals``. Where a call's response is lost, read the
+    entity before answering again.
 
     Refused 409 ``stale`` when the entity, or what it is judged with, changed
-    since the question (read it again), 409 ``no_question`` when none stands,
-    404 for an entity the model does not hold.
+    since the verdict (read it again), 409 ``not_flagged`` when no question,
+    defect or invalid verdict stands, 404 for an entity the model does not
+    hold.
 
     Returns ``{entity_id, answer_id, answered_at, question, queued}``.
 
@@ -8801,6 +8834,17 @@ async def manage_model_check(
         return _dump(await client.discard_model_check(model_id))
     except Exception as exc:
         raise _api_error(exc) from exc
+
+
+# ------------------------------------------------------------------
+# The catalog and its version (every tool is registered above)
+# ------------------------------------------------------------------
+
+CATALOG = catalog.current(mcp, _INSTRUCTION_PARTS)
+CATALOG_VERSION = catalog.version_of(CATALOG)
+_SERVER_VERSION = os.environ.get("SERVER_VERSION") or CATALOG_VERSION
+_CATALOG_HISTORY = catalog.load_history()
+mcp.instructions = build_instructions("pro")
 
 
 # ------------------------------------------------------------------

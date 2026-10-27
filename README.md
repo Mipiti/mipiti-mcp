@@ -67,7 +67,11 @@ uvx mipiti-mcp
 |----------|----------|---------|-------------|
 | `MIPITI_API_KEY` | Yes | — | Your Mipiti API key |
 | `MIPITI_API_URL` | No | `https://api.mipiti.io` | API base URL |
-| `SERVER_VERSION` | Yes | — | Identifier for the running server's MCP surface (instructions, tool docstrings, schemas, behavior). Sent on every tool call. Clients invalidate cached MCP guidance when this changes. For local runs, any sentinel string is fine (`"local"`, `"dev"`). For deployed runs, use a value that changes when this package's source changes (commit SHA is typical). |
+| `SERVER_VERSION` | No | the catalog's digest | The version clients send on every tool call. By default it names the catalog a client pins when its session starts (every tool's name, description and schemas, and the instructions), so it changes exactly when one of them changes. Setting it overrides that. |
+
+### Versions across releases
+
+A session keeps the tool descriptions and instructions it read when it started. A call naming the current version runs. A call naming an earlier version that this package recorded (`catalog_history.json`) runs when the tool it calls is unchanged since then, and its result carries `instructions_updated`: relay it, and reconnect when convenient. A call to a tool whose description or schema changed, or naming an unknown version, is refused until the session reconnects. A change to a tool or the instructions adds its catalog to the history (`python -m mipiti_mcp.record_catalog`); the package's tests fail while it is missing.
 
 ### Claude Code (standalone)
 
@@ -78,8 +82,7 @@ uvx mipiti-mcp
       "command": "uvx",
       "args": ["mipiti-mcp"],
       "env": {
-        "MIPITI_API_KEY": "your-api-key",
-        "SERVER_VERSION": "local"
+        "MIPITI_API_KEY": "your-api-key"
       }
     }
   }
@@ -112,7 +115,7 @@ uvx mipiti-mcp
 | `add_attacker` / `edit_attacker` / `remove_entity (entity_type="attacker")` | Same for attackers. `surface_extent` (`whole`: the attacker's operations range over any entry of the interface it reaches; `point`: one named entry) is a declaration: supplying it requires `change_reason` on either tool, a person's call attests it, and an attested `whole` makes the objectives that attacker anchors for-all obligations. A create declares only `whole`; narrowing is an `edit_attacker` call, checked against the objectives the attacker anchors. `edit_attacker` also attests the position (`attest_position`), the privileges (`attest_privileges`) or the extent (`attest_surface_extent`) as they stand, and naming `trust_boundary_ids` on either tool attests the position it writes. Every attestation (a seal, a position, privileges, an extent) is a judgment: a program takes it only under a workspace delegation rule; otherwise its edit lands unattested and the answer's `attestation` names the escalation parked for a person, never a 403. A change to what was attested voids the attestation. |
 | `revalidate_entity_quality` | Judge every live asset's and attacker's quality warning again, in the background. Creates no version; returns `{accepted, queued, model}` (`model` its id, version and title), and the refreshed warnings appear on the next read of the model. |
 | `apply_entity_proposals` | Apply the corrections the quality check proposed for assets and attackers, each named by `entity_id` and the verdict's `input_hash` (read as `quality` on `get_entity`), in one new model version. A correction changes only the entity's words, never its position, credentials, rating or components. Each entity reports `applied`, `rejected`, `stale`, `none` or `unavailable`; one never stops the others. |
-| `answer_entity_question` | Answer the question the quality check asked about an asset or attacker, naming the verdict's `input_hash`. Kept with the entity and shown to every later check of it; queues that entity's check alone. Creates no version. Refused 409 `stale` or `no_question`. |
+| `answer_entity_question` | Answer, with a fact, the flag the quality check raised about an asset or attacker (a question, a defect or an invalid verdict), naming the verdict's `input_hash`. Kept with the entity and shown to every later check of it; queues that entity's check alone, which decides. Creates no version. Refused 409 `stale` or `not_flagged`. |
 | `get_entity` | Read one entity of any kind. An attacker also carries `surface_extent` and `surface_extent_source`, which says whether a person attested it. |
 
 ### Trust Boundaries
@@ -366,8 +369,7 @@ python -m pytest -v
       "command": "uv",
       "args": ["run", "--directory", "/path/to/mipiti-mcp", "mipiti-mcp"],
       "env": {
-        "MIPITI_API_KEY": "your-key",
-        "SERVER_VERSION": "local"
+        "MIPITI_API_KEY": "your-key"
       }
     }
   }
