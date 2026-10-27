@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.97.0] - 2026-10-27
+
+### Added
+
+- `check_entity_quality`: ask for the quality check of named assets and attackers with no current verdict, estimated first; a check a platform change made necessary is at Mipiti's cost. (#353)
+- The instructions point to `check_entity_quality` for an unchecked entity, and `apply_entity_proposals`' `rejected` outcome says to edit or answer the entity rather than re-validate the model. (#353)
+
 ## [0.96.0] - 2026-10-27
 
 ### Added
