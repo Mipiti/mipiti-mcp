@@ -107,7 +107,9 @@ def test_the_tools_are_published_with_their_rules() -> None:
     for word in ("``applied``", "``rejected``", "``stale``", "``none``", "``unavailable``",
                  "never moves a position"):
         assert word in tools["apply_entity_proposals"], word
-    for word in ("``no_question``", "never guess", "creates no model version"):
+    for word in ("``not_flagged``", "``defect``", "``invalid``", "never guess",
+                 "never weaken a true claim", "It decides nothing",
+                 "creates no model version"):
         assert word in tools["answer_entity_question"], word
     assert "``quality``" in tools["get_entity"]
     instructions = server.build_instructions("pro", "user")
