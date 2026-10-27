@@ -409,7 +409,8 @@ _INSTRUCTION_PARTS = [_INSTRUCTIONS_BASE, _INSTRUCTIONS_COMPLIANCE, _INSTRUCTION
 _SERVER_VERSION = ""
 CATALOG: dict = {}
 CATALOG_VERSION = ""
-_CATALOG_HISTORY: dict = {}
+#: The recorded catalogs, read only when a call names an older version.
+_CATALOG_HISTORY = catalog.shipped_history
 
 mcp = FastMCP("Mipiti")
 
@@ -8843,7 +8844,6 @@ async def manage_model_check(
 CATALOG = catalog.current(mcp, _INSTRUCTION_PARTS)
 CATALOG_VERSION = catalog.version_of(CATALOG)
 _SERVER_VERSION = os.environ.get("SERVER_VERSION") or CATALOG_VERSION
-_CATALOG_HISTORY = catalog.load_history()
 mcp.instructions = build_instructions("pro")
 
 

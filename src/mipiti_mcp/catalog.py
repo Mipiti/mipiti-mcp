@@ -13,7 +13,9 @@ version runs when the tool it calls has the contract there that it has now,
 and is told the instructions were updated. Every other call is refused: an
 unknown version, a missing one, or a tool whose contract changed since the
 session started. No call runs under a contract other than the one its
-session pinned.
+session pinned. The contract is the tool's description and schemas, not its
+code: a change to what a tool does that a caller must know about changes its
+description too.
 
 ``python -m mipiti_mcp.record_catalog`` adds the current catalog to the
 history; the package's tests fail while it is missing.
@@ -80,13 +82,28 @@ def load_history(path: Path = HISTORY_PATH) -> dict:
         return {}
 
 
+_HISTORY: dict = {}
+
+
+def shipped_history() -> dict:
+    """The history shipped with the package, read the first time a call names
+    a version other than the current one, then kept: importing the package
+    reads no file of it but its modules."""
+    if not _HISTORY:
+        _HISTORY.update(load_history())
+    return _HISTORY
+
+
 def compatible(named: str, tool: str, current_version: str, current_catalog: dict,
-               history: dict) -> Decision:
+               history) -> Decision:
     """How a call naming ``named`` to ``tool`` is answered: ``run``,
     ``notice`` (it runs, and is told the instructions were updated) or
-    ``refuse``."""
+    ``refuse``. ``history`` is the recorded catalogs, or a function returning
+    them, called only when ``named`` is not the current version."""
     if named and named == current_version:
         return "run"
+    if callable(history):
+        history = history()
     pinned = history.get(named) if named else None
     if pinned is None:
         return "refuse"

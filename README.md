@@ -71,7 +71,7 @@ uvx mipiti-mcp
 
 ### Versions across releases
 
-A session keeps the tool descriptions and instructions it read when it started. A call naming the current version runs. A call naming an earlier version that this package recorded (`catalog_history.json`) runs when the tool it calls is unchanged since then, and its result carries `instructions_updated`: relay it, and reconnect when convenient. A call to a tool whose description or schema changed, or naming an unknown version, is refused until the session reconnects. A change to a tool or the instructions adds its catalog to the history (`python -m mipiti_mcp.record_catalog`); the package's tests fail while it is missing.
+A session keeps the tool descriptions and instructions it read when it started. A call naming the current version runs. A call naming an earlier version that this package recorded (`catalog_history.json`) runs when the tool it calls is unchanged since then, and its result carries `instructions_updated`: relay it, and reconnect when convenient. A call to a tool whose description or schema changed, or naming an unknown version, is refused until the session reconnects. A change to a tool or the instructions adds its catalog to the history (`python -m mipiti_mcp.record_catalog`); the package's tests fail while it is missing. A tool's contract is what a client pins (its description and schemas), not its code: a change to what a tool does that a caller must know about changes its description too, or a session started before it calls the tool unaware.
 
 ### Claude Code (standalone)
 
