@@ -3390,6 +3390,17 @@ class MipitiClient:
             "entity_kind": entity_kind, "entity_id": entity_id,
             "tags": list(tags), "rationale": rationale})
 
+    async def check_entity_quality(self, model_id: str, entity_ids: list[str],
+                                   confirm_estimate: bool = False) -> dict:
+        """POST /api/models/{model_id}/inventory/quality/check.
+
+        Estimates, and with ``confirm_estimate`` queues, the quality check of
+        each named entity (every one when none is named) that has no current
+        verdict and none queued; answers where each stands and who pays.
+        """
+        return await self._post(self._inventory(model_id, "/quality/check"), {
+            "entity_ids": list(entity_ids), "confirm_estimate": bool(confirm_estimate)})
+
     async def apply_entity_proposals(self, model_id: str, proposals: list[dict]) -> dict:
         """POST /api/models/{model_id}/entities/apply-proposals.
 

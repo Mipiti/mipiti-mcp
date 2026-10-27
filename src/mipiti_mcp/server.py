@@ -87,7 +87,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
-- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words — apply them with `apply_entity_proposals`, naming the verdict's `input_hash`; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. Re-run the check with `revalidate_entity_quality`.
+- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words — apply them with `apply_entity_proposals`, naming the verdict's `input_hash`; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. An entity whose `quality` reads `unchecked` is checked with `check_entity_quality`, naming it: it estimates first (RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree), never re-checks a current verdict, and is at Mipiti's cost where a platform change made the check necessary. `revalidate_entity_quality` asks every entity again whatever is stored, at your cost.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
@@ -8390,8 +8390,8 @@ async def apply_entity_proposals(
     Each entity reports one ``outcome``: ``applied``; ``rejected`` (the
     correction reads as a different entity, or duplicates one, or names
     internal identifiers of the behavioural model, which ``reason`` lists:
-    check the entity again with ``revalidate_entity_quality`` for a
-    correction in words); ``stale``
+    edit or answer the entity so that its check runs again, for a correction
+    in words); ``stale``
     (the entity, or what it is judged with, changed since the verdict: read
     it again); ``none`` (no correction stands); ``unavailable`` (the identity
     check could not answer: try again). One entity never stops the others.
@@ -8419,6 +8419,57 @@ async def apply_entity_proposals(
     except Exception as exc:
         raise _api_error(exc) from exc
     return _without_models(_dump(answer)) if isinstance(answer, dict) else answer
+
+
+@mcp.tool()
+async def check_entity_quality(
+    server_version: str,
+    model_id: str,
+    entity_ids: str = "",
+    confirm_estimate: bool = False,
+) -> dict:
+    """Ask for the quality check of the assets and attackers you name (every
+    one when you name none) that have no current verdict: an entity whose
+    ``quality`` reads ``unchecked``, or one changed since its last check.
+    Without ``confirm_estimate`` it only estimates; with it, the checks are
+    queued and run in the background. Creates no model version.
+
+    Checking may be paid. Call it first without ``confirm_estimate``, RELAY
+    THE ESTIMATE TO THE PERSON, and confirm only when they agree; never
+    confirm on your own. The answer says where each named entity stands:
+    ``current`` (its verdict answers it as it stands; it is not checked
+    again: to dispute it, answer its flag with ``answer_entity_question``),
+    ``checking`` (its check is queued already), ``answered`` (a stored
+    verdict answers it and is served again, at no cost), ``platform_scope``
+    (made stale by a change to the platform; checked at Mipiti's cost) and
+    ``customer_scope`` (checked at the caller's cost; ``estimate`` gives an
+    upper bound, the deeper review running only where the first pass flags).
+    A confirmation the caller's balance cannot cover is refused with 402 and
+    queues nothing; an id naming no asset or attacker of the model is refused
+    400 ``unknown_entity``. Read each entity again with ``get_entity`` for its
+    verdict once it lands. To ask every entity again whatever is stored, use
+    ``revalidate_entity_quality``.
+
+    Returns ``{platform_scope, customer_scope, current, checking, answered,
+    estimate, billing, confirmed, queued, message}``.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_ids: JSON array of asset and attacker ids (e.g. ``["A-17",
+            "T-04"]``); empty for every entity.
+        confirm_estimate: Queue the checks the estimate describes.
+    """
+    ids: list = []
+    if entity_ids.strip():
+        ids = _json_value(entity_ids, "entity_ids", list, '["A-17", "T-04"]')
+        if not all(isinstance(i, str) and i.strip() for i in ids):
+            raise ToolError("entity_ids is a JSON array of entity ids.")
+        ids = [i.strip() for i in ids]
+    try:
+        return _dump(await _get_client().check_entity_quality(
+            model_id, ids, confirm_estimate=confirm_estimate))
+    except Exception as exc:
+        raise _api_error(exc) from exc
 
 
 @mcp.tool()
