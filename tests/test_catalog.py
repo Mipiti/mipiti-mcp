@@ -26,6 +26,28 @@ def test_the_shipped_catalog_is_recorded() -> None:
         "the current catalog is not recorded: run python -m mipiti_mcp.record_catalog")
 
 
+def test_importing_the_package_reads_no_history() -> None:
+    """Only a call naming an older version reads the history: a process that
+    imports the package, or serves current calls, opens no file of it."""
+    import subprocess
+    import sys
+    code = ("import builtins; opened = []; real = builtins.open\n"
+            "def spy(f, *a, **k):\n"
+            "    opened.append(str(f)); return real(f, *a, **k)\n"
+            "builtins.open = spy\n"
+            "from mipiti_mcp import server\n"
+            "assert not [f for f in opened if f.endswith('catalog_history.json')], opened\n"
+            "from mipiti_mcp import catalog\n"
+            "assert catalog.compatible(server._SERVER_VERSION, 'get_entity', "
+            "server._SERVER_VERSION, server.CATALOG, server._CATALOG_HISTORY) == 'run'\n"
+            "assert not [f for f in opened if f.endswith('catalog_history.json')]\n"
+            "assert catalog.compatible('older', 'get_entity', server._SERVER_VERSION, "
+            "server.CATALOG, server._CATALOG_HISTORY) == 'refuse'\n"
+            "assert [f for f in opened if f.endswith('catalog_history.json')]\n")
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_the_version_names_the_catalog_by_content() -> None:
     assert server.CATALOG_VERSION == catalog.version_of(server.CATALOG)
     assert len(server.CATALOG_VERSION) == catalog.VERSION_DIGITS
