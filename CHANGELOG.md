@@ -9,6 +9,17 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.96.0] - 2026-10-27
+
+### Added
+
+- The server version names the tool catalog. A session started before a release keeps calling every tool whose description and schemas did not change, and is told the instructions were updated; only a call to a changed tool, or naming an unknown version, is refused until the session reconnects. `SERVER_VERSION` is no longer required. (#348)
+- `answer_entity_question` answers any flag the quality check raises (a question, a defect or an invalid verdict) with a fact; the refusal where none stands is `not_flagged`. (#348)
+
+### Fixed
+
+- The server reads its recorded catalog history only when a call names an older version, not at import. (#349)
+
 ## [0.95.1] - 2026-10-26
 
 ### Changed
