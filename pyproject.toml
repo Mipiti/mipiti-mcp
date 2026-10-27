@@ -71,4 +71,6 @@ constraint-dependencies = [
     "pip>=26.2.0",               # PYSEC-2026-3721 (via pip-audit in requirements-audit.lock)
     "msgpack>=1.2.1",            # PYSEC-2026-3625 (via pip-audit's cachecontrol)
     "filelock>=4.2.1",           # CVE-2026-112907 / CVE-2026-112913 / CVE-2026-112940 (via pip-audit's cachecontrol)
+    "authlib>=1.9.0",            # CVE-2026-96760, CVE-2026-114614, CVE-2026-114615, CVE-2026-114617, CVE-2026-114618, CVE-2026-114620
+    "dnspython>=2.9.0",          # CVE-2026-114605
 ]
