@@ -87,10 +87,10 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
-- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words — apply them with `apply_entity_proposals`, naming the verdict's `input_hash`; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. An entity whose `quality` reads `unchecked` is checked with `check_entity_quality`, naming it: it estimates first (RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree), never re-checks a current verdict, and is at Mipiti's cost where a platform change made the check necessary. `revalidate_entity_quality` asks every entity again whatever is stored, at your cost.
+- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words and `drops`, the claims they no longer make: applying them with `apply_entity_proposals`, naming the verdict's `input_hash` and the correction's `proposal_hash`, is accepting the correction, a judgment normally the owner's (a program's is parked for a person unless the workspace delegates `entity_correction_accepted`), so relay the correction and its drops to the person, answer a doubted claim you can establish with `answer_entity_question` instead, and declare a property that does not apply not applicable, since a correction never removes one; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. An entity whose `quality` reads `unchecked` is checked with `check_entity_quality`, naming it: it estimates first (RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree), never re-checks a current verdict, and is at Mipiti's cost where a platform change made the check necessary. `revalidate_entity_quality` asks every entity again whatever is stored, at your cost.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
-- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
+- `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each), or only those rated for another description (`stale_only`: an entity's `rating_stale`, the review queue's `rating_stale` row). A rating a person chose is never replaced: the answer is held pending beside it (`rating_pending`), the more severe in force, until `settle_entity_rating` settles them (a judgment, `rating_reconfirmed`). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
 - `revalidate_entity_quality` — re-run quality validation over an existing model's assets and attackers (a fast first-pass check on every entity, a deeper review only on the ones it flags). Use it to apply validation improvements to an already-generated model or clear stale quality warnings, without regenerating. Non-destructive (it flags rather than deletes) and creates no new version: it runs in the background, and the refreshed warnings appear on the next read of the model.
 - `get_threat_model` — retrieve a model's structure (excludes COs by default; use `include_cos=True` to include them). The answers to its questions are counted and left out unless `include_clarifications=True`, which pages them. A read longer than 200,000 characters is cut, and `cuts` names what was cut and the read that serves it. `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it (the tool and its `mcp_arguments`, ready to send once the angle-bracketed values are filled).
 - `query_threat_model` — ask questions about an existing model. It only answers; it never changes the model.
@@ -846,6 +846,20 @@ def _api_error(exc: Exception) -> ToolError:
             return ToolError(
                 f"{message} The existing {entity_type} has id={existing_id}. "
                 "Use the existing entity instead, or rename/differentiate the new one."
+            )
+
+        # The model changed since the caller read it: nothing was written.
+        if (
+            exc.response.status_code == 409
+            and isinstance(detail, dict)
+            and detail.get("code") == "version_conflict"
+        ):
+            current = detail.get("current_version")
+            return ToolError(
+                "The model changed since you read it"
+                + (f" (its current version is {current})" if current is not None else "")
+                + "; nothing was written. Read the model again (get_threat_model or "
+                "get_entity), check your change against it, and send it again."
             )
 
         return ToolError(f"API error ({exc.response.status_code}): {detail}")
@@ -3282,7 +3296,15 @@ async def edit_asset(
     factor values (the platform composes the new rating) and supply
     ``change_reason`` documenting the operator override of the
     LLM-generated factors. The reason is captured in the
-    rating-revision audit trail.
+    rating-revision audit trail. Over a rating held pending
+    (``rating_pending`` on ``get_entity``), a factor edit settles the pair
+    with the rating it sets, a judgment (``rating_reconfirmed``) a program
+    makes only under a delegation rule, else parked whole for a person.
+
+    New words (name, description, security properties) are rated for: one
+    rating call, at your cost; a rating a person chose is kept and the new
+    one held pending beside it. Adopting a quality check's ``advice`` is
+    your own edit of the words, stated with its ``change_reason``.
 
     LLM-gated on identity-bearing fields (name, description,
     security_properties). Factor and notes edits skip the gate.
@@ -3296,8 +3318,10 @@ async def edit_asset(
       Soft-delete + add-new instead.
 
     Editing a soft-deleted asset is rejected — ``restore_entity (entity_type="asset")``
-    first. 503 on evaluator outage, 502 on malformed response, 400
-    when factor fields are sent without ``change_reason``.
+    first. 503 on evaluator outage or when the rating call for new words
+    fails (nothing saved), 502 on malformed response, 400 when factor
+    fields are sent without ``change_reason``, 409 when the model changed
+    since it was read (read it again and send the edit again).
 
     Args:
         model_id: ID of the threat model.
@@ -3512,9 +3536,13 @@ async def edit_attacker(
     ``quality_warning``. Identity fields are LLM-gated. The composed
     ``likelihood`` comes from the factors. An edit of ``attack_vector`` or
     ``privileges_required`` creates a model version (reachability reads
-    both); other factor edits are recorded as rating revisions. The answer's
-    ``model`` is the model's id, version and title; ``entities.attackers``
-    the attacker as it now stands.
+    both); other factor edits are recorded as rating revisions. Over a
+    pending rating (``rating_pending``), a factor edit settles the pair, a
+    judgment (``rating_reconfirmed``). New words are rated for (one call, at
+    your cost); a person's rating is kept, the new one held pending, and
+    attested or holdings-given privileges never move. Adopting ``advice`` is
+    your own edit. The answer's ``model`` is the model's id, version and
+    title; ``entities.attackers`` the attacker as it now stands.
 
     Attesting is a judgment: a person's edit attests what it writes
     (``trust_boundary_ids``, ``privileges_required``, ``surface_extent``)
@@ -3528,7 +3556,8 @@ async def edit_attacker(
 
     400 when factor fields, ``surface_extent``, ``attest_surface_extent``
     or ``attest_privileges`` come without ``change_reason``; 503/502 on an
-    evaluator outage or malformed answer. 409 ``privileges_from_holdings``
+    evaluator outage or malformed answer or a failed rating call. 409 when
+    the model changed since it was read: read it again. 409 ``privileges_from_holdings``
     for a privileges change on an attacker whose credential classes are
     stated: its privileges follow from them, so say what it holds instead
     (``answer_attacker_credentials``).
@@ -3606,23 +3635,31 @@ async def reevaluate_threat_model_factors(
     change_reason: Optional[str] = None,
     entity_ids: str = "",
     unrated_only: bool = False,
+    stale_only: bool = False,
 ) -> dict:
     """Re-run the LLM factor judgment on a model's live assets and
-    attackers: every one, those ``entity_ids`` names, or only those nobody
-    rated (``unrated_only``; with both, the unrated among those named).
-    Re-baselines factors after a bug fix or description change, or rates
-    what reads "not rated", without regenerating the model (which would
-    destroy controls, assertions, components). One call per entity in
-    scope; an id naming no live asset or attacker is refused (400) before
-    any call; a scope naming none makes no call.
+    attackers: every one, those ``entity_ids`` names, only those nobody
+    rated (``unrated_only``), or only those whose rating was made for
+    another description of the system (``stale_only``, an entity's
+    ``rating_stale``; with both flags, either). With ``entity_ids`` a flag
+    narrows to those named. The review queue's ``rating_stale`` row names the
+    request that re-rates its entities. Re-baselines factors after a bug fix
+    or description change, or rates what reads "not rated", without
+    regenerating the model (which would destroy controls, assertions,
+    components). One call per entity in scope, at your cost; an id naming no
+    live asset or attacker is refused (400) before any call; a scope naming
+    none makes no call.
 
-    Each entity's factors and rationale are replaced with a fresh
-    decomposition and its impact / likelihood re-derived from them. Each
-    re-rating is a rating revision recorded with ``change_reason``
-    (default "LLM factor re-evaluation"), told apart from overrides made
-    with ``edit_asset`` / ``edit_attacker``. The judgment is a starting
-    point: layer deployment-specific factors on top with those, and a
-    ``change_reason`` saying why.
+    A rating a model made is replaced with a fresh decomposition and its
+    impact / likelihood re-derived from it. A rating a person chose is never
+    replaced: the answer is held pending beside it (``rating_pending`` on
+    ``get_entity``), the more severe of the two in force, until someone
+    settles them with ``settle_entity_rating``. Each re-rating is a rating
+    revision recorded with ``change_reason`` (default "LLM factor
+    re-evaluation"), told apart from overrides made with ``edit_asset`` /
+    ``edit_attacker``. The judgment is a starting point: layer
+    deployment-specific factors on top with those, and a ``change_reason``
+    saying why.
 
     Per-entity soft-fail: a failure on one entity lands in
     ``failed_entities`` (``id``, ``kind``, ``reason``) and the rest still
@@ -3632,8 +3669,9 @@ async def reevaluate_threat_model_factors(
     Re-ratings keep the model version, except where an answer changes an
     attacker's ``attack_vector`` or ``privileges_required``: reachability
     reads both, so the run saves one new version carrying every answer,
-    and a proposal reviewed before it reads ``review_stale``. Privileges an
-    answer changes are no longer attested.
+    and a proposal reviewed before it reads ``review_stale``. Privileges a
+    person attested, or that what the attacker holds gives, are no rating's:
+    an answer never moves them.
 
     Args:
         model_id: ID of the threat model to re-rate.
@@ -3643,6 +3681,8 @@ async def reevaluate_threat_model_factors(
             "A-03,T-14"); omit for every live entity.
         unrated_only: Only entities whose ``rating_source`` is
             ``unrated``. Default False.
+        stale_only: Only entities rated for another description. Default
+            False.
 
     Returns ``{model_id, in_scope, assets_reevaluated,
     attackers_reevaluated, deltas: {assets, attackers}, failed_entities}``:
@@ -3655,6 +3695,8 @@ async def reevaluate_threat_model_factors(
         scope["entity_ids"] = ids
     if unrated_only:
         scope["unrated_only"] = True
+    if stale_only:
+        scope["stale_only"] = True
     try:
         client = _get_client()
         # Runs as a background job (scales with entity count); poll it so the
@@ -8371,51 +8413,59 @@ async def apply_entity_proposals(
     model_id: str,
     proposals: str,
 ) -> dict:
-    """Apply the corrections the quality check proposed for assets and
-    attackers. Mutating: creates one new model version for the whole batch.
+    """Accept the quality check's corrections of assets and attackers, in
+    one new model version.
 
-    An asset or attacker the check finds defective carries a proposed
-    correction of its words: read it as ``quality`` on ``get_entity`` (or in
-    the build proposal's flagged entities, or the review queue's
-    ``entity_quality`` row), where ``outcome`` is ``defect``, ``proposed``
-    holds the corrected fields and ``input_hash`` names the verdict. Applying
-    it is an edit of the entity's own words (an asset's name, description and
-    security properties; an attacker's capability, position and archetype):
-    it never moves a position, credentials, a rating or components, and the
-    corrected text is checked again as any edit is. A ``defect`` may carry no
-    ``proposed``: the correction the check found named internal identifiers
-    of the behavioural model rather than the system's words, and was
-    withheld; its warning says so.
+    Applying is accepting: a judgment normally the owner's. A program's is
+    parked for a person (``refused``, with ``escalation_id``: do not retry)
+    unless the workspace delegates ``entity_correction_accepted``. A doubted
+    claim you can establish, or take conservatively, is answered with
+    ``answer_entity_question`` instead; a property that does not apply is
+    declared not applicable, since a correction never removes one.
 
-    Each entity reports one ``outcome``: ``applied``; ``rejected`` (the
-    correction reads as a different entity, or duplicates one, or names
-    internal identifiers of the behavioural model, which ``reason`` lists:
-    edit or answer the entity so that its check runs again, for a correction
-    in words); ``stale``
-    (the entity, or what it is judged with, changed since the verdict: read
-    it again); ``none`` (no correction stands); ``unavailable`` (the identity
-    check could not answer: try again). One entity never stops the others.
+    Read the correction as ``quality`` on ``get_entity`` (or the review
+    queue's ``entity_quality`` row): ``proposed`` holds the corrected words,
+    ``proposal_hash`` names them, ``input_hash`` the verdict, and ``drops``
+    each claim the words before made that the correction does not, with why.
+    RELAY ``proposed`` AND ``drops`` TO THE PERSON. A correction no reader
+    marked is a rewording, else a narrowing; under a rule admitting only
+    ``rewording``, a claim every reader missed is applied by the program: the
+    residual that policy accepts. It never moves a position, credentials or
+    components; the entity is rated for its new words, a person's rating kept
+    and the new one held pending (``settle_entity_rating``).
 
-    Returns ``{results: [{entity_id, outcome, reason?}], version?}``, the
-    model version written when anything was applied.
+    One ``outcome`` per entity: ``applied`` (``correction_kind``);
+    ``unbound`` (no ``proposal_hash``: the correction and its hash are
+    returned); ``refused``; ``property_removed`` (never written);
+    ``rejected`` (another entity, a duplicate, or internal identifiers,
+    ``reason`` says); ``stale`` (read it again); ``none``; ``unavailable``
+    (try again). One entity never stops the others; a model changed since it
+    was read writes nothing, each such item ``stale`` beside ``conflict``.
+
+    Returns ``{results, version?, conflict?}``.
 
     Args:
         model_id: ID of the threat model.
-        proposals: JSON array of ``{"entity_id", "input_hash"}``, each
-            ``input_hash`` as the verdict was read.
+        proposals: JSON array of ``{"entity_id", "input_hash",
+            "proposal_hash"}``, each ``input_hash`` and ``proposal_hash`` as
+            the verdict was read.
     """
     parsed = _json_value(proposals, "proposals", list,
-                         '[{"entity_id": "A-03", "input_hash": "..."}]')
+                         '[{"entity_id": "A-03", "input_hash": "...", "proposal_hash": "..."}]')
     if not parsed:
         raise ToolError("proposals names at least one entity.")
     for p in parsed:
         if not (isinstance(p, dict) and str(p.get("entity_id", "")).strip()
                 and str(p.get("input_hash", "")).strip()):
             raise ToolError("each proposal is an object with an entity_id and an input_hash.")
+    # An item naming no correction is sent as it is: it is answered
+    # ``unbound``, with the correction and the hash to name.
     try:
         answer = await _get_client().apply_entity_proposals(
             model_id, [{"entity_id": str(p["entity_id"]).strip(),
-                        "input_hash": str(p["input_hash"]).strip()} for p in parsed])
+                        "input_hash": str(p["input_hash"]).strip(),
+                        "proposal_hash": str(p.get("proposal_hash") or "").strip()}
+                       for p in parsed])
     except Exception as exc:
         raise _api_error(exc) from exc
     return _without_models(_dump(answer)) if isinstance(answer, dict) else answer
@@ -8522,6 +8572,79 @@ async def answer_entity_question(
     try:
         return _dump(await _get_client().answer_entity_question(
             model_id, entity_id.strip(), text.strip(), input_hash.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+_SETTLE_CHOICES = ("keep_person", "take_model", "set")
+
+
+@mcp.tool()
+async def settle_entity_rating(
+    server_version: str,
+    model_id: str,
+    entity_id: str,
+    entity_kind: str,
+    choice: str,
+    pair_hash: str,
+    factors: str = "",
+    rationale: str = "",
+    change_reason: str = "",
+) -> dict:
+    """Settle the rating held pending for an asset or attacker. Mutating.
+
+    A rating a person chose is never replaced by a model's: where an entity's
+    words changed, or a re-evaluation answered over it, the model's rating is
+    held pending beside the person's, the more severe of the two in force.
+    ``get_entity`` serves the pair as ``rating_pending`` (the rating in
+    force and the pending one, who chose each, the words each was made for,
+    and ``pair_hash``); the review queue's ``rating_pending`` row lists every
+    such entity. Settling is a judgment (``rating_reconfirmed``): a
+    program's is parked for a person (403 with an ``escalation_id``: do not
+    retry) unless the workspace's delegation policy names it at the entity's
+    tier. RELAY BOTH RATINGS TO THE PERSON and settle as they choose.
+
+    ``choice``: ``keep_person`` keeps the person's rating for the words as
+    they stand; ``take_model`` takes the model's; ``set`` writes another,
+    given in ``factors``. A choice that changes an attacker's attack vector
+    or privileges saves a new model version; any other writes a rating
+    revision. Refused 409 ``stale`` with the current ``pair_hash`` when the
+    pair or the entity's words moved since it was read (read it again), 409
+    ``nothing_pending`` when no pair is held.
+
+    Returns ``{entity_id, choice, version_created}``.
+
+    Args:
+        model_id: ID of the threat model.
+        entity_id: The asset or attacker (e.g. "A-03").
+        entity_kind: ``asset`` or ``attacker``.
+        choice: ``keep_person``, ``take_model`` or ``set``.
+        pair_hash: ``rating_pending.pair_hash`` as it was read.
+        factors: For ``set``: a JSON object of the rating's factors (an
+            asset's subscores, blast radius, recoverability and regulatory
+            scope; an attacker's attack vector, privileges required, attack
+            complexity, user interaction and capability prevalence).
+        rationale: For ``set``: why the rating is what it is.
+        change_reason: Why it is settled so (kept with the decision).
+    """
+    if not entity_id.strip():
+        raise ToolError("entity_id is required.")
+    if entity_kind not in ("asset", "attacker"):
+        raise ToolError("entity_kind is asset or attacker.")
+    if choice not in _SETTLE_CHOICES:
+        raise ToolError(f"choice is one of {', '.join(_SETTLE_CHOICES)}.")
+    if not pair_hash.strip():
+        raise ToolError("pair_hash is required: rating_pending.pair_hash, as it was read.")
+    parsed: dict = {}
+    if factors.strip():
+        parsed = _json_value(factors, "factors", dict,
+                             '{"attack_vector": "Network", "privileges_required": "Low"}')
+    if choice == "set" and not parsed:
+        raise ToolError("choice set names the rating to write in factors.")
+    try:
+        return _dump(await _get_client().settle_entity_rating(
+            model_id, entity_id.strip(), entity_kind, choice, pair_hash.strip(),
+            factors=parsed or None, rationale=rationale, change_reason=change_reason))
     except Exception as exc:
         raise _api_error(exc) from exc
 
