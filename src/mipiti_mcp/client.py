@@ -3206,6 +3206,20 @@ class MipitiClient:
             {"collection": collection, "element": element},
         )
 
+    async def remove_behavioural_element(
+        self, model_id: str, collection: str, element_id: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/elements/remove.
+
+        Removes an element the owner says the system does not have; every
+        later extraction withholds it. Creates a model version, and voids a
+        confirmation.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/elements/remove"),
+            {"collection": collection, "element_id": element_id},
+        )
+
     async def confirm_behavioural_model(
         self, model_id: str, ir_hash: str, note: str = "",
     ) -> dict:

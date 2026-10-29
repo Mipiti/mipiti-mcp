@@ -109,6 +109,10 @@ async def test_writes_use_the_verbs_and_bodies_the_api_takes(mock_env: None) -> 
     await client.edit_behavioural_element("tm-1", "actions", {"id": "a1"})
     assert _body(element) == {"collection": "actions", "element": {"id": "a1"}}
 
+    remove = respx.post(BASE + "/elements/remove").mock(return_value=ok)
+    await client.remove_behavioural_element("tm-1", "state_elements", "copies")
+    assert _body(remove) == {"collection": "state_elements", "element_id": "copies"}
+
     confirm = respx.post(BASE + "/confirm").mock(return_value=ok)
     await client.confirm_behavioural_model("tm-1", "abc", note="reviewed")
     assert _body(confirm) == {"ir_hash": "abc", "note": "reviewed"}
@@ -572,6 +576,34 @@ async def test_element_edit_needs_an_object_with_an_id() -> None:
             element='{"id": "a1"}')
     client.edit_behavioural_element.assert_awaited_once_with(
         "tm-1", "actions", {"id": "a1"})
+
+
+@pytest.mark.asyncio
+async def test_a_removal_names_its_element_and_sends_it_trimmed() -> None:
+    client = _client(remove_behavioural_element={"removed": []})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        for kwargs in ({"collection": " ", "element_id": "e1"},
+                       {"collection": "actions", "element_id": " "}):
+            with pytest.raises(ToolError):
+                await server.remove_behavioural_element(
+                    server_version="0", model_id="tm-1", **kwargs)
+        client.remove_behavioural_element.assert_not_awaited()
+        await server.remove_behavioural_element(
+            server_version="0", model_id="tm-1", collection=" state_elements ",
+            element_id=" copies ")
+    client.remove_behavioural_element.assert_awaited_once_with(
+        "tm-1", "state_elements", "copies")
+
+
+def test_the_removal_tool_is_published_with_its_rules() -> None:
+    import asyncio
+    tools = {t.name: " ".join((t.description or "").split())
+             for t in asyncio.run(server.mcp.list_tools())}
+    for word in ("``referenced``", "``unknown_element``", "withholds",
+                 "``edit_behavioural_element`` withdraws the removal", "a judgment",
+                 "``escalation_id``", "never to clear a question"):
+        assert word in tools["remove_behavioural_element"], word
+    assert "`remove_behavioural_element`" in server.build_instructions("pro", "user")
 
 
 @pytest.mark.asyncio
