@@ -1848,6 +1848,28 @@ class MipitiClient:
         data = await self._get(f"/api/models/{model_id}/control-objectives", params=params)
         return ControlObjectivesResponse.model_validate(data)
 
+    async def get_objective_grouping(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/objectives/grouping.
+
+        What grouping the model's objectives by asset groups would do: the
+        groups it would form and the objectives formed now and after. Writes
+        nothing.
+        """
+        return await self._get(f"/api/models/{model_id}/objectives/grouping")
+
+    async def set_objective_grouping(
+        self, model_id: str, enabled: bool, model_version: int,
+    ) -> dict:
+        """POST /api/models/{model_id}/objectives/grouping.
+
+        Groups the model's objectives (``enabled``) or stops grouping them,
+        naming the version reviewed. Creates a model version.
+        """
+        return await self._post(
+            f"/api/models/{model_id}/objectives/grouping",
+            {"enabled": enabled, "model_version": model_version},
+        )
+
     # ------------------------------------------------------------------
     # Assets & Attackers
     # ------------------------------------------------------------------
