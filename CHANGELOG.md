@@ -9,6 +9,15 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.98.0] - 2026-10-29
+
+### Added
+
+- `apply_entity_proposals` names the correction it accepts (`proposal_hash`) and reports its `drops`; an item without the hash is answered `unbound` with the correction to name. Accepting a correction is a judgment a program makes only under a delegation rule. (#355)
+- `settle_entity_rating`: settle a rating held pending beside a person's (keep the person's, take the model's, or set another). (#355)
+- `reevaluate_threat_model_factors` takes `stale_only`, re-rating only entities rated for another description. (#355)
+- A write over a model that changed since it was read is reported as a version conflict, with the instruction to read the model again. (#355)
+
 ## [0.97.0] - 2026-10-27
 
 ### Added
