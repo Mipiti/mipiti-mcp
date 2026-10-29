@@ -6718,6 +6718,75 @@ async def get_control_objectives(
     except Exception as exc:
         raise _api_error(exc) from exc
 
+
+@mcp.tool()
+async def get_objective_grouping(
+    server_version: str,
+    model_id: str,
+) -> dict:
+    """What grouping a model's objectives by asset groups would do, before
+    it is done. Read-only: the groups are formed on a copy, and nothing is
+    written or judged.
+
+    Assets that are the same for every objective (the same security
+    properties, impact, components, exposure and split knowledge) can be
+    judged together: one objective per group and attacker instead of one per
+    asset. Each asset keeps its id and stays in the inventory, marked with
+    its group.
+
+    Returns ``grouped`` (whether the model's objectives are grouped now),
+    ``available`` (whether grouping may be turned on for this model),
+    ``groups`` (each group the restructure would form, by the id it would
+    keep, or ``new``, with its members), ``objectives_now`` and
+    ``objectives_after``, and ``model_version``, the version
+    ``set_objective_grouping`` names.
+
+    Args:
+        model_id: ID of the threat model.
+    """
+    try:
+        return _dump(await _get_client().get_objective_grouping(model_id))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def set_objective_grouping(
+    server_version: str,
+    model_id: str,
+    enabled: bool,
+    model_version: int,
+) -> dict:
+    """Group a model's objectives by asset groups, or stop grouping them.
+    Mutating; creates a model version. Calls no model, so nothing is
+    estimated: the judgements the new version re-keys are queued as for any
+    edit.
+
+    Read ``get_objective_grouping`` first, relay the groups and the
+    objective counts to the person, and pass the ``model_version`` it
+    returned: a model that moved since is refused 409 ``review_stale``.
+    Grouping is refused 409 ``behavioural_off`` where
+    ``get_objective_grouping`` reports ``available`` false; stopping is
+    never refused for it. The write gate refuses it while a control build
+    holds the model.
+
+    Grouping forms the groups from scratch; stopping deletes every group,
+    so each asset has its own objectives again. Either way the controls'
+    mappings move with the objectives (``moved``: each retired objective to
+    where its mappings went), each mitigation group landing as a group of
+    its own. A disposition on a retired objective does not carry over.
+
+    Args:
+        model_id: ID of the threat model.
+        enabled: ``true`` to group, ``false`` to stop grouping.
+        model_version: The version read with ``get_objective_grouping``.
+    """
+    try:
+        return _dump(await _get_client().set_objective_grouping(
+            model_id, enabled, model_version))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
 @mcp.tool()
 async def assign_to_components(
     server_version: str,

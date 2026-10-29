@@ -89,7 +89,7 @@ A session keeps the tool descriptions and instructions it read when it started. 
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->161<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->163<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -133,6 +133,8 @@ A session keeps the tool descriptions and instructions it read when it started. 
 |------|-------------|
 | `get_controls` | List controls with current status. Use `summary_only=True` for a compact response (id, description, status, verification_status, assertion_count, co_ids, assumption_groups, attestation_dependency). |
 | `get_control_objectives` | List COs with which controls cover each one. Pair with `get_reachability_verdicts` for per-CO composer reachability state. |
+| `get_objective_grouping` | What grouping the objectives by asset groups would do: the groups it would form, with their members, and the objectives formed now and after. Writes nothing. |
+| `set_objective_grouping` | Group the objectives by asset groups, or stop, naming the version read. Creates a model version; the controls' mappings move with the objectives. |
 | `update_control_status` | Mark implemented or not_implemented. Requires at least one assertion first. |
 | `refine_control` | Modify a control's description with justification. Platform evaluates whether the mitigation group still covers the COs. An accepted refinement keeps the control's assertions and judges them again against the new description; nothing is superseded. |
 | `regenerate_controls` | Propose a regeneration of the controls; it starts nothing. Supports `mode="per_co"` and `co_ids` to target specific COs. |
