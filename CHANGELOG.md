@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.100.0] - 2026-10-29
+
+### Added
+
+- `get_objective_grouping` and `set_objective_grouping`: read what grouping a model's objectives by asset groups would form, and group them (or stop), naming the version read. (#360)
+
 ## [0.99.0] - 2026-10-29
 
 ### Added
