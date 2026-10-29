@@ -9,6 +9,16 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.99.0] - 2026-10-29
+
+### Added
+
+- `remove_behavioural_element`: remove an element of the behavioural model the system does not have; every later extraction withholds it. Refused while anything names it; a judgment, like an element edit. (#358)
+
+### Changed
+
+- Bump actions/setup-python from 7.0.0 to 7.1.0 in the github-actions group (#356)
+
 ## [0.98.0] - 2026-10-29
 
 ### Added
