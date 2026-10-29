@@ -35,9 +35,10 @@ async def test_the_client_reaches_both_routes(mock_env: None) -> None:
     apply = respx.post(BASE + "/apply-proposals").mock(return_value=httpx.Response(
         200, json={"results": [{"entity_id": "A-3", "outcome": "applied"}], "version": 4}))
     out = await client.apply_entity_proposals(
-        "tm-1", [{"entity_id": "A-3", "input_hash": "h1"}])
+        "tm-1", [{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": "p1"}])
     assert out["version"] == 4
-    assert _body(apply) == {"proposals": [{"entity_id": "A-3", "input_hash": "h1"}]}
+    assert _body(apply) == {"proposals": [
+        {"entity_id": "A-3", "input_hash": "h1", "proposal_hash": "p1"}]}
     answer = respx.post(BASE + "/T-4/answer").mock(return_value=httpx.Response(
         200, json={"entity_id": "T-4", "queued": 1}))
     await client.answer_entity_question("tm-1", "T-4", "Session tokens.", "h2")
@@ -54,12 +55,12 @@ async def test_the_tools_forward_what_they_were_given_and_name_no_whole_model() 
     with patch("mipiti_mcp.server._get_client", return_value=client):
         applied = await server.apply_entity_proposals(
             server_version="0", model_id="tm-1",
-            proposals='[{"entity_id": " A-3 ", "input_hash": " h1 "}]')
+            proposals='[{"entity_id": " A-3 ", "input_hash": " h1 ", "proposal_hash": " p1 "}]')
         await server.answer_entity_question(
             server_version="0", model_id="tm-1", entity_id=" T-4 ",
             text=" Session tokens. ", input_hash=" h2 ")
     client.apply_entity_proposals.assert_awaited_once_with(
-        "tm-1", [{"entity_id": "A-3", "input_hash": "h1"}])
+        "tm-1", [{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": "p1"}])
     client.answer_entity_question.assert_awaited_once_with(
         "tm-1", "T-4", "Session tokens.", "h2")
     # The whole model is not handed back: its reference is.
@@ -100,18 +101,104 @@ async def test_a_stale_answer_is_reported_as_such() -> None:
                 input_hash="h1")
 
 
+@pytest.mark.asyncio
+async def test_an_item_naming_no_correction_is_sent_to_be_answered_unbound() -> None:
+    client = _client(apply_entity_proposals={"results": [
+        {"entity_id": "A-3", "outcome": "unbound", "proposal_hash": "p1"}]})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.apply_entity_proposals(
+            server_version="0", model_id="tm-1",
+            proposals='[{"entity_id": "A-3", "input_hash": "h1"}]')
+    client.apply_entity_proposals.assert_awaited_once_with(
+        "tm-1", [{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": ""}])
+    assert out["results"][0]["outcome"] == "unbound"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_client_settles_a_pending_rating(mock_env: None) -> None:
+    client = MipitiClient()
+    settle = respx.post(BASE + "/A-3/rating/settle").mock(return_value=httpx.Response(
+        200, json={"entity_id": "A-3", "choice": "keep_person", "version_created": False}))
+    await client.settle_entity_rating("tm-1", "A-3", "asset", "keep_person", "ph")
+    assert _body(settle) == {"entity_kind": "asset", "choice": "keep_person",
+                             "pair_hash": "ph"}
+    await client.settle_entity_rating("tm-1", "A-3", "asset", "set", "ph",
+                                      factors={"blast_radius": "Isolated"},
+                                      rationale="measured", change_reason="audited")
+    assert _body(settle) == {"entity_kind": "asset", "choice": "set", "pair_hash": "ph",
+                             "factors": {"blast_radius": "Isolated"},
+                             "rationale": "measured", "change_reason": "audited"}
+
+
+@pytest.mark.asyncio
+async def test_the_settle_tool_forwards_the_choice_as_read() -> None:
+    client = _client(settle_entity_rating={"entity_id": "A-3", "choice": "take_model",
+                                           "version_created": False})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.settle_entity_rating(
+            server_version="0", model_id="tm-1", entity_id=" A-3 ", entity_kind="asset",
+            choice="take_model", pair_hash=" ph ")
+    client.settle_entity_rating.assert_awaited_once_with(
+        "tm-1", "A-3", "asset", "take_model", "ph", factors=None, rationale="",
+        change_reason="")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [
+    {"entity_id": " ", "entity_kind": "asset", "choice": "keep_person", "pair_hash": "p"},
+    {"entity_id": "A-3", "entity_kind": "boundary", "choice": "keep_person", "pair_hash": "p"},
+    {"entity_id": "A-3", "entity_kind": "asset", "choice": "average", "pair_hash": "p"},
+    {"entity_id": "A-3", "entity_kind": "asset", "choice": "keep_person", "pair_hash": " "},
+    {"entity_id": "A-3", "entity_kind": "asset", "choice": "set", "pair_hash": "p"},
+    {"entity_id": "A-3", "entity_kind": "asset", "choice": "set", "pair_hash": "p",
+     "factors": "nope"},
+])
+async def test_a_settling_the_api_would_refuse_is_refused_before_the_call(kwargs: dict) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.settle_entity_rating(server_version="0", model_id="tm-1", **kwargs)
+    client.settle_entity_rating.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_version_conflict_says_to_read_the_model_again() -> None:
+    request = httpx.Request("PUT", "http://x/assets/A-3")
+    refusal = httpx.HTTPStatusError("conflict", request=request, response=httpx.Response(
+        409, json={"detail": {"code": "version_conflict", "current_version": 7,
+                              "model_id": "tm-1", "reason": "version 7 was saved since"}},
+        request=request))
+    client = AsyncMock()
+    client.apply_entity_proposals = AsyncMock(side_effect=refusal)
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError, match="current version is 7.*Read the model again"):
+            await server.apply_entity_proposals(
+                server_version="0", model_id="tm-1",
+                proposals='[{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": "p1"}]')
+
+
 def test_the_tools_are_published_with_their_rules() -> None:
     import asyncio
     tools = {t.name: " ".join((t.description or "").split())
              for t in asyncio.run(server.mcp.list_tools())}
     for word in ("``applied``", "``rejected``", "``stale``", "``none``", "``unavailable``",
-                 "never moves a position"):
+                 "``unbound``", "``refused``", "``property_removed``", "``proposal_hash``",
+                 "``drops``", "a judgment normally the owner's", "``answer_entity_question``",
+                 "declared not applicable", "the residual that policy accepts",
+                 "never moves a position, credentials or components"):
         assert word in tools["apply_entity_proposals"], word
+    for word in ("``keep_person``", "``take_model``", "``set``", "``rating_reconfirmed``",
+                 "``pair_hash``", "``nothing_pending``"):
+        assert word in tools["settle_entity_rating"], word
+    for name in ("edit_asset", "edit_attacker"):
+        assert "settles the pair" in tools[name], name
     for word in ("``not_flagged``", "``defect``", "``invalid``", "never guess",
                  "never weaken a true claim", "It decides nothing",
                  "creates no model version"):
         assert word in tools["answer_entity_question"], word
     assert "``quality``" in tools["get_entity"]
     instructions = server.build_instructions("pro", "user")
-    for name in ("apply_entity_proposals", "answer_entity_question"):
+    for name in ("apply_entity_proposals", "answer_entity_question", "settle_entity_rating"):
         assert f"`{name}`" in instructions, name
+    assert "`proposal_hash`" in instructions and "`stale_only`" in instructions

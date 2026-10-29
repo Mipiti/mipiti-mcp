@@ -104,8 +104,33 @@ async def test_an_empty_list_names_no_entity(mock_env: None) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_only_reaches_the_client_and_the_body(mock_env: None) -> None:
+    mock = _client_with_job({})
+    with patch.object(server, "_get_client", return_value=mock):
+        await reevaluate_threat_model_factors(
+            server_version="0", model_id="tm-001", ctx=_ctx(), entity_ids="T-14",
+            stale_only=True,
+        )
+    mock.start_reevaluate_factors.assert_awaited_once_with(
+        "tm-001", change_reason=None, entity_ids=["T-14"], stale_only=True,
+    )
+    captured: dict = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(200, json={"job_id": "job-reeval"})
+
+    with respx.mock:
+        respx.post(_JOB_URL).mock(side_effect=_capture)
+        client = MipitiClient()
+        await client.start_reevaluate_factors("tm-001", entity_ids=["T-14"], stale_only=True)
+        await client.close()
+    assert captured["body"] == {"entity_ids": ["T-14"], "stale_only": True}
+
+
+@pytest.mark.asyncio
 async def test_the_tool_declares_the_scope_parameters() -> None:
     tool = await server.mcp.get_tool("reevaluate_threat_model_factors")
     params = tool.parameters["properties"]
-    assert "entity_ids" in params and "unrated_only" in params
+    assert "entity_ids" in params and "unrated_only" in params and "stale_only" in params
     assert "entity_ids" not in tool.parameters.get("required", [])
