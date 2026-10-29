@@ -1947,12 +1947,16 @@ class MipitiClient:
         change_reason: Optional[str] = None,
         entity_ids: list[str] | None = None,
         unrated_only: bool = False,
+        stale_only: bool = False,
     ) -> dict:
         """Kick off the bulk factor re-evaluation as a background job.
 
         Re-runs the LLM factor judgment on the live assets and attackers in
         scope: every one by default, those ``entity_ids`` names, and of those
-        only the ones nobody rated when ``unrated_only``. An id that names no
+        only the ones nobody rated when ``unrated_only``, or only those rated
+        for another description when ``stale_only`` (both: either). A
+        person's rating is never replaced: an answer over it is held pending
+        beside it. An id that names no
         live asset or attacker is refused (400) before any call. It scales
         with entity count, so it runs as a job (returns ``{"job_id": ...}`` to
         poll) rather than a long synchronous request the MCP transport would
@@ -1963,8 +1967,8 @@ class MipitiClient:
         ``failed_entities`` and successful revisions still persist); the job
         fails only when every entity in scope failed. Body optional; an
         omitted ``change_reason`` defaults to ``"LLM factor re-evaluation"``.
-        ``entity_ids`` and ``unrated_only`` are sent only when given.
-        Soft-deleted entities are skipped.
+        ``entity_ids``, ``unrated_only`` and ``stale_only`` are sent only when
+        given. Soft-deleted entities are skipped.
         """
         body: dict[str, Any] = {}
         if change_reason is not None:
@@ -1973,6 +1977,8 @@ class MipitiClient:
             body["entity_ids"] = list(entity_ids)
         if unrated_only:
             body["unrated_only"] = True
+        if stale_only:
+            body["stale_only"] = True
         return await self._post(
             f"/api/models/{model_id}/factors/reevaluate-job", body,
         )
@@ -3404,12 +3410,30 @@ class MipitiClient:
     async def apply_entity_proposals(self, model_id: str, proposals: list[dict]) -> dict:
         """POST /api/models/{model_id}/entities/apply-proposals.
 
-        Applies the quality check's correction of each named entity, each
-        ``{entity_id, input_hash}``, in one new model version; answers one
-        outcome per entity.
+        Accepts the quality check's correction of each named entity, each
+        ``{entity_id, input_hash, proposal_hash}``, in one new model version;
+        answers one outcome per entity.
         """
         return await self._post(f"/api/models/{model_id}/entities/apply-proposals",
                                 {"proposals": [dict(p) for p in proposals]})
+
+    async def settle_entity_rating(self, model_id: str, entity_id: str, entity_kind: str,
+                                   choice: str, pair_hash: str, factors: Optional[dict] = None,
+                                   rationale: str = "", change_reason: str = "") -> dict:
+        """POST /api/models/{model_id}/entities/{entity_id}/rating/settle.
+
+        Settles the rating held pending for an asset or attacker: keep the
+        person's, take the model's, or set another, naming the pair as read.
+        """
+        body: dict = {"entity_kind": entity_kind, "choice": choice, "pair_hash": pair_hash}
+        if factors:
+            body["factors"] = dict(factors)
+        if rationale:
+            body["rationale"] = rationale
+        if change_reason:
+            body["change_reason"] = change_reason
+        return await self._post(
+            f"/api/models/{model_id}/entities/{entity_id}/rating/settle", body)
 
     async def answer_entity_question(self, model_id: str, entity_id: str, text: str,
                                      input_hash: str) -> dict:
