@@ -330,10 +330,11 @@ jeepney==0.9.0 ; sys_platform == 'linux' \
     # via
     #   keyring
     #   secretstorage
-joserfc==1.7.0 \
-    --hash=sha256:17e5d7a5a35e65442b05efc435a3d5d46696ffa2c8a2ed0eea6f63fc268e3224 \
-    --hash=sha256:4aced6ab0c47846f0a531402aec2419a874b91e918df9c4c9da8a82fb559d6c4
+joserfc==1.7.7 \
+    --hash=sha256:06979cfbab78bc802f14c0358f32969826cc26720e13cb38926ffdc86bc0cb2c \
+    --hash=sha256:471d0fd12a5a0d1c0942de280f39efe6f597878315033270b504d4d006d25510
     # via
+    #   -c (workspace)
     #   authlib
     #   fastmcp-slim
 jsonref==1.1.0 \
