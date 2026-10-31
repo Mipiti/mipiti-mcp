@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.100.1] - 2026-10-31
+
+### Fixed
+
+- Dependencies: joserfc 1.7.7 (CVE-2026-119283, CVE-2026-119284). (#362)
+
 ## [0.100.0] - 2026-10-29
 
 ### Added
