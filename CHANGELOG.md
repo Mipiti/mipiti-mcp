@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.102.0] - 2026-11-01
+
+### Added
+
+- The tool catalog history keeps a catalog for 30 days after it is superseded, rather than growing with every release. (#368)
+
 ## [0.101.1] - 2026-11-01
 
 ### Changed
