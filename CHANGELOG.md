@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.101.1] - 2026-11-01
+
+### Changed
+
+- `add_assumption`: its description says that declaring a taxonomy primitive or property not applicable may be refused with an escalation for a person. (#366)
+
 ## [0.101.0] - 2026-11-01
 
 ### Added
