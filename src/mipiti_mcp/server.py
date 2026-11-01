@@ -87,7 +87,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `add_asset` / `edit_asset` — targeted single-entity changes without full refinement. An entity that does not apply is recorded with a non-applicability assumption or `create_co_disposition`, never by editing the entity.
 - `add_attacker` / `edit_attacker` — same for attackers, plus `surface_extent`: `whole` when, from its position, the attacker's operations range over ANY entry of the interface it reaches (any endpoint, request, row, file, message or frame); `point` when they range over one named entry. Supplying it requires `change_reason` on either tool, and a person's call attests it, audited like a factor override. An attested `whole` makes the objectives that attacker anchors for-all obligations (see Controls and assertions). On `add_attacker` only `whole` is declarable — narrowing to one named entry is a statement about the objectives the attacker anchors, which a create does not have yet, so add the attacker and then narrow it with `edit_attacker`.
 - **Attestations are judgments.** Attesting a boundary's seal, an attacker's position (`attest_position`), its privileges (`attest_privileges`) or its surface extent is a person's decision; a program takes it only where the workspace delegates it (`seal_attested`, `position_attested`, `privileges_attested`, `extent_attested`). A program refused is not given a 403: its edit lands unattested, the attestation is parked for a person, and the answer carries `attestation: {status: "escalated", escalation_id}`. An attestation holds for the content it was taken over: a later change to a boundary's `passes`, `crosses`, `neighbors` or `sealed`, or to an attacker's boundaries or privileges, voids it. Only attested grounds (a trusted position, attested privileges `None`, an attested seal on every blocking boundary) let reachability remove an objective.
-- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words and `drops`, the claims they no longer make: applying them with `apply_entity_proposals`, naming the verdict's `input_hash` and the correction's `proposal_hash`, is accepting the correction, a judgment normally the owner's (a program's is parked for a person unless the workspace delegates `entity_correction_accepted`), so relay the correction and its drops to the person, answer a doubted claim you can establish with `answer_entity_question` instead, and declare a property that does not apply not applicable, since a correction never removes one; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. An entity whose `quality` reads `unchecked` is checked with `check_entity_quality`, naming it: it estimates first (RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree), never re-checks a current verdict, and is at Mipiti's cost where a platform change made the check necessary. `revalidate_entity_quality` asks every entity again whatever is stored, at your cost.
+- **Entity quality (authoring contract)**: an asset must name the *data or resource being protected* and the security property at stake (Confidentiality / Integrity / Availability / Usage), not a mechanism or control — name the key material, not "the KMS encryption". An attacker's `capability` names its position, what it holds and the *operations performable from there*, each on a named part of the system: "From [position], holding [credentials | no credential], the attacker can [concrete operations] …", never a technique or an outcome. Every claim must rest on the description, its answers or the entity's own answers. The check's verdict is read as `quality` on `get_entity`: `clean`; `advice` (a sharper wording, never a warning); `defect`, with `proposed` corrected words, `drops`, the claims they no longer make, and `adds`, the claims (and security properties) they newly make: applying them with `apply_entity_proposals`, naming the verdict's `input_hash` and the correction's `proposal_hash`, is accepting the correction, a judgment normally the owner's (a program's is parked for a person unless the workspace delegates `entity_correction_accepted` for every kind the correction carries: a narrowing drops a claim, a widening adds one), so relay the correction, its drops and its additions to the person, answer a doubted claim you can establish with `answer_entity_question` instead, and declare a property that does not apply not applicable, since a correction never removes one; `question`, one question for the owner; or `invalid`. Any flag (a question, a defect, an invalid verdict) may be answered with a fact through `answer_entity_question`, from the documentation or the code and naming where it is shown, never a guess: the check, shown the answer, decides again. Never weaken a true claim to clear a flag. The review queue's `entity_quality` row lists every entity with a correction, a question or advice. An entity whose `quality` reads `unchecked` is checked with `check_entity_quality`, naming it: it estimates first (RELAY THE ESTIMATE TO THE PERSON, and confirm only when they agree), never re-checks a current verdict, and is at Mipiti's cost where a platform change made the check necessary. `revalidate_entity_quality` asks every entity again whatever is stored, at your cost.
 - `get_entity(entity_type=…)` — read any single entity by type + id. One reader for every entity kind: `asset`, `attacker`, `component`, `trust_boundary`, or `assumption`.
 - `remove_entity(entity_type=…)` / `restore_entity(entity_type=…)` — soft-delete or restore any entity by type + id (`asset`, `attacker`, `component`, `trust_boundary`, or `assumption`); removals are audit-preserving. Every entity write (add, edit, remove, restore) answers with the model's id, version and title and, under `entities`, the records it wrote; read the whole model with `get_threat_model`.
 - `reevaluate_threat_model_factors` — bulk LLM re-run of the factor decomposition (subscores + blast/recoverability/regulatory on assets; CVSS-Base + capability_prevalence on attackers) for every live entity in a model, or only those `entity_ids` names, or only those nobody rated (`unrated_only`: the entities a model reads as "not rated", one call each), or only those rated for another description (`stale_only`: an entity's `rating_stale`, the review queue's `rating_stale` row). A rating a person chose is never replaced: the answer is held pending beside it (`rating_pending`), the more severe in force, until `settle_entity_rating` settles them (a judgment, `rating_reconfirmed`). Use this to re-baseline an existing model after the feature description changes meaningfully, or to refresh stale ratings — without regenerating the whole model (which would destroy controls, assertions, components). The platform's factor judgment is a calibrated *starting point*; layer deployment-specific reality on top via `edit_asset` / `edit_attacker` with a `change_reason` documenting the override (e.g., "regulatory_scope=Legal — tenant is HIPAA-covered", "capability_prevalence=Commodity — endpoint is public-internet exposed"). The rating-revision audit trail distinguishes platform suggestions from operator overrides.
@@ -1338,7 +1338,7 @@ async def list_threat_models(
 ) -> dict:
     """List saved threat models in the current workspace.
 
-    Read-only; no side effects. Returns ``{items: [{id, title, version, created_at, ...}], count}``. Use this to discover model IDs to pass to other tools, or for a portfolio overview.
+    Read-only; no side effects. Returns ``{items: [{id, title, version, created_at, entities_flagged?, ...}], count}``; ``entities_flagged`` counts the assets and attackers the quality check flags (not the review queue's items, which ``get_review_queue`` lists). Use this to discover model IDs to pass to other tools, or for a portfolio overview.
 
     Args:
         source: Filter by the system that created each model. One of "web", "mcp", "jira", "api". Omit (default "") to list all models regardless of source.
@@ -1355,6 +1355,11 @@ async def list_threat_models(
                 "version": m.version,
                 "created_at": m.created_at,
             }
+            # How many assets and attackers the quality check flags as they
+            # stand; absent where the server could not read it, never 0 then.
+            flagged = getattr(m, "entities_need_review", None)
+            if flagged is not None:
+                entry["entities_flagged"] = flagged
             if include_assessment_summary:
                 # Pydantic `extra=allow` lets us read the inline enrichment
                 # off the ModelSummary instance directly.
@@ -5087,10 +5092,23 @@ async def add_assumption(
     exclusion_asset_component_id: Optional[str] = None,
     exclusion_property_match: Optional[str] = None,
     exclusion_co_ids: Optional[str] = None,
+    taxonomy_primitive: Optional[str] = None,
+    taxonomy_property: Optional[str] = None,
+    entity_ids: Optional[str] = None,
 ) -> dict:
     """Add an assumption. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
     ``entities.assumptions`` the assumption as created.
+
+    A ``non_applicability`` assumption may close a gap the build proposal
+    reports as missing from the inventory: ``taxonomy_primitive`` names a
+    primitive that applies to nothing here, or with ``taxonomy_property``
+    one security property that primitive entails, leaving the primitive and
+    its other properties owed. For a missing ``cryptographic_operations:U``
+    where every key answering it can be read out (none is held in a KMS or
+    HSM that can be invoked but not read), say so and pass
+    ``taxonomy_primitive="cryptographic_operations"``,
+    ``taxonomy_property="U"``. State only what the system does.
 
     Assumptions represent security properties outside the system owner's
     trust boundary. When linked to COs and attested, they mitigate those
@@ -5128,6 +5146,16 @@ async def add_assumption(
         exclusion_property_match: "C" | "I" | "A" | "U" | "*".
         exclusion_co_ids: Comma-separated CO IDs the predicate matches
             explicitly. When non-empty, overrides the match fields.
+        taxonomy_primitive: The taxonomy primitive the assumption declares
+            not applicable (e.g. "cryptographic_operations"); needs
+            ``assumption_type="non_applicability"``.
+        taxonomy_property: With ``taxonomy_primitive``, the one property of
+            it declared not applicable ("C" | "I" | "A" | "U"); 400 when the
+            primitive does not entail it.
+        entity_ids: Comma-separated asset and attacker ids whose words rest
+            on it (400 for one naming no live entity). The quality check of
+            each is shown it and reads a claim it states as grounded: record
+            a conservative premise this way to keep the claim it grounds.
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
 
@@ -5157,6 +5185,10 @@ async def add_assumption(
             model_id, description, parsed,
             assumption_type=assumption_type,
             exclusion=exclusion,
+            taxonomy_primitive=taxonomy_primitive,
+            taxonomy_property=taxonomy_property,
+            entity_ids=([e.strip() for e in entity_ids.split(",") if e.strip()]
+                        if entity_ids is not None else None),
         ), "assumption")
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -5174,6 +5206,7 @@ async def edit_assumption(
     exclusion_property_match: Optional[str] = None,
     exclusion_co_ids: Optional[str] = None,
     clear_exclusion: bool = False,
+    entity_ids: Optional[str] = None,
 ) -> dict:
     """Edit an assumption. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
@@ -5207,10 +5240,15 @@ async def edit_assumption(
         clear_exclusion: When True, removes the predicate entirely (the
             assumption becomes prose-only). Mutually exclusive with the
             exclusion_* params — if both are sent, the exclusion_* params win.
+        entity_ids: Comma-separated asset and attacker ids whose words rest
+            on it; replaces the ones it names ("" names none, omit to leave
+            unchanged). The quality check of each is shown it.
     """
     kwargs: dict = {}
     if description is not None:
         kwargs["description"] = description
+    if entity_ids is not None:
+        kwargs["entity_ids"] = [e.strip() for e in entity_ids.split(",") if e.strip()]
     if linked_co_ids is not None:
         kwargs["linked_co_ids"] = [c.strip() for c in linked_co_ids.split(",") if c.strip()]
 
@@ -7364,6 +7402,54 @@ async def decide_proposal(
 
 
 @mcp.tool()
+async def decide_proposals(
+    server_version: str,
+    model_id: str,
+    decisions: str,
+    note: str = "",
+    expires_at: str = "",
+    record_only: bool = False,
+) -> dict:
+    """Decide several proposals and escalations of one model together (at
+    most 200), each exactly as ``decide_proposal`` decides one, in its own
+    transaction, in the order given: one refused leaves the others decided.
+    Mutating; each is a judgment under the same delegation rules, and a
+    program refused one gets that item's refusal (its ``escalation_id``)
+    beside the others' outcomes. Use it to clear a review queue's parked
+    decisions in one call rather than one at a time.
+
+    Args:
+        model_id: ID of the threat model.
+        decisions: JSON array of ``{"proposal_id", "decision"}``, each
+            decision ``accept`` or ``reject``.
+        note: Optional note recorded with each decision.
+        expires_at: ISO 8601 date accepted assumptions lapse (as on
+            ``decide_proposal``).
+        record_only: As on ``decide_proposal``, for every item.
+
+    Returns ``{model_id, results, decided, refused}``: per item
+    ``{proposal_id, ok, ...}``, a decided one with ``proposal`` and
+    ``effect``, a refused one with ``status_code`` and ``detail``.
+    """
+    parsed = _json_value(decisions, "decisions", list,
+                         '[{"proposal_id": "...", "decision": "accept"}]')
+    if not parsed or len(parsed) > 200:
+        raise ToolError("decisions names between 1 and 200 proposals.")
+    items = []
+    for d in parsed:
+        if not (isinstance(d, dict) and str(d.get("proposal_id", "")).strip()
+                and d.get("decision") in ("accept", "reject")):
+            raise ToolError("each decision is an object with a proposal_id and a decision "
+                            "of 'accept' or 'reject'.")
+        items.append({"proposal_id": str(d["proposal_id"]).strip(), "decision": d["decision"]})
+    try:
+        return await _get_client().decide_proposals(
+            model_id, items, note=note, expires_at=expires_at, record_only=record_only)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def decide_drift_intent(
     server_version: str,
     model_id: str,
@@ -8021,7 +8107,10 @@ async def declare_behavioural_link(
     parked for a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
-    Returns the links as ``get_behavioural_links`` does, with ``declared``.
+    Returns ``{model_id, model_version, declared, link, questions,
+    proposals_hash}``: the link as stored with whether it counts, the node's
+    open link questions, and the hash a bulk acceptance names now. Read the
+    whole set with ``get_behavioural_links``.
 
     Args:
         model_id: ID of the threat model.
@@ -8035,6 +8124,43 @@ async def declare_behavioural_link(
         return _dump(await _get_client().declare_behavioural_link(
             model_id, node_id.strip(), entity_id.strip(),
             component_id=component_id.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def match_behavioural_links(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Match the behavioural elements and zones never matched against the
+    inventory (``never_matched`` on ``get_behavioural_links``: added by an
+    answer or an edit after the model was matched). A paid action.
+
+    Without ``confirm_estimate``: the nodes and the estimate, nothing
+    charged or written. RELAY THE ESTIMATE TO THE PERSON and confirm only
+    when they agree. With it: runs the matching call, charged to the caller
+    at actuals (402 when they cannot cover it), and stores a proposal per
+    node; it declares nothing, so review the proposals with
+    ``get_behavioural_links`` and accept them with
+    ``accept_behavioural_link_proposals``. 409 ``nothing_to_match`` when
+    every node has a link or a proposal; 404 for a caller who may not start
+    paid work on the model.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: True to run the match after the person agreed to
+            the estimate.
+    """
+    try:
+        client = _get_client()
+        answer = await client.match_behavioural_links(model_id, confirm_estimate=confirm_estimate)
+        if confirm_estimate and isinstance(answer, dict) and answer.get("job_id"):
+            return await _await_backend_job(client, answer["job_id"], ctx, timeout=1800,
+                                            heartbeat=True)
+        return answer
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -8528,6 +8654,7 @@ async def apply_entity_proposals(
     server_version: str,
     model_id: str,
     proposals: str,
+    ctx: Context,
 ) -> dict:
     """Accept the quality check's corrections of assets and attackers, in
     one new model version.
@@ -8541,11 +8668,14 @@ async def apply_entity_proposals(
 
     Read the correction as ``quality`` on ``get_entity`` (or the review
     queue's ``entity_quality`` row): ``proposed`` holds the corrected words,
-    ``proposal_hash`` names them, ``input_hash`` the verdict, and ``drops``
-    each claim the words before made that the correction does not, with why.
-    RELAY ``proposed`` AND ``drops`` TO THE PERSON. A correction no reader
-    marked is a rewording, else a narrowing; under a rule admitting only
-    ``rewording``, a claim every reader missed is applied by the program: the
+    ``proposal_hash`` names them, ``input_hash`` the verdict, ``drops`` each
+    claim the words before made that the correction does not, and ``adds``
+    each claim it makes that they did not (a security property it adds among
+    them), with why. RELAY ``proposed``, ``drops`` AND ``adds`` TO THE
+    PERSON. Dropping a claim makes it a narrowing, adding one (or a property)
+    a widening, both ``narrowing+widening``, neither a rewording; a program
+    applies it only under a rule naming every kind it carries. Under a rule
+    of ``rewording`` alone, a claim every reader missed is applied: the
     residual that policy accepts. It never moves a position, credentials or
     components; the entity is rated for its new words, a person's rating kept
     and the new one held pending (``settle_entity_rating``).
@@ -8575,13 +8705,18 @@ async def apply_entity_proposals(
                 and str(p.get("input_hash", "")).strip()):
             raise ToolError("each proposal is an object with an entity_id and an input_hash.")
     # An item naming no correction is sent as it is: it is answered
-    # ``unbound``, with the correction and the hash to name.
+    # ``unbound``, with the correction and the hash to name. The apply makes
+    # three model calls per item, one after another, which outlasts a
+    # client's transport on a batch: it runs as a job, polled with progress.
     try:
-        answer = await _get_client().apply_entity_proposals(
+        client = _get_client()
+        started = await client.start_apply_entity_proposals(
             model_id, [{"entity_id": str(p["entity_id"]).strip(),
                         "input_hash": str(p["input_hash"]).strip(),
                         "proposal_hash": str(p.get("proposal_hash") or "").strip()}
                        for p in parsed])
+        answer = await _await_backend_job(client, started["job_id"], ctx, timeout=1800,
+                                          heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
     return _without_models(_dump(answer)) if isinstance(answer, dict) else answer

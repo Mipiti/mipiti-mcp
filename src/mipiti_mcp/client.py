@@ -2768,6 +2768,9 @@ class MipitiClient:
         *,
         assumption_type: str = "external",
         exclusion: dict | None = None,
+        taxonomy_primitive: str | None = None,
+        taxonomy_property: str | None = None,
+        entity_ids: list[str] | None = None,
     ) -> dict:
         body: dict = {"description": description}
         if linked_co_ids:
@@ -2776,6 +2779,12 @@ class MipitiClient:
             body["assumption_type"] = assumption_type
         if exclusion is not None:
             body["exclusion"] = exclusion
+        if taxonomy_primitive:
+            body["taxonomy_primitive"] = taxonomy_primitive
+        if taxonomy_property:
+            body["taxonomy_property"] = taxonomy_property
+        if entity_ids:
+            body["entity_ids"] = list(entity_ids)
         return await self._post(f"/api/models/{model_id}/assumptions", body)
 
     async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:
@@ -3028,6 +3037,20 @@ class MipitiClient:
             f"/api/models/{model_id}/proposals/{proposal_id}/decide", body,
         )
 
+    async def decide_proposals(
+        self, model_id: str, decisions: list[dict], *, note: str = "",
+        expires_at: str = "", record_only: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/proposals/decide: up to 200 decisions
+        of one model, each ``{proposal_id, decision}``, each in its own
+        transaction. Returns ``{model_id, results, decided, refused}``."""
+        body: dict[str, Any] = {"decisions": [dict(d) for d in decisions], "note": note}
+        if expires_at:
+            body["expires_at"] = expires_at
+        if record_only:
+            body["record_only"] = True
+        return await self._post(f"/api/models/{model_id}/proposals/decide", body)
+
     async def decide_drift_intent(
         self, model_id: str, finding_id: str, intent: str, control_id: str = "",
         head_commit: str = "", note: str = "",
@@ -3278,6 +3301,14 @@ class MipitiClient:
             {"entity_id": entity_id, "component_id": component_id},
         )
 
+    async def match_behavioural_links(self, model_id: str, *,
+                                      confirm_estimate: bool = False) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/links/match: the
+        nodes never matched and the estimate; confirmed, ``{job_id}`` of the
+        matching job."""
+        return await self._post(self._behavioural(model_id, "/links/match"),
+                                {"confirm_estimate": bool(confirm_estimate)})
+
     async def accept_behavioural_link_proposals(
         self, model_id: str, proposals_hash: str,
     ) -> dict:
@@ -3451,6 +3482,13 @@ class MipitiClient:
         answers one outcome per entity.
         """
         return await self._post(f"/api/models/{model_id}/entities/apply-proposals",
+                                {"proposals": [dict(p) for p in proposals]})
+
+    async def start_apply_entity_proposals(self, model_id: str, proposals: list[dict]) -> dict:
+        """POST /api/models/{model_id}/entities/apply-proposals-job: the same
+        apply as a background job; answers ``{job_id}``, polled at
+        ``/api/operations/{job_id}``, whose result is the apply's answer."""
+        return await self._post(f"/api/models/{model_id}/entities/apply-proposals-job",
                                 {"proposals": [dict(p) for p in proposals]})
 
     async def settle_entity_rating(self, model_id: str, entity_id: str, entity_kind: str,

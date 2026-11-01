@@ -89,7 +89,7 @@ A session keeps the tool descriptions and instructions it read when it started. 
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->163<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->165<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
