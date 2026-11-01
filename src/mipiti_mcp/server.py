@@ -5151,7 +5151,10 @@ async def add_assumption(
             ``assumption_type="non_applicability"``.
         taxonomy_property: With ``taxonomy_primitive``, the one property of
             it declared not applicable ("C" | "I" | "A" | "U"); 400 when the
-            primitive does not entail it.
+            primitive does not entail it. Declaring either is a judgment
+            (``not_applicable_declared``): refused with 403 and an
+            ``escalation_id`` unless the delegation policy names it, parked
+            for a person. Do not retry; report the ``escalation_id``.
         entity_ids: Comma-separated asset and attacker ids whose words rest
             on it (400 for one naming no live entity). The quality check of
             each is shown it and reads a claim it states as grounded: record
