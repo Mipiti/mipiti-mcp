@@ -9,6 +9,16 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.101.0] - 2026-11-01
+
+### Added
+
+- `decide_proposals`: decide several proposals and escalations of one model in one call. (#364)
+- `match_behavioural_links`: match the behavioural elements never matched against the inventory, estimate first. (#364)
+- `apply_entity_proposals` runs as a polled job, with progress, and its description covers a correction's additions and the widening kind. (#364)
+- `add_assumption` takes `taxonomy_primitive` and `taxonomy_property`; `add_assumption` and `edit_assumption` take `entity_ids`. (#364)
+- `list_threat_models` includes `entities_flagged`; `declare_behavioural_link` documents its compact answer. (#364)
+
 ## [0.100.1] - 2026-10-31
 
 ### Fixed
