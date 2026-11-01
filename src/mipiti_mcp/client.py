@@ -2768,6 +2768,8 @@ class MipitiClient:
         *,
         assumption_type: str = "external",
         exclusion: dict | None = None,
+        taxonomy_primitive: str | None = None,
+        taxonomy_property: str | None = None,
     ) -> dict:
         body: dict = {"description": description}
         if linked_co_ids:
@@ -2776,6 +2778,10 @@ class MipitiClient:
             body["assumption_type"] = assumption_type
         if exclusion is not None:
             body["exclusion"] = exclusion
+        if taxonomy_primitive:
+            body["taxonomy_primitive"] = taxonomy_primitive
+        if taxonomy_property:
+            body["taxonomy_property"] = taxonomy_property
         return await self._post(f"/api/models/{model_id}/assumptions", body)
 
     async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:

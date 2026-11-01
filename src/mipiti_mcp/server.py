@@ -5087,10 +5087,22 @@ async def add_assumption(
     exclusion_asset_component_id: Optional[str] = None,
     exclusion_property_match: Optional[str] = None,
     exclusion_co_ids: Optional[str] = None,
+    taxonomy_primitive: Optional[str] = None,
+    taxonomy_property: Optional[str] = None,
 ) -> dict:
     """Add an assumption. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
     ``entities.assumptions`` the assumption as created.
+
+    A ``non_applicability`` assumption may close a gap the build proposal
+    reports as missing from the inventory: ``taxonomy_primitive`` names a
+    primitive that applies to nothing here, or with ``taxonomy_property``
+    one security property that primitive entails, leaving the primitive and
+    its other properties owed. For a missing ``cryptographic_operations:U``
+    where every key answering it can be read out (none is held in a KMS or
+    HSM that can be invoked but not read), say so and pass
+    ``taxonomy_primitive="cryptographic_operations"``,
+    ``taxonomy_property="U"``. State only what the system does.
 
     Assumptions represent security properties outside the system owner's
     trust boundary. When linked to COs and attested, they mitigate those
@@ -5128,6 +5140,12 @@ async def add_assumption(
         exclusion_property_match: "C" | "I" | "A" | "U" | "*".
         exclusion_co_ids: Comma-separated CO IDs the predicate matches
             explicitly. When non-empty, overrides the match fields.
+        taxonomy_primitive: The taxonomy primitive the assumption declares
+            not applicable (e.g. "cryptographic_operations"); needs
+            ``assumption_type="non_applicability"``.
+        taxonomy_property: With ``taxonomy_primitive``, the one property of
+            it declared not applicable ("C" | "I" | "A" | "U"); 400 when the
+            primitive does not entail it.
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
 
@@ -5157,6 +5175,8 @@ async def add_assumption(
             model_id, description, parsed,
             assumption_type=assumption_type,
             exclusion=exclusion,
+            taxonomy_primitive=taxonomy_primitive,
+            taxonomy_property=taxonomy_property,
         ), "assumption")
     except Exception as exc:
         raise _api_error(exc) from exc
