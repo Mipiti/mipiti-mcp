@@ -28,6 +28,19 @@ def _body(route) -> dict:
     return json.loads(route.calls.last.request.content)
 
 
+def _ctx() -> AsyncMock:
+    ctx = AsyncMock()
+    ctx.report_progress = AsyncMock()
+    return ctx
+
+
+def _apply_client(result: dict, **methods: object) -> AsyncMock:
+    """A client whose apply job starts and completes with ``result``."""
+    client = _client(start_apply_entity_proposals={"job_id": "j1"},
+                     get_operation={"status": "completed", "result": result}, **methods)
+    return client
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_the_client_reaches_both_routes(mock_env: None) -> None:
@@ -48,18 +61,18 @@ async def test_the_client_reaches_both_routes(mock_env: None) -> None:
 @pytest.mark.asyncio
 async def test_the_tools_forward_what_they_were_given_and_name_no_whole_model() -> None:
     model = {"id": "tm-1", "version": 4, "title": "T", "assets": [{"id": "A-3"}]}
-    client = _client(
-        apply_entity_proposals={"results": [{"entity_id": "A-3", "outcome": "applied"}],
-                                "version": 4, "model": model},
+    client = _apply_client(
+        {"results": [{"entity_id": "A-3", "outcome": "applied"}], "version": 4,
+         "model": model},
         answer_entity_question={"entity_id": "T-4", "queued": 1})
     with patch("mipiti_mcp.server._get_client", return_value=client):
         applied = await server.apply_entity_proposals(
-            server_version="0", model_id="tm-1",
+            server_version="0", model_id="tm-1", ctx=_ctx(),
             proposals='[{"entity_id": " A-3 ", "input_hash": " h1 ", "proposal_hash": " p1 "}]')
         await server.answer_entity_question(
             server_version="0", model_id="tm-1", entity_id=" T-4 ",
             text=" Session tokens. ", input_hash=" h2 ")
-    client.apply_entity_proposals.assert_awaited_once_with(
+    client.start_apply_entity_proposals.assert_awaited_once_with(
         "tm-1", [{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": "p1"}])
     client.answer_entity_question.assert_awaited_once_with(
         "tm-1", "T-4", "Session tokens.", "h2")
@@ -80,10 +93,11 @@ async def test_the_tools_forward_what_they_were_given_and_name_no_whole_model() 
 async def test_an_act_the_api_would_refuse_is_refused_before_the_call(
         tool: str, kwargs: dict) -> None:
     client = _client()
+    extra = {"ctx": _ctx()} if tool == "apply_entity_proposals" else {}
     with patch("mipiti_mcp.server._get_client", return_value=client):
         with pytest.raises(ToolError):
-            await getattr(server, tool)(server_version="0", model_id="tm-1", **kwargs)
-    client.apply_entity_proposals.assert_not_awaited()
+            await getattr(server, tool)(server_version="0", model_id="tm-1", **kwargs, **extra)
+    client.start_apply_entity_proposals.assert_not_awaited()
     client.answer_entity_question.assert_not_awaited()
 
 
@@ -103,13 +117,13 @@ async def test_a_stale_answer_is_reported_as_such() -> None:
 
 @pytest.mark.asyncio
 async def test_an_item_naming_no_correction_is_sent_to_be_answered_unbound() -> None:
-    client = _client(apply_entity_proposals={"results": [
+    client = _apply_client({"results": [
         {"entity_id": "A-3", "outcome": "unbound", "proposal_hash": "p1"}]})
     with patch("mipiti_mcp.server._get_client", return_value=client):
         out = await server.apply_entity_proposals(
-            server_version="0", model_id="tm-1",
+            server_version="0", model_id="tm-1", ctx=_ctx(),
             proposals='[{"entity_id": "A-3", "input_hash": "h1"}]')
-    client.apply_entity_proposals.assert_awaited_once_with(
+    client.start_apply_entity_proposals.assert_awaited_once_with(
         "tm-1", [{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": ""}])
     assert out["results"][0]["outcome"] == "unbound"
 
@@ -170,11 +184,11 @@ async def test_a_version_conflict_says_to_read_the_model_again() -> None:
                               "model_id": "tm-1", "reason": "version 7 was saved since"}},
         request=request))
     client = AsyncMock()
-    client.apply_entity_proposals = AsyncMock(side_effect=refusal)
+    client.start_apply_entity_proposals = AsyncMock(side_effect=refusal)
     with patch("mipiti_mcp.server._get_client", return_value=client):
         with pytest.raises(ToolError, match="current version is 7.*Read the model again"):
             await server.apply_entity_proposals(
-                server_version="0", model_id="tm-1",
+                server_version="0", model_id="tm-1", ctx=_ctx(),
                 proposals='[{"entity_id": "A-3", "input_hash": "h1", "proposal_hash": "p1"}]')
 
 

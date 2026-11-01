@@ -1338,7 +1338,7 @@ async def list_threat_models(
 ) -> dict:
     """List saved threat models in the current workspace.
 
-    Read-only; no side effects. Returns ``{items: [{id, title, version, created_at, ...}], count}``. Use this to discover model IDs to pass to other tools, or for a portfolio overview.
+    Read-only; no side effects. Returns ``{items: [{id, title, version, created_at, entities_flagged?, ...}], count}``; ``entities_flagged`` counts the assets and attackers the quality check flags (not the review queue's items, which ``get_review_queue`` lists). Use this to discover model IDs to pass to other tools, or for a portfolio overview.
 
     Args:
         source: Filter by the system that created each model. One of "web", "mcp", "jira", "api". Omit (default "") to list all models regardless of source.
@@ -1355,6 +1355,11 @@ async def list_threat_models(
                 "version": m.version,
                 "created_at": m.created_at,
             }
+            # How many assets and attackers the quality check flags as they
+            # stand; absent where the server could not read it, never 0 then.
+            flagged = getattr(m, "entities_need_review", None)
+            if flagged is not None:
+                entry["entities_flagged"] = flagged
             if include_assessment_summary:
                 # Pydantic `extra=allow` lets us read the inline enrichment
                 # off the ModelSummary instance directly.
@@ -5089,6 +5094,7 @@ async def add_assumption(
     exclusion_co_ids: Optional[str] = None,
     taxonomy_primitive: Optional[str] = None,
     taxonomy_property: Optional[str] = None,
+    entity_ids: Optional[str] = None,
 ) -> dict:
     """Add an assumption. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
@@ -5146,6 +5152,10 @@ async def add_assumption(
         taxonomy_property: With ``taxonomy_primitive``, the one property of
             it declared not applicable ("C" | "I" | "A" | "U"); 400 when the
             primitive does not entail it.
+        entity_ids: Comma-separated asset and attacker ids whose words rest
+            on it (400 for one naming no live entity). The quality check of
+            each is shown it and reads a claim it states as grounded: record
+            a conservative premise this way to keep the claim it grounds.
     """
     parsed = [c.strip() for c in linked_co_ids.split(",") if c.strip()] if linked_co_ids else None
 
@@ -5177,6 +5187,8 @@ async def add_assumption(
             exclusion=exclusion,
             taxonomy_primitive=taxonomy_primitive,
             taxonomy_property=taxonomy_property,
+            entity_ids=([e.strip() for e in entity_ids.split(",") if e.strip()]
+                        if entity_ids is not None else None),
         ), "assumption")
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -5194,6 +5206,7 @@ async def edit_assumption(
     exclusion_property_match: Optional[str] = None,
     exclusion_co_ids: Optional[str] = None,
     clear_exclusion: bool = False,
+    entity_ids: Optional[str] = None,
 ) -> dict:
     """Edit an assumption. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
@@ -5227,10 +5240,15 @@ async def edit_assumption(
         clear_exclusion: When True, removes the predicate entirely (the
             assumption becomes prose-only). Mutually exclusive with the
             exclusion_* params — if both are sent, the exclusion_* params win.
+        entity_ids: Comma-separated asset and attacker ids whose words rest
+            on it; replaces the ones it names ("" names none, omit to leave
+            unchanged). The quality check of each is shown it.
     """
     kwargs: dict = {}
     if description is not None:
         kwargs["description"] = description
+    if entity_ids is not None:
+        kwargs["entity_ids"] = [e.strip() for e in entity_ids.split(",") if e.strip()]
     if linked_co_ids is not None:
         kwargs["linked_co_ids"] = [c.strip() for c in linked_co_ids.split(",") if c.strip()]
 
@@ -7384,6 +7402,54 @@ async def decide_proposal(
 
 
 @mcp.tool()
+async def decide_proposals(
+    server_version: str,
+    model_id: str,
+    decisions: str,
+    note: str = "",
+    expires_at: str = "",
+    record_only: bool = False,
+) -> dict:
+    """Decide several proposals and escalations of one model together (at
+    most 200), each exactly as ``decide_proposal`` decides one, in its own
+    transaction, in the order given: one refused leaves the others decided.
+    Mutating; each is a judgment under the same delegation rules, and a
+    program refused one gets that item's refusal (its ``escalation_id``)
+    beside the others' outcomes. Use it to clear a review queue's parked
+    decisions in one call rather than one at a time.
+
+    Args:
+        model_id: ID of the threat model.
+        decisions: JSON array of ``{"proposal_id", "decision"}``, each
+            decision ``accept`` or ``reject``.
+        note: Optional note recorded with each decision.
+        expires_at: ISO 8601 date accepted assumptions lapse (as on
+            ``decide_proposal``).
+        record_only: As on ``decide_proposal``, for every item.
+
+    Returns ``{model_id, results, decided, refused}``: per item
+    ``{proposal_id, ok, ...}``, a decided one with ``proposal`` and
+    ``effect``, a refused one with ``status_code`` and ``detail``.
+    """
+    parsed = _json_value(decisions, "decisions", list,
+                         '[{"proposal_id": "...", "decision": "accept"}]')
+    if not parsed or len(parsed) > 200:
+        raise ToolError("decisions names between 1 and 200 proposals.")
+    items = []
+    for d in parsed:
+        if not (isinstance(d, dict) and str(d.get("proposal_id", "")).strip()
+                and d.get("decision") in ("accept", "reject")):
+            raise ToolError("each decision is an object with a proposal_id and a decision "
+                            "of 'accept' or 'reject'.")
+        items.append({"proposal_id": str(d["proposal_id"]).strip(), "decision": d["decision"]})
+    try:
+        return await _get_client().decide_proposals(
+            model_id, items, note=note, expires_at=expires_at, record_only=record_only)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def decide_drift_intent(
     server_version: str,
     model_id: str,
@@ -8041,7 +8107,10 @@ async def declare_behavioural_link(
     parked for a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
-    Returns the links as ``get_behavioural_links`` does, with ``declared``.
+    Returns ``{model_id, model_version, declared, link, questions,
+    proposals_hash}``: the link as stored with whether it counts, the node's
+    open link questions, and the hash a bulk acceptance names now. Read the
+    whole set with ``get_behavioural_links``.
 
     Args:
         model_id: ID of the threat model.
@@ -8055,6 +8124,43 @@ async def declare_behavioural_link(
         return _dump(await _get_client().declare_behavioural_link(
             model_id, node_id.strip(), entity_id.strip(),
             component_id=component_id.strip()))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def match_behavioural_links(
+    server_version: str,
+    model_id: str,
+    ctx: Context,
+    confirm_estimate: bool = False,
+) -> dict:
+    """Match the behavioural elements and zones never matched against the
+    inventory (``never_matched`` on ``get_behavioural_links``: added by an
+    answer or an edit after the model was matched). A paid action.
+
+    Without ``confirm_estimate``: the nodes and the estimate, nothing
+    charged or written. RELAY THE ESTIMATE TO THE PERSON and confirm only
+    when they agree. With it: runs the matching call, charged to the caller
+    at actuals (402 when they cannot cover it), and stores a proposal per
+    node; it declares nothing, so review the proposals with
+    ``get_behavioural_links`` and accept them with
+    ``accept_behavioural_link_proposals``. 409 ``nothing_to_match`` when
+    every node has a link or a proposal; 404 for a caller who may not start
+    paid work on the model.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: True to run the match after the person agreed to
+            the estimate.
+    """
+    try:
+        client = _get_client()
+        answer = await client.match_behavioural_links(model_id, confirm_estimate=confirm_estimate)
+        if confirm_estimate and isinstance(answer, dict) and answer.get("job_id"):
+            return await _await_backend_job(client, answer["job_id"], ctx, timeout=1800,
+                                            heartbeat=True)
+        return answer
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -8548,6 +8654,7 @@ async def apply_entity_proposals(
     server_version: str,
     model_id: str,
     proposals: str,
+    ctx: Context,
 ) -> dict:
     """Accept the quality check's corrections of assets and attackers, in
     one new model version.
@@ -8598,13 +8705,18 @@ async def apply_entity_proposals(
                 and str(p.get("input_hash", "")).strip()):
             raise ToolError("each proposal is an object with an entity_id and an input_hash.")
     # An item naming no correction is sent as it is: it is answered
-    # ``unbound``, with the correction and the hash to name.
+    # ``unbound``, with the correction and the hash to name. The apply makes
+    # three model calls per item, one after another, which outlasts a
+    # client's transport on a batch: it runs as a job, polled with progress.
     try:
-        answer = await _get_client().apply_entity_proposals(
+        client = _get_client()
+        started = await client.start_apply_entity_proposals(
             model_id, [{"entity_id": str(p["entity_id"]).strip(),
                         "input_hash": str(p["input_hash"]).strip(),
                         "proposal_hash": str(p.get("proposal_hash") or "").strip()}
                        for p in parsed])
+        answer = await _await_backend_job(client, started["job_id"], ctx, timeout=1800,
+                                          heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
     return _without_models(_dump(answer)) if isinstance(answer, dict) else answer
