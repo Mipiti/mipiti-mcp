@@ -19,6 +19,14 @@ description too.
 
 ``python -m mipiti_mcp.record_catalog`` adds the current catalog to the
 history; the package's tests fail while it is missing.
+
+The history keeps a catalog only as long as a session can still hold it.
+Recording a new catalog stamps every other one ``superseded`` with the day, the
+first time it is found no longer current, and drops each superseded more than
+``RETENTION_DAYS`` ago: far longer than a client session lasts, so a call naming
+a dropped catalog is one whose session would have ended. Such a call is refused
+like any unknown version, and the client reconnects; nothing runs under a
+contract it did not pin. The current catalog is never stamped or dropped.
 """
 
 import asyncio
@@ -26,10 +34,14 @@ import concurrent.futures
 import hashlib
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 HISTORY_PATH = Path(__file__).with_name("catalog_history.json")
+
+#: Days a catalog stays in the history after it stops being the current one.
+RETENTION_DAYS = 30
 
 #: How many hex digits of the catalog's digest name its version.
 VERSION_DIGITS = 16
@@ -113,12 +125,31 @@ def compatible(named: str, tool: str, current_version: str, current_catalog: dic
     return "notice"
 
 
-def record(path: Path = HISTORY_PATH) -> str:
-    """Add the current catalog to the history; returns its version."""
+def retained(history: dict, current_version: str, current_catalog: dict,
+             today: date) -> dict:
+    """``history`` with ``current_catalog`` recorded as current: every other
+    catalog stamped ``superseded`` with ``today`` where it has no stamp yet,
+    and each superseded more than ``RETENTION_DAYS`` before ``today`` dropped.
+    The current one carries no stamp, so a catalog current again is kept."""
+    cutoff = (today - timedelta(days=RETENTION_DAYS)).isoformat()
+    out: dict = {}
+    for version, entry in history.items():
+        if version == current_version:
+            continue
+        stamped = {**entry, "superseded": entry.get("superseded") or today.isoformat()}
+        if stamped["superseded"] >= cutoff:
+            out[version] = stamped
+    out[current_version] = dict(current_catalog)
+    return out
+
+
+def record(path: Path = HISTORY_PATH, today: date | None = None) -> str:
+    """Add the current catalog to the history, keeping the others only while
+    a session may still hold them (``retained``); returns its version."""
     from . import server
 
-    history = load_history(path)
-    history[server.CATALOG_VERSION] = server.CATALOG
+    history = retained(load_history(path), server.CATALOG_VERSION, server.CATALOG,
+                       today or date.today())
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(history, fh, indent=1, sort_keys=True)
         fh.write("\n")
