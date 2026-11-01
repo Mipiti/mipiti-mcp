@@ -165,6 +165,52 @@ async def test_a_missing_or_unknown_version_runs_nothing(two_catalogs, version) 
     get_client.assert_not_called()
 
 
+def test_a_catalog_is_kept_until_thirty_days_after_it_is_superseded() -> None:
+    """Recording stamps every other catalog superseded on the day it is first
+    found no longer current, and drops each superseded more than
+    RETENTION_DAYS ago; the current one is never stamped or dropped."""
+    from datetime import date
+    today = date(2026, 11, 1)
+    cur = {"tools": {"t": "c"}, "instructions": "i"}
+    history = {
+        "old": {"tools": {"t": "a"}, "instructions": "i", "superseded": "2026-10-01"},
+        "edge": {"tools": {"t": "b"}, "instructions": "i", "superseded": "2026-10-02"},
+        "recent": {"tools": {"t": "d"}, "instructions": "i", "superseded": "2026-10-20"},
+        "unstamped": {"tools": {"t": "e"}, "instructions": "i"},
+        "now": {**cur, "superseded": "2026-01-01"},
+    }
+    out = catalog.retained(history, "now", cur, today)
+    # 31 days superseded: dropped; 30 or fewer: kept, stamp unchanged.
+    assert "old" not in out
+    assert out["edge"]["superseded"] == "2026-10-02"
+    assert out["recent"]["superseded"] == "2026-10-20"
+    # First found superseded today: stamped today, kept.
+    assert out["unstamped"]["superseded"] == "2026-11-01"
+    # The current catalog, even one current again, is kept unstamped.
+    assert out["now"] == cur
+    # A kept catalog still answers calls to its unchanged tools.
+    assert catalog.compatible("recent", "t", "now", cur, out) == "refuse"
+    assert catalog.compatible("edge", "t", "now", {"tools": {"t": "b"}, "instructions": "x"},
+                              out) == "notice"
+    # Nothing is ever dropped while it is current, however long ago it was
+    # recorded or stamped.
+    assert catalog.retained(out, "now", cur, date(2030, 1, 1)) == {"now": cur}
+
+
+def test_recording_writes_the_retained_history(tmp_path) -> None:
+    from datetime import date
+    path = tmp_path / "history.json"
+    path.write_text(json.dumps({
+        "gone": {"tools": {}, "instructions": "", "superseded": "2026-09-01"},
+        "kept": {"tools": {}, "instructions": ""}}))
+    version = catalog.record(path, today=date(2026, 11, 1))
+    written = json.loads(path.read_text())
+    assert version == server.CATALOG_VERSION
+    assert set(written) == {"kept", server.CATALOG_VERSION}
+    assert written["kept"]["superseded"] == "2026-11-01"
+    assert written[server.CATALOG_VERSION] == server.CATALOG
+
+
 def test_the_instructions_name_the_version() -> None:
     assert f"`{server._SERVER_VERSION}`" in server.build_instructions("pro")
     assert server._VERSION_MARKER not in server.build_instructions("developer")

@@ -1,6 +1,7 @@
 {
  "0da81db6bcad5d8b": {
   "instructions": "d04a3e92d484065ab5710e5dd6034d91a48828117b555191b4d344fab3d77a42",
+  "superseded": "2026-11-01",
   "tools": {
    "accept_behavioural_link_proposals": "89afa45fc563bc24d3cfe7f112bfd324886fac4d330783db5bb00d8b0c69bc51",
    "add_asset": "6ceae637fa35e75854b7dc95a61e96c6422c5b151eed7671d3a17f96f5536300",
@@ -165,6 +166,7 @@
  },
  "1d99212e61e23865": {
   "instructions": "d7720fec4e5f7d4078de59642936294f426a210b79158f9694205b1e7444621e",
+  "superseded": "2026-11-01",
   "tools": {
    "accept_behavioural_link_proposals": "89afa45fc563bc24d3cfe7f112bfd324886fac4d330783db5bb00d8b0c69bc51",
    "add_asset": "6ceae637fa35e75854b7dc95a61e96c6422c5b151eed7671d3a17f96f5536300",
@@ -501,6 +503,7 @@
  },
  "4e27ba5c1e1e7b2f": {
   "instructions": "2dd6674c86d5a62be3014aff64acaadce7e4e4c27ff976bbe1a721f352182ffc",
+  "superseded": "2026-11-01",
   "tools": {
    "accept_behavioural_link_proposals": "89afa45fc563bc24d3cfe7f112bfd324886fac4d330783db5bb00d8b0c69bc51",
    "add_asset": "6ceae637fa35e75854b7dc95a61e96c6422c5b151eed7671d3a17f96f5536300",
@@ -666,6 +669,7 @@
  },
  "680ba7be16f45aa0": {
   "instructions": "0891cb49109092e474ed0c4e0c18aaeffdb9c55b1603b5983b4d6d7bb1d0845b",
+  "superseded": "2026-11-01",
   "tools": {
    "accept_behavioural_link_proposals": "89afa45fc563bc24d3cfe7f112bfd324886fac4d330783db5bb00d8b0c69bc51",
    "add_asset": "6ceae637fa35e75854b7dc95a61e96c6422c5b151eed7671d3a17f96f5536300",
@@ -836,6 +840,7 @@
  },
  "b92794ed2f2592af": {
   "instructions": "d7720fec4e5f7d4078de59642936294f426a210b79158f9694205b1e7444621e",
+  "superseded": "2026-11-01",
   "tools": {
    "accept_behavioural_link_proposals": "89afa45fc563bc24d3cfe7f112bfd324886fac4d330783db5bb00d8b0c69bc51",
    "add_asset": "6ceae637fa35e75854b7dc95a61e96c6422c5b151eed7671d3a17f96f5536300",
@@ -1004,6 +1009,7 @@
  },
  "de04f4390d29f7d5": {
   "instructions": "f67d681dabd7a9bf4130eecefc2f10331b890eac626fa0309a00392d5912705f",
+  "superseded": "2026-11-01",
   "tools": {
    "accept_behavioural_link_proposals": "89afa45fc563bc24d3cfe7f112bfd324886fac4d330783db5bb00d8b0c69bc51",
    "add_asset": "6ceae637fa35e75854b7dc95a61e96c6422c5b151eed7671d3a17f96f5536300",
