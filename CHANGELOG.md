@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.102.1] - 2026-11-03
+
+### Changed
+
+- `list_threat_models`: the description says when each assessment summary's counts are from, and how to read a summary that is not current or still being computed. (#370)
+
 ## [0.102.0] - 2026-11-01
 
 ### Added
