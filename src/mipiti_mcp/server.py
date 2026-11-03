@@ -1342,7 +1342,7 @@ async def list_threat_models(
 
     Args:
         source: Filter by the system that created each model. One of "web", "mcp", "jira", "api". Omit (default "") to list all models regardless of source.
-        include_assessment_summary: If True, include an `assessment_summary` object per model (counts of mitigated / at_risk / unassessed control objectives plus a human-readable `message`). Use for aggregate posture queries across the workspace in a single call (e.g. "which of my models are at risk?") instead of calling `assess_model` once per model. Adds roughly 100 bytes per model. Default False.
+        include_assessment_summary: If True, include an `assessment_summary` object per model (counts of mitigated / at_risk / unassessed control objectives plus a human-readable `message`). Use for aggregate posture queries across the workspace in a single call (e.g. "which of my models are at risk?") instead of calling `assess_model` once per model. The counts are kept from the model's last assessment: the summary's `posture` says when that was (`as_of`), whether it still matches the model (`current`), or that the first one is still being computed (`status: "computing"`, with no counts yet). A summary that is not current is being refreshed; call `assess_model` for a model as it stands now. Adds roughly 100 bytes per model. Default False.
     """
     try:
         include = "assessment_summary" if include_assessment_summary else ""
