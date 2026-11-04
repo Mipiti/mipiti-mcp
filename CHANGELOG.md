@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.102.2] - 2026-11-04
+
+### Added
+
+- `start_control_build` takes `objective_ids` to start only some of the objectives a proposed build would build: the build keeps every other objective's controls, and the rest stays proposed. (#372)
+
 ## [0.102.1] - 2026-11-03
 
 ### Changed
