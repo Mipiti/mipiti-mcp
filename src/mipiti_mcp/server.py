@@ -376,7 +376,7 @@ _INSTRUCTIONS_ASYNC = """\
 
 `generate_threat_model`, `generate_from_behavioural_model`, `refine_threat_model`, `auto_remediate_compliance`, `auto_map_controls`, and `check_control_gaps` run LLM pipelines that may take several minutes. They block until complete and report progress automatically; no polling is needed for the operation itself. Entity writes (`add_asset`, `edit_asset`, `add_attacker`, `edit_attacker`, `remove_entity`) run as background jobs and report progress while they wait; a job a client stops waiting for finishes or fails on its own, so read the model before writing again.
 
-**Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits` with its basis, and the `model_version`, `set_revision` and `scope_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. The proposal also names what to review first: `flagged_entities` (a judge's warning, a rating nobody chose, a suspected duplicate) and `pending_attestations` (a seal, position or privileges that, once attested, would remove objectives from the build); neither blocks a start. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, scope_revision, confirm_estimate=True)`. A `review_stale` refusal means the model, its controls or the objectives the build would author changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
+**Control builds.** A model's controls are built only by a build someone starts. Generating or refining a model, editing an entity, and `regenerate_controls` each PROPOSE a build and start nothing: their result carries `controls_status: "proposed"` and a `proposal` (what it would build, `estimated_credits` with its basis, and the `model_version`, `set_revision` and `scope_revision` a start must name), and `get_control_generation_status` shows the same `proposal`. Do not report controls as built, or wait for them, until a build has been started. The proposal also names what to review first: `flagged_entities` (a judge's warning, a rating nobody chose, a suspected duplicate) and `pending_attestations` (a seal, position or privileges that, once attested, would remove objectives from the build); neither blocks a start. Review the model with the user, show them the estimate, and once they agree call `start_control_build(model_id, model_version, set_revision, scope_revision, confirm_estimate=True)`. To build only some of the objectives proposed, name them in `objective_ids` on both calls: the estimate is for those, the build keeps every other objective's controls, and the rest stays proposed. A model holds one proposal, so a narrower `regenerate_controls` merged into a broader proposal builds the broader one unless the start names the part. A `review_stale` refusal means the model, its controls or the objectives the build would author changed since you read the values: review again and start with the values it returns. A started build holds the model until it publishes: other writers of its controls are refused (`generation_active`), and reads show the last published controls. Poll `get_control_generation_status` (it returns `terminal` and a `hint`) until the status is terminal, then read the controls with `get_controls`. `deferred` means the workspace's daily background-analysis budget is used up; the build resumes automatically at the daily reset — surface that, no action needed. `paused` means someone stopped it: its work so far is kept but not published, and only `resume_control_generation` continues it. To stop a build the user did not want, call `pause_control_generation`; once it shows `paused`, `discard_control_build` drops its work and proposes it again, and the model can be deleted as usual.
 
 **Every change to the controls is a revision.** `list_control_revisions` shows who changed what; `undo_model_change(target="controls")` undoes the latest change (latest first, no redo); `undo_model_change(target="version")` replaces the latest model version with a copy of the latest earlier version not already discarded, keeping the replaced one in the history as discarded.
 
@@ -2045,42 +2045,38 @@ async def start_control_build(
     set_revision: Optional[int] = None,
     confirm_estimate: bool = False,
     scope_revision: Optional[str] = None,
+    objective_ids: str = "",
 ) -> dict:
-    """Start the model's proposed control build. Mutating only with
-    ``confirm_estimate=True``; consumes credits then.
+    """Start the model's proposed control build, or part of it. Mutating
+    only with ``confirm_estimate=True``; consumes credits then.
 
-    A model's controls are built only by a build someone starts. Generating
-    or refining the model, editing an entity and ``regenerate_controls``
-    each PROPOSE one; ``get_control_generation_status`` shows it as
-    ``proposal``.
+    Generating or refining the model, editing an entity and
+    ``regenerate_controls`` each PROPOSE a build (shown as ``proposal`` by
+    ``get_control_generation_status``); only this starts one.
 
-    1. Call with ``confirm_estimate=False`` (the default). Nothing starts and
-       nothing is charged; the answer is ``{started: false, proposal,
-       message}``, the proposal carrying a fresh ``estimated_credits`` and
-       the ``model_version``, ``set_revision`` and ``scope_revision`` the
-       model stands at. Show the user what it would build and cost, and
-       what it lists to review.
-    2. Call again with ``confirm_estimate=True`` and those three values once
-       they have reviewed the model. The build starts (``{started: true,
-       job_id, model_version, status: "queued", status_detail}``) and holds
-       the model until it publishes, fails or is discarded: other writers of
-       the model's controls are refused meanwhile, and reads show the last
-       published controls. Poll ``get_control_generation_status`` until
-       ``terminal``; the publish is one step, after which ``get_controls``
-       shows the result.
+    1. ``confirm_estimate=False`` (default): nothing starts or is charged;
+       returns ``{started: false, proposal, message}`` with a fresh
+       ``estimated_credits`` and the ``model_version``, ``set_revision`` and
+       ``scope_revision`` to name. Show the user what it builds and costs.
+    2. ``confirm_estimate=True`` with those three values once they agree:
+       the build starts (``{started: true, job_id, status: "queued"}``) and
+       holds the model until it publishes, fails or is discarded; reads show
+       the last published controls. Poll ``get_control_generation_status``
+       until ``terminal``, then ``get_controls``.
 
-    Refusals come back as data:
-    - ``{started: false, http_status: 404, code: "no_proposal"}`` — nothing
-      is proposed for the model.
-    - ``{started: false, http_status: 409, code: "review_stale", proposal,
-      model_version, set_revision, scope_revision, estimated_credits}`` —
-      the model, its controls or the objectives the build would author
-      changed since the values were read (or none were named). Review again
-      and start with the values returned.
-    - ``{started: false, http_status: 409, code: "generation_active",
-      status}`` — a build already holds the model.
-    - ``{started: false, http_status: 402, ...}`` — the balance this
-      workspace bills to cannot cover the estimate.
+    ``objective_ids`` on both calls builds only those of the objectives
+    proposed: estimated for them, every other objective's controls kept, the
+    rest left proposed. A model holds one proposal, so a narrower
+    ``regenerate_controls`` merged into a broader one builds the broader one
+    unless the start names the part.
+
+    Refusals come back as data (``started: false``, ``http_status``,
+    ``code``): 400 ``unknown_objectives`` / ``not_proposed`` (an id the
+    proposal would not build) / ``not_divisible`` (this proposal starts
+    whole: start it without ``objective_ids``); 404 ``no_proposal``; 409 ``review_stale`` (something
+    changed since the values were read: start with the values returned) or
+    ``generation_active`` (a build holds the model); 402 (the balance cannot
+    cover the estimate).
 
     Args:
         model_id: ID of the threat model.
@@ -2092,8 +2088,14 @@ async def start_control_build(
             estimate and starts nothing; True starts the build.
         scope_revision: With ``confirm_estimate=True``: the proposal's
             ``scope_revision``.
+        objective_ids: Comma-separated objective IDs (e.g. ``"CO-1,CO-5"``)
+            to build now, of those the proposal would build. Empty (the
+            default): the whole proposal.
     """
     pin = {"scope_revision": scope_revision} if scope_revision is not None else {}
+    ids = [i.strip() for i in (objective_ids or "").split(",") if i.strip()]
+    if ids:
+        pin["objective_ids"] = ids
     try:
         return _dump(await _get_client().start_control_build(
             model_id, model_version=model_version, set_revision=set_revision,

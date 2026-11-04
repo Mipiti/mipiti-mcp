@@ -806,6 +806,7 @@ class MipitiClient:
         set_revision: int | None = None,
         confirm_estimate: bool = False,
         scope_revision: str | None = None,
+        objective_ids: list[str] | None = None,
     ) -> dict:
         """POST /api/models/{model_id}/controls/build.
 
@@ -813,12 +814,15 @@ class MipitiClient:
         come back and nothing starts. With it the build starts when
         ``model_version``, ``set_revision`` and ``scope_revision`` name the
         model, its controls and the objectives the build would author as they
-        stand. Each is sent only when given.
+        stand. ``objective_ids`` starts only those of the objectives the
+        proposal would build. Each is sent only when given.
 
-        A refusal is an answer, not an error: 404 (nothing proposed), 409
-        (the model changed since the review, or a build holds it) and 402 (the
-        balance cannot cover the estimate) come back as ``{"started": False,
-        "http_status": ..., **detail}``. Any other failure raises."""
+        A refusal is an answer, not an error: 400 (an objective named that the
+        proposal would not build, or a build started whole), 404 (nothing
+        proposed), 409 (the model changed since the review, or a build holds
+        it) and 402 (the balance cannot cover the estimate) come back as
+        ``{"started": False, "http_status": ..., **detail}``. Any other
+        failure raises."""
         body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
         if model_version is not None:
             body["model_version"] = int(model_version)
@@ -826,9 +830,11 @@ class MipitiClient:
             body["set_revision"] = int(set_revision)
         if scope_revision is not None:
             body["scope_revision"] = str(scope_revision)
+        if objective_ids is not None:
+            body["objective_ids"] = [str(i) for i in objective_ids]
         resp = await self._request_with_idempotency(
             "POST", f"/api/models/{model_id}/controls/build", json=body)
-        if resp.status_code in (402, 404, 409):
+        if resp.status_code in (400, 402, 404, 409):
             return {"started": False, "http_status": resp.status_code,
                     **self._refusal(resp)}
         resp.raise_for_status()
