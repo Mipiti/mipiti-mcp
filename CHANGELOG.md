@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.102.5] - 2026-11-05
+
+### Changed
+
+- A behavioural model a release superseded can be extracted again with its questions open; `billed_to` says who pays. (#378)
+
 ## [0.102.4] - 2026-11-05
 
 ### Fixed
