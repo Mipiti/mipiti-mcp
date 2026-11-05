@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.102.3] - 2026-11-05
+
+### Fixed
+
+- A dropped behavioural element is described as asked by its own question, which takes no dismissal. (#374)
+
 ## [0.102.2] - 2026-11-04
 
 ### Added
