@@ -451,7 +451,8 @@ async def test_a_contents_answer_and_its_dismissal_are_forwarded_unchanged() -> 
 
 
 def test_the_contents_form_is_published() -> None:
-    assert '``{"elements": [id |' in _descriptions()["answer_behavioural_questions"]
+    tool = _descriptions()["answer_behavioural_questions"]
+    assert "A contents id not offered" in tool
     instructions = build_instructions("pro", "user")
     for term in ("`zone_contents`", '`structured: {"elements": [...]}`',
                  "422 `structured_malformed`", "`unknown` is refused"):
@@ -1377,3 +1378,16 @@ def test_the_attacker_closure_is_published() -> None:
     assert "``ambiguous_proposal``" in _descriptions()["add_proposed_attacker"]
     for term in ("``review_stale``", "``split_not_offered``"):
         assert term in _descriptions()["split_grouped_attacker"], term
+
+
+def test_the_answer_shape_an_offer_names_is_published() -> None:
+    """Every structured offer names the shape of its answer (``answer``), and
+    a misnamed key is refused naming it: the tool and the instructions say
+    so, with the shape of a covered question's answer."""
+    tool = _descriptions()["answer_behavioural_questions"]
+    assert "``answer`` is the shape to send" in tool
+    assert '``{"describes": [...]}``' in tool
+    assert "naming the shape" in tool
+    instructions = build_instructions("pro", "user")
+    assert "its `answer` is the shape to send" in instructions
+    assert '`{"describes": [...]}`' in instructions
