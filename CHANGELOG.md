@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.102.6] - 2026-11-06
+
+### Changed
+
+- `answer_behavioural_questions` and the instructions name the `answer` field every structured offer carries: the shape of the answer to send, which a malformed answer's refusal names too. (#380)
+
 ## [0.102.5] - 2026-11-05
 
 ### Changed
