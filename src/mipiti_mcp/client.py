@@ -3235,6 +3235,7 @@ class MipitiClient:
         answers: list[dict],
         extract_now: bool = False,
         dry_run: bool = False,
+        collect_only: bool = False,
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/answers.
 
@@ -3256,6 +3257,8 @@ class MipitiClient:
                                 "extract_now": bool(extract_now)}
         if dry_run:
             body["dry_run"] = True
+        if collect_only:
+            body["collect_only"] = True
         return await self._post(self._behavioural(model_id, "/answers"), body)
 
     async def edit_behavioural_element(

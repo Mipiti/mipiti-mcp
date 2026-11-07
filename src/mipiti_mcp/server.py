@@ -7901,6 +7901,7 @@ async def answer_behavioural_questions(
     answers: str = "[]",
     extract_now: bool = False,
     dry_run: bool = False,
+    collect_only: bool = False,
 ) -> dict:
     """Answer open behavioural questions, many in one call. Mutating; creates
     a model version.
@@ -7912,11 +7913,13 @@ async def answer_behavioural_questions(
     ``extraction.superseded``, and 409
     ``extraction_running`` while one is queued or running, or with no answer
     since it started: poll it), billed as ``billed_to`` says (402 when short).
+    ``collect_only=True`` records them, extracting nothing.
 
-    ``dry_run=True`` records nothing (no version, no escalation) and returns
-    ``outcome``: whether the answers extract (``extracts``, ``estimate``),
-    the questions left or ``raised``. Dry-run, answer what is raised, then
-    submit once.
+    A fact correcting earlier answers names their ids in ``replaces``; none
+    is read again.
+
+    ``dry_run=True`` records nothing and returns ``outcome``: whether they
+    extract (``extracts``, ``estimate``), the questions left or ``raised``.
 
     An answer is a fact (``text``), or a ``disposition`` its question lists:
     ``not_needed``, ``not_behaviour``, ``unknown``, ``as_stated``; ``text``
@@ -7943,12 +7946,13 @@ async def answer_behavioural_questions(
     Args:
         model_id: ID of the threat model.
         answers: JSON array of ``{"question_id", "text"?, "disposition"?,
-            "structured"?, "contradicts"?}``, e.g. '[{"question_id": "q1",
+            "structured"?, "contradicts"?, "replaces"?}``, e.g. '[{"question_id": "q1",
             "text": "Only the owner deletes."}, {"question_id": "q3",
             "structured": {"classes": ["org_admin"]}}]'.
         extract_now: Extract now, with the answers collected.
         dry_run: Return what the answers would do (``outcome``) and record
             nothing. Default False.
+        collect_only: Record without an extraction; not with extract_now.
     """
     parsed = _json_value(
         answers, "answers", list,
@@ -7974,12 +7978,20 @@ async def answer_behavioural_questions(
                 and contradicts.get("direction") in ("code_does_more", "code_does_less")):
             raise ToolError("contradicts is {\"direction\": \"code_does_more\" | "
                             "\"code_does_less\", \"quote\"?: \"...\"}.")
+        replaces = a.get("replaces")
+        if replaces is not None and not (
+                isinstance(replaces, list) and all(isinstance(r, str) for r in replaces)):
+            raise ToolError("replaces is a list of the clarification ids the fact replaces.")
     if not parsed and not extract_now:
         raise ToolError("Give at least one answer, or pass extract_now=True.")
+    if collect_only and extract_now:
+        raise ToolError("collect_only records the answers without an extraction; "
+                        "extract_now asks for one. Pass one of them.")
     try:
         return _dump(await _get_client().answer_behavioural_questions(
             model_id, parsed, extract_now=extract_now,
-            **({"dry_run": True} if dry_run else {})))
+            **({"dry_run": True} if dry_run else {}),
+            **({"collect_only": True} if collect_only else {})))
     except Exception as exc:
         raise _api_error(exc) from exc
 
