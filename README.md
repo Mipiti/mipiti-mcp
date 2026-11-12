@@ -89,7 +89,7 @@ A session keeps the tool descriptions and instructions it read when it started. 
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->165<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->166<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -256,6 +256,7 @@ A behavioural model states what a system does: its elements, the actions on them
 | `list_risk_acceptances` | All risk acceptances on a model — risks explicitly accepted instead of mitigated. Includes CO id, owner, justification, status, review deadline. |
 | `create_co_disposition` | Record that a control objective does not apply to this system (owner, justification, review deadline). The sibling of a risk acceptance: an acceptance says the exposure is real and is being carried, a disposition says the objective does not apply here at all. The objective stays in the matrix and in every coverage count, reported in its own class — what is suppressed is work (no controls generated, no coverage gap raised), never the accounting. |
 | `list_co_dispositions` | Every signed judgment on a model's objectives, both kinds. Expired and revoked entries are included: a lapsed decision is part of the audit trail. Optional `kind` filter. |
+| `revoke_co_disposition` | Revoke a signed judgment, a not-applicable disposition or a risk acceptance. Terminal: the revoked entry stays in the audit trail and never comes back. The objective returns to the posture its controls give it, and a revoked disposition puts it back in what a build authors, so revoking is refused (`generation_active`) while a build holds the model. A judgment inherited from an ancestor model is revoked there. |
 | `recompute_verdicts` | `mode="quote"` (the default) returns the informational cost estimate and enqueues nothing (carries `computed_at` + the pricing `rate_version`). `mode="recompute"` force-enqueues a fresh evaluation of every control's coverage verdict and every live CO's group-sufficiency verdict, bypassing the quiet-period batching; actuals are metered as evaluation runs. `mode="retry_parked"` re-runs only the verdicts a transient failure parked, of every kind. Each carries a spend status object — exhausted means the work is queued and resumes automatically, never dropped. |
 | `judge_objective` | Have ONE control objective's mitigation group judged — the remedy for an objective reading `awaiting_judgement`, where a group is built and nothing has decided whether it covers the objective. Prefer it over `recompute_verdicts`, which sweeps the whole model. Runs in the background and may consume credits. Not a repair: the judgement can come back insufficient, moving the objective to `coverage_gap` / `insufficient_by_design`. Refusals (`409` generation in progress, `503` unavailable, `402` balance) come back as data. |
 
