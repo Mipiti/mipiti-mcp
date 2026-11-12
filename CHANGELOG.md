@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.103.0] - 2026-11-12
+
+### Added
+
+- `revoke_co_disposition` withdraws a control-objective disposition or risk acceptance. (#382)
+- The instructions name a build proposal's `disposition_offers`, the narrower not-applicable claim offered beside attestations, and `get_review_queue` says a refuted statement about an attacker's reach names the attacker. (#382)
+
 ## [0.102.6] - 2026-11-06
 
 ### Changed
