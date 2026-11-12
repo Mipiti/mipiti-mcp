@@ -15,7 +15,9 @@ from unittest.mock import AsyncMock, patch
 from fastmcp.exceptions import ToolError
 
 from mipiti_mcp.client import MipitiClient
-from mipiti_mcp.server import create_co_disposition, list_co_dispositions
+from mipiti_mcp.server import (
+    create_co_disposition, list_co_dispositions, revoke_co_disposition,
+)
 
 
 class TestCreateCoDispositionTool:
@@ -166,3 +168,45 @@ class TestClientMethods:
         await client.list_co_dispositions("tm-1")
         assert route.called
         assert "kind=" not in str(route.calls[0].request.url)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_revoke_names_the_model_it_is_recorded_on(self, mock_env: None) -> None:
+        """The server refuses a revocation of a judgment inherited from an
+        ancestor, so it has to be told which model the caller means."""
+        route = respx.patch(
+            "https://test.api.mipiti.io/api/risk-acceptances/D-1",
+            params={"model_id": "tm-1"},
+        ).mock(return_value=httpx.Response(200, json={"id": "D-1", "status": "revoked"}))
+        client = MipitiClient()
+        out = await client.revoke_co_disposition("tm-1", "D-1")
+        assert route.called and out["status"] == "revoked"
+
+
+class TestRevokeCoDispositionTool:
+    @pytest.mark.asyncio
+    async def test_revokes_the_named_judgment(self) -> None:
+        revoked = {"id": "D-1", "status": "revoked", "kind": "not_applicable"}
+        client = AsyncMock()
+        client.revoke_co_disposition = AsyncMock(return_value=revoked)
+        with patch("mipiti_mcp.server._get_client", return_value=client):
+            result = await revoke_co_disposition(
+                server_version="0", model_id="tm-1", disposition_id="D-1")
+        client.revoke_co_disposition.assert_awaited_once_with("tm-1", "D-1")
+        assert result == revoked
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_reaches_the_agent(self) -> None:
+        """A build holding the model refuses the revocation; the agent is told,
+        not handed an empty success."""
+        request = httpx.Request("PATCH", "https://test.api.mipiti.io/api/risk-acceptances/D-1")
+        refused = httpx.HTTPStatusError(
+            "409", request=request,
+            response=httpx.Response(409, request=request,
+                                    json={"detail": {"code": "generation_active"}}))
+        client = AsyncMock()
+        client.revoke_co_disposition = AsyncMock(side_effect=refused)
+        with patch("mipiti_mcp.server._get_client", return_value=client):
+            with pytest.raises(ToolError):
+                await revoke_co_disposition(
+                    server_version="0", model_id="tm-1", disposition_id="D-1")

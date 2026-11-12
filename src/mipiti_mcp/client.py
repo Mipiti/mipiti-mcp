@@ -2729,6 +2729,14 @@ class MipitiClient:
         data = await self._get(path)
         return list(data) if isinstance(data, list) else data
 
+    async def revoke_co_disposition(self, model_id: str, disposition_id: str) -> dict[str, Any]:
+        """Revoke a disposition (either kind) recorded on ``model_id``.
+
+        Returns the revoked record (server-side shape, passed through
+        unchanged)."""
+        return await self._patch(f"/api/risk-acceptances/{disposition_id}",
+                                 params={"model_id": model_id})
+
     # ------------------------------------------------------------------
     # Onboarding
     # ------------------------------------------------------------------
