@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.104.0] - 2026-11-13
+
+### Added
+
+- `start_control_build` can strengthen in the same start: `strengthen=true` quotes the build and a strengthening cap together, and the build publishes once, after strengthening within that cap. (#384)
+
 ## [0.103.0] - 2026-11-12
 
 ### Added
