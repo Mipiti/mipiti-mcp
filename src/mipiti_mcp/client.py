@@ -807,6 +807,7 @@ class MipitiClient:
         confirm_estimate: bool = False,
         scope_revision: str | None = None,
         objective_ids: list[str] | None = None,
+        strengthen: bool = False,
     ) -> dict:
         """POST /api/models/{model_id}/controls/build.
 
@@ -815,7 +816,10 @@ class MipitiClient:
         ``model_version``, ``set_revision`` and ``scope_revision`` name the
         model, its controls and the objectives the build would author as they
         stand. ``objective_ids`` starts only those of the objectives the
-        proposal would build. Each is sent only when given.
+        proposal would build. Each is sent only when given. ``strengthen``
+        (sent only when true) builds and strengthens in one start: the
+        estimate is the combined one, its strengthening part the cap the build
+        never passes.
 
         A refusal is an answer, not an error: 400 (an objective named that the
         proposal would not build, or a build started whole), 404 (nothing
@@ -832,6 +836,8 @@ class MipitiClient:
             body["scope_revision"] = str(scope_revision)
         if objective_ids is not None:
             body["objective_ids"] = [str(i) for i in objective_ids]
+        if strengthen:
+            body["strengthen"] = True
         resp = await self._request_with_idempotency(
             "POST", f"/api/models/{model_id}/controls/build", json=body)
         if resp.status_code in (400, 402, 404, 409):

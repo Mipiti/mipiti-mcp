@@ -86,6 +86,31 @@ async def test_a_start_sends_the_scope_only_when_named(mock_env: None) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_a_start_sends_strengthen_only_when_asked(mock_env: None) -> None:
+    route = respx.post(f"{BASE}/controls/build").mock(return_value=httpx.Response(
+        200, json={"model_id": "tm-1", "started": False}))
+    client = MipitiClient()
+    await client.start_control_build("tm-1")
+    assert "strengthen" not in json.loads(route.calls.last.request.content)
+    await client.start_control_build("tm-1", strengthen=True)
+    assert json.loads(route.calls.last.request.content) == {
+        "confirm_estimate": False, "strengthen": True}
+
+
+@pytest.mark.asyncio
+async def test_the_start_tool_passes_strengthen_when_asked() -> None:
+    mock = AsyncMock()
+    mock.start_control_build = AsyncMock(return_value={"started": False})
+    with _patch_client(mock):
+        await server.start_control_build(
+            server_version="0", model_id="tm-1", ctx=_ctx(), strengthen=True)
+    mock.start_control_build.assert_awaited_once_with(
+        "tm-1", model_version=None, set_revision=None, confirm_estimate=False,
+        strengthen=True)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_a_stale_scope_is_returned_as_data(mock_env: None) -> None:
     respx.post(f"{BASE}/controls/build").mock(return_value=httpx.Response(
         409, json={"detail": {"code": "review_stale", "scope_revision": "cd34"}}))

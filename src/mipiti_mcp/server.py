@@ -2046,37 +2046,40 @@ async def start_control_build(
     confirm_estimate: bool = False,
     scope_revision: Optional[str] = None,
     objective_ids: str = "",
+    strengthen: bool = False,
 ) -> dict:
     """Start the model's proposed control build, or part of it. Mutating
     only with ``confirm_estimate=True``; consumes credits then.
 
     Generating or refining the model, editing an entity and
     ``regenerate_controls`` each PROPOSE a build (shown as ``proposal`` by
-    ``get_control_generation_status``); only this starts one.
+    ``get_control_generation_status``); only this starts one. Its review
+    also proposes every objective in scope with no control.
 
     1. ``confirm_estimate=False`` (default): nothing starts or is charged;
        returns ``{started: false, proposal, message}`` with a fresh
        ``estimated_credits`` and the ``model_version``, ``set_revision`` and
        ``scope_revision`` to name. Show the user what it builds and costs.
-    2. ``confirm_estimate=True`` with those three values once they agree:
-       the build starts (``{started: true, job_id, status: "queued"}``) and
-       holds the model until it publishes, fails or is discarded; reads show
-       the last published controls. Poll ``get_control_generation_status``
-       until ``terminal``, then ``get_controls``.
+    2. ``confirm_estimate=True`` with those three values: the build starts
+       (``{started: true, job_id}``) and holds the model until it publishes,
+       fails or is discarded. Poll ``get_control_generation_status`` until
+       ``terminal``, then ``get_controls``.
 
     ``objective_ids`` on both calls builds only those of the objectives
-    proposed: estimated for them, every other objective's controls kept, the
-    rest left proposed. A model holds one proposal, so a narrower
-    ``regenerate_controls`` merged into a broader one builds the broader one
-    unless the start names the part.
+    proposed, keeps every other objective's controls and leaves the rest
+    proposed.
+
+    ``strengthen=True`` on both calls also strengthens: the estimate adds a
+    strengthening part (``proposal.strengthen``: credits, rounds), a cap the
+    build never passes; it strengthens its finished draft within it and
+    publishes once. Show the user both parts before confirming.
 
     Refusals come back as data (``started: false``, ``http_status``,
-    ``code``): 400 ``unknown_objectives`` / ``not_proposed`` (an id the
-    proposal would not build) / ``not_divisible`` (this proposal starts
-    whole: start it without ``objective_ids``); 404 ``no_proposal``; 409 ``review_stale`` (something
-    changed since the values were read: start with the values returned) or
-    ``generation_active`` (a build holds the model); 402 (the balance cannot
-    cover the estimate).
+    ``code``): 400 ``unknown_objectives`` / ``not_proposed`` /
+    ``not_divisible`` (start it whole) / ``not_strengthenable``; 404
+    ``no_proposal``; 409 ``review_stale`` (start with the values returned),
+    ``generation_active`` or ``strengthening_unavailable``; 402 (the balance
+    cannot cover the estimate).
 
     Args:
         model_id: ID of the threat model.
@@ -2091,11 +2094,15 @@ async def start_control_build(
         objective_ids: Comma-separated objective IDs (e.g. ``"CO-1,CO-5"``)
             to build now, of those the proposal would build. Empty (the
             default): the whole proposal.
+        strengthen: True to strengthen in the same start, within the cap
+            the estimate states. False (the default): the build alone.
     """
     pin = {"scope_revision": scope_revision} if scope_revision is not None else {}
     ids = [i.strip() for i in (objective_ids or "").split(",") if i.strip()]
     if ids:
         pin["objective_ids"] = ids
+    if strengthen:
+        pin["strengthen"] = True
     try:
         return _dump(await _get_client().start_control_build(
             model_id, model_version=model_version, set_revision=set_revision,
