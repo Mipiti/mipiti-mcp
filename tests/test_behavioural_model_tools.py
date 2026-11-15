@@ -846,6 +846,28 @@ async def test_a_dry_run_is_forwarded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collecting_and_replacing_are_forwarded() -> None:
+    client = _client(answer_behavioural_questions={"queued": False})
+    answers = [{"question_id": "q1", "text": "Only admins set secrets.",
+                "replaces": ["cl-1", "cl-2"]}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers),
+            collect_only=True)
+        for bad in ([{"question_id": "q1", "text": "t", "replaces": "cl-1"}],
+                    [{"question_id": "q1", "text": "t", "replaces": [1]}]):
+            with pytest.raises(ToolError):
+                await server.answer_behavioural_questions(
+                    server_version="0", model_id="tm-1", answers=json.dumps(bad))
+        with pytest.raises(ToolError):
+            await server.answer_behavioural_questions(
+                server_version="0", model_id="tm-1", answers=json.dumps(answers),
+                collect_only=True, extract_now=True)
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False, collect_only=True)
+
+
+@pytest.mark.asyncio
 async def test_generating_from_the_behavioural_model_returns_the_generation() -> None:
     from mipiti_mcp.types import GenerateResult
 
