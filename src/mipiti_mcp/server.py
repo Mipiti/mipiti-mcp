@@ -1778,7 +1778,8 @@ async def get_control_generation_status(
     ``set_aside`` waits for a person, NOT a failure.
 
     ``complete``: figures come from ``diagnosis``: ``covered``,
-    ``uncovered``, ``undecided`` (``strengthen_controls``), ``judging``
+    ``uncovered``, ``undecided`` (``strengthen_controls``, less their
+    ``<state>_not_owed``: out of scope or unreachable), ``judging``
     (wait), ``not_judged`` (``judge_objectives``), ``no_group`` (group),
     ``grouping``, ``no_control`` (start the build), ``awaiting_attestation``
     (attest), ``awaiting_assumption`` (review queue), ``mitigated_elsewhere``
@@ -1881,7 +1882,9 @@ async def strengthen_controls(
 ) -> dict:
     """Strengthen a model's controls: work on the objectives whose mitigation
     groups the background judge found do not cover them (the ``uncovered``
-    and ``undecided`` of ``get_control_generation_status``'s ``diagnosis``).
+    and ``undecided`` of ``get_control_generation_status``'s ``diagnosis``,
+    less ``uncovered_not_owed`` / ``undecided_not_owed``: those are out of
+    scope or decisively unreachable, owe nothing and are never worked on).
     Mutating only with ``confirm_estimate=True``; consumes credits then.
     ``not_judged`` objectives have nothing to strengthen from: judge them
     first with ``judge_objectives``.
