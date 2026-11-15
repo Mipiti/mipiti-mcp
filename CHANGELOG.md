@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.105.0] - 2026-11-15
+
+### Added
+
+- `answer_behavioural_questions` can record answers without starting an extraction (`collect_only`), and a fact can name the earlier clarifications it replaces (`replaces`). (#386)
+- Dependency floors raised for CVE-2026-128089 (dnspython) and CVE-2026-126360 (opentelemetry-api). (#386)
+
 ## [0.104.0] - 2026-11-13
 
 ### Added
