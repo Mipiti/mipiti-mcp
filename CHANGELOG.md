@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.105.1] - 2026-11-15
+
+### Changed
+
+- `strengthen_controls` and `get_control_generation_status` say which judged objectives are out of scope or unreachable and owe nothing. (#388)
+
 ## [0.105.0] - 2026-11-15
 
 ### Added
