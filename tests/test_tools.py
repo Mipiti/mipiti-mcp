@@ -6130,6 +6130,43 @@ class TestDecideProposal:
         mock.decide_proposal.assert_awaited_once_with(
             "tm-001", "P-2", "accept", note="", expires_at="2027-03-29T00:00:00Z")
 
+    @pytest.mark.asyncio
+    async def test_reconsider_reaches_the_client(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await decide_proposal(
+                server_version="0", model_id="tm-001", proposal_id="P-3",
+                decision="reconsider", note="rejected in error")
+        mock.decide_proposal.assert_awaited_once_with(
+            "tm-001", "P-3", "reconsider", note="rejected in error", expires_at="")
+
+    @pytest.mark.asyncio
+    async def test_amended_text_reaches_the_client_on_an_acceptance(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            await decide_proposal(
+                server_version="0", model_id="tm-001", proposal_id="P-4",
+                decision="accept", amended_text="  The reworded precondition.  ")
+        mock.decide_proposal.assert_awaited_once_with(
+            "tm-001", "P-4", "accept", note="", expires_at="",
+            amended_text="The reworded precondition.")
+
+    @pytest.mark.asyncio
+    async def test_amended_text_is_refused_beside_another_decision(self) -> None:
+        mock = _mock_client()
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="amended_text"):
+                await decide_proposal(
+                    server_version="0", model_id="tm-001", proposal_id="P-4",
+                    decision="reject", amended_text="Other words.")
+        mock.decide_proposal.assert_not_awaited()
+
+    def test_the_corrections_are_documented(self) -> None:
+        doc = decide_proposal.__doc__ or getattr(
+            getattr(decide_proposal, "fn", None), "__doc__", "") or ""
+        assert "reconsider" in doc and "proposal_reconsidered" in doc
+        assert "amended_text" in doc and "amendment_breaks_edit" in doc
+
     def test_accepting_an_assumption_is_its_own_decision(self) -> None:
         """An agent holding a rule for proposal acceptance must not read it as
         covering an assumption proposal, which accepts the assumption."""
