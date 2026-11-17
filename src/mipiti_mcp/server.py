@@ -7403,12 +7403,14 @@ async def decide_proposal(
     note: str = "",
     expires_at: str = "",
     record_only: bool = False,
+    amended_text: str = "",
 ) -> dict:
-    """Accept or reject a proposal. Call this only when the workspace's
-    delegation policy names this decision for this agent at the proposal's
-    tier (the ``delegation`` block of ``get_control_work_order`` says what
-    you may decide). Mutating: closes the proposal and applies an accepted
-    change.
+    """Accept or reject a proposal, or reconsider a rejected one. Call this
+    only when the workspace's delegation policy names this decision for this
+    agent at the proposal's tier (the ``delegation`` block of
+    ``get_control_work_order`` says what you may decide). Mutating: closes
+    the proposal and applies an accepted change; a reconsider opens a
+    rejected proposal again and applies nothing.
 
     This is a judgment. The call is refused with HTTP 403 and an
     ``escalation_id`` unless the delegation policy permits it; the refusal
@@ -7423,10 +7425,26 @@ async def decide_proposal(
     cover it. Rejecting one records the precondition as rejected for that
     objective, so it is not proposed again, and the objective keeps its gap.
 
+    A rejection made in error is reconsidered with ``decision="reconsider"``:
+    the same proposal is open again, to be decided anew, and nothing is
+    applied until it is accepted. Only a rejected proposal can be
+    reconsidered (409 otherwise, naming what closed it), and one whose
+    objective is no longer live is refused. Reconsidering is a judgment of
+    its own (``proposal_reconsidered``), delegated or parked as any other.
+
+    An ``assumption`` proposal can be accepted with ``amended_text``: the
+    assumption is created with that wording instead of the proposal's,
+    keeping the change to the behavioural model the proposal carries. Every
+    phrase that change quotes must remain in the wording (400
+    ``amendment_breaks_edit`` otherwise). Refused 409 ``assumption_exists``
+    where the acceptance binds an assumption that already exists (another
+    objective's acceptance created it): edit that assumption and accept it
+    instead.
+
     Args:
         model_id: ID of the threat model.
         proposal_id: ID of the proposal to decide.
-        decision: ``accept`` or ``reject``.
+        decision: ``accept``, ``reject`` or ``reconsider``.
         note: Optional note recorded with the decision.
         expires_at: ISO 8601 date an accepted assumption lapses (e.g.
             "2027-03-29T00:00:00Z"). Applies to accepting an ``assumption``
@@ -7434,15 +7452,21 @@ async def decide_proposal(
         record_only: Accepting parked answers to behavioural questions
             starts the extraction they complete, billed to whoever accepts;
             True records them without it. Default False.
+        amended_text: Wording the accepted assumption takes (at most 1000
+            characters). Only with ``decision="accept"`` on an ``assumption``
+            proposal. Empty (default) keeps the proposal's wording.
 
     Returns ``{proposal, effect}``.
     """
-    if decision not in ("accept", "reject"):
-        raise ToolError("decision must be 'accept' or 'reject'.")
+    if decision not in ("accept", "reject", "reconsider"):
+        raise ToolError("decision must be 'accept', 'reject' or 'reconsider'.")
+    if amended_text.strip() and decision != "accept":
+        raise ToolError("amended_text applies only to decision='accept'.")
     try:
         return await _get_client().decide_proposal(
             model_id, proposal_id, decision, note=note, expires_at=expires_at,
             **({"record_only": True} if record_only else {}),
+            **({"amended_text": amended_text.strip()} if amended_text.strip() else {}),
         )
     except Exception as exc:
         raise _api_error(exc) from exc
@@ -7468,7 +7492,9 @@ async def decide_proposals(
     Args:
         model_id: ID of the threat model.
         decisions: JSON array of ``{"proposal_id", "decision"}``, each
-            decision ``accept`` or ``reject``.
+            decision ``accept``, ``reject`` or ``reconsider`` (a rejected
+            proposal opened again, as on ``decide_proposal``). Amended
+            wording is accepted one at a time, with ``decide_proposal``.
         note: Optional note recorded with each decision.
         expires_at: ISO 8601 date accepted assumptions lapse (as on
             ``decide_proposal``).
@@ -7485,9 +7511,9 @@ async def decide_proposals(
     items = []
     for d in parsed:
         if not (isinstance(d, dict) and str(d.get("proposal_id", "")).strip()
-                and d.get("decision") in ("accept", "reject")):
+                and d.get("decision") in ("accept", "reject", "reconsider")):
             raise ToolError("each decision is an object with a proposal_id and a decision "
-                            "of 'accept' or 'reject'.")
+                            "of 'accept', 'reject' or 'reconsider'.")
         items.append({"proposal_id": str(d["proposal_id"]).strip(), "decision": d["decision"]})
     try:
         return await _get_client().decide_proposals(

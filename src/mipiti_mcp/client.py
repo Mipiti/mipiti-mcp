@@ -3037,22 +3037,25 @@ class MipitiClient:
 
     async def decide_proposal(
         self, model_id: str, proposal_id: str, decision: str, note: str = "",
-        expires_at: str = "", record_only: bool = False,
+        expires_at: str = "", record_only: bool = False, amended_text: str = "",
     ) -> dict:
         """POST /api/models/{model_id}/proposals/{proposal_id}/decide.
 
-        Accept or reject a proposal. ``expires_at`` (ISO 8601) is when an
-        accepted assumption lapses; it is sent only when given.
-        ``record_only`` accepts parked answers without starting the
-        extraction they complete; sent only when set. Returns ``{proposal,
-        effect}``; a refusal surfaces as an HTTP 403 whose detail carries
-        ``escalation_id``.
+        Accept, reject, or reconsider a rejected proposal. ``expires_at``
+        (ISO 8601) is when an accepted assumption lapses; it is sent only
+        when given. ``record_only`` accepts parked answers without starting
+        the extraction they complete; sent only when set. ``amended_text``
+        is the wording an accepted assumption takes; sent only when given.
+        Returns ``{proposal, effect}``; a refusal surfaces as an HTTP 403
+        whose detail carries ``escalation_id``.
         """
         body: dict[str, Any] = {"decision": decision, "note": note}
         if expires_at:
             body["expires_at"] = expires_at
         if record_only:
             body["record_only"] = True
+        if amended_text:
+            body["amended_text"] = amended_text
         return await self._post(
             f"/api/models/{model_id}/proposals/{proposal_id}/decide", body,
         )

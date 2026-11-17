@@ -51,6 +51,33 @@ async def test_decisions_are_taken_together_in_one_call(mock_env: None) -> None:
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_a_rejection_is_reconsidered_in_a_batch(mock_env: None) -> None:
+    answer = {"model_id": "tm-1", "decided": 1, "refused": 0,
+              "results": [{"proposal_id": "p3", "ok": True}]}
+    route = respx.post(f"{MODEL}/proposals/decide").mock(
+        return_value=httpx.Response(200, json=answer))
+    with patch("mipiti_mcp.server._get_client", return_value=MipitiClient()):
+        await server.decide_proposals(
+            server_version="0", model_id="tm-1",
+            decisions=json.dumps([{"proposal_id": "p3", "decision": "reconsider"}]))
+    assert _body(route)["decisions"] == [{"proposal_id": "p3", "decision": "reconsider"}]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_amended_acceptance_sends_its_wording(mock_env: None) -> None:
+    route = respx.post(f"{MODEL}/proposals/p4/decide").mock(
+        return_value=httpx.Response(200, json={"proposal": {"id": "p4"}, "effect": {}}))
+    with patch("mipiti_mcp.server._get_client", return_value=MipitiClient()):
+        await server.decide_proposal(
+            server_version="0", model_id="tm-1", proposal_id="p4", decision="accept",
+            amended_text="The reworded precondition.")
+    assert _body(route) == {"decision": "accept", "note": "",
+                            "amended_text": "The reworded precondition."}
+
+
+@pytest.mark.asyncio
 async def test_a_decision_that_is_neither_accept_nor_reject_is_refused_before_any_call(
         mock_env: None) -> None:
     with pytest.raises(ToolError):
