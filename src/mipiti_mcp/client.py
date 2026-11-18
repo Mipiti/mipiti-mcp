@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
+import hashlib
 import json
 import os
+import re
+import time
 import uuid
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Iterator, Optional
+from urllib.parse import quote, unquote
 
 import httpx
 from httpx_sse import aconnect_sse
@@ -54,6 +60,122 @@ from .types import (
 
 DEFAULT_API_URL = "https://api.mipiti.io"
 
+# ----------------------------------------------------------------------
+# What a request carries about the agent's work beside its body
+# ----------------------------------------------------------------------
+#
+# The evidence a judgment rests on travels in its request body, under
+# ``citations`` (a list of citations); the review run a call belongs to in the
+# ``Mipiti-Review-Run`` header. A judgment tool binds its evidence for the call
+# (``evidence_bound``) and every write made meanwhile carries it in its body.
+# Every write to a model carries the caller's open review run, held per
+# credential and model across clients (a hosted server makes one client per
+# request), and looked up from the platform only when a write is sent and none
+# is held.
+
+CITATIONS_FIELD = "citations"
+REVIEW_RUN_HEADER = "Mipiti-Review-Run"
+
+_evidence: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
+    "mipiti_evidence", default=None)
+
+#: ``(credential digest, model id) -> run id`` of the caller's open run.
+_RUNS: dict[tuple[str, str], str] = {}
+#: ``(credential digest, model id) -> monotonic time`` a lookup found none:
+#: not asked again for ``_NO_RUN_SECONDS``.
+_NO_RUN: dict[tuple[str, str], float] = {}
+_NO_RUN_SECONDS = 60.0
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_MODEL_PATH = re.compile(r"/api/models/([^/?#]+)(/[^?#]*)?$")
+
+
+@contextlib.contextmanager
+def evidence_bound(evidence: list | None) -> Iterator[None]:
+    """Send ``evidence`` (a list of citations) in the body of every write made
+    inside the block, under ``citations``; nothing when it is empty."""
+    token = _evidence.set(list(evidence) if evidence else None)
+    try:
+        yield
+    finally:
+        _evidence.reset(token)
+
+
+class UnsafePath(ValueError):
+    """A request path with a dot segment: an id that would move the request
+    to another endpoint."""
+
+
+class _GuardedClient(httpx.AsyncClient):
+    """An ``httpx.AsyncClient`` that sends a request only to the path it was
+    written for. Ids reach paths encoded (``_seg``); this is the backstop for
+    any path, a future one included. Two checks:
+
+    - resolve and compare: httpx builds the request, resolving the path as it
+      will send it, and the request is refused unless that path is the path as
+      written (both read with percent-encoding undone, so an encoded id reads
+      the same). Whatever httpx would drop or climb is caught by definition,
+      without a list of the forms it reads as dots.
+    - the dot forms httpx leaves alone (``%2e``, a tab inside, ``is_dot_segment``)
+      are refused too: a proxy on the way may resolve them.
+
+    A guarded path resolves to itself: ``tests/test_path_guard.py`` drives this
+    guard against httpx's own resolution."""
+
+    def build_request(self, method, url, *args, **kwargs):
+        written = _written_path(str(url))
+        if any(is_dot_segment(seg) for seg in written.split("/")):
+            raise UnsafePath(f"refused a request path with a dot segment: {written!r}")
+        request = super().build_request(method, url, *args, **kwargs)
+        sent = request.url.raw_path.decode("ascii").split("?", 1)[0]
+        if not _is_absolute(str(url)):
+            written = self.base_url.raw_path.decode("ascii").rstrip("/") + written
+        if unquote(sent) != unquote(written):
+            raise UnsafePath(f"refused a request path the resolver moves: {written!r} "
+                             f"would be sent as {sent!r}")
+        return request
+
+
+def _is_absolute(url: str) -> bool:
+    return re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url) is not None
+
+
+def _written_path(url: str) -> str:
+    """The path of ``url`` as written: no scheme, authority, query or
+    fragment."""
+    rest = url.split("#", 1)[0].split("?", 1)[0]
+    if _is_absolute(rest):
+        rest = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]*", "", rest)
+    return rest
+
+
+def is_dot_segment(seg: str) -> bool:
+    """Whether a path segment is a dot segment in any form a URL resolver
+    reads as one: ``.`` or ``..``, with either dot written ``%2e`` (either
+    case), and with any tab or newline deleted, as the WHATWG URL standard
+    reads it (httpx does neither, but a proxy on the way may)."""
+    read = seg.replace("\t", "").replace("\n", "").replace("\r", "")
+    return read.lower().replace("%2e", ".") in (".", "..")
+
+
+def _seg(value: Any) -> str:
+    """``value`` as exactly one path segment: percent-encoded so nothing in it
+    acts as structure (``/``, ``\\``, ``?``, ``#``, ``%``, controls), and
+    refused when empty or a dot segment, which no encoding stops a resolver
+    reading (``is_dot_segment``). Every id a request path carries goes through
+    here (``tests/test_path_guard.py`` fails a path that interpolates anything
+    else)."""
+    text = str(value)
+    if not text or is_dot_segment(text):
+        raise UnsafePath(f"refused {text!r} as a path segment")
+    return quote(text, safe="")
+
+
+def forget_runs() -> None:
+    """Drop every held run (tests)."""
+    _RUNS.clear()
+    _NO_RUN.clear()
+
+
 ProgressCallback = Callable[[float, float, str], Awaitable[None]]
 """Signature: (progress, total, message) -> None.
 
@@ -83,6 +205,62 @@ class MipitiClient:
                 "or pass api_key to MipitiClient."
             )
         self._client: httpx.AsyncClient | None = None
+        #: Names the credential's held runs without keeping the credential.
+        credential = json.dumps(sorted((auth_headers or {"X-API-Key": self.api_key}).items()))
+        self._credential = hashlib.sha256(credential.encode("utf-8")).hexdigest()
+
+    # ------------------------------------------------------------------
+    # The review run a write belongs to
+    # ------------------------------------------------------------------
+
+    def held_run(self, model_id: str) -> str:
+        """The run this credential holds open on ``model_id`` ("" if none)."""
+        return _RUNS.get((self._credential, model_id), "")
+
+    def hold_run(self, model_id: str, run_id: str) -> None:
+        """Send ``run_id`` with every write to ``model_id`` from now on."""
+        key = (self._credential, model_id)
+        _NO_RUN.pop(key, None)
+        if run_id:
+            _RUNS[key] = run_id
+        else:
+            _RUNS.pop(key, None)
+
+    async def _run_for_write(self, model_id: str) -> str:
+        """The run a write to ``model_id`` belongs to: the one held, else the
+        caller's open run on the platform (``current``), held from then on."""
+        key = (self._credential, model_id)
+        held = _RUNS.get(key)
+        if held:
+            return held
+        if time.monotonic() - _NO_RUN.get(key, -_NO_RUN_SECONDS) < _NO_RUN_SECONDS:
+            return ""
+        run = await self.current_review_run(model_id)
+        if run and run.get("id"):
+            _RUNS[key] = run["id"]
+            return run["id"]
+        _NO_RUN[key] = time.monotonic()
+        return ""
+
+    async def _on_request(self, request: httpx.Request) -> None:
+        """Attach the caller's review run to every write to a model, except
+        the write that opens one; and refuse a write that would drop the bound
+        evidence (one not sent through ``_request_with_idempotency``, which
+        puts it in the body)."""
+        if request.method not in _WRITE_METHODS:
+            return
+        if _evidence.get() and f'"{CITATIONS_FIELD}"'.encode() not in request.content:
+            raise RuntimeError(
+                f"{request.method} {request.url.path} would drop the judgment's evidence: "
+                "send it through _request_with_idempotency")
+        if REVIEW_RUN_HEADER in request.headers:
+            return
+        m = _MODEL_PATH.search(request.url.path)
+        if m is None or (m.group(2) or "").rstrip("/") == "/review-runs":
+            return
+        run = await self._run_for_write(m.group(1))
+        if run:
+            request.headers[REVIEW_RUN_HEADER] = run
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -92,12 +270,13 @@ class MipitiClient:
             # (source_system="mcp") instead of defaulting to "web". Uses
             # setdefault so an explicit caller-supplied value is preserved.
             headers.setdefault("X-Mipiti-Source-System", "mcp")
-            self._client = httpx.AsyncClient(
+            self._client = _GuardedClient(
                 base_url=self.api_url,
                 headers=headers,
                 timeout=httpx.Timeout(
                     connect=10.0, read=120.0, write=10.0, pool=10.0
                 ),
+                event_hooks={"request": [self._on_request]},
             )
         return self._client
 
@@ -136,6 +315,13 @@ class MipitiClient:
         """
         idem_key = str(uuid.uuid4())
         headers = {"Idempotency-Key": idem_key}
+        cited = _evidence.get()
+        if cited:
+            if json is None:
+                json = {}
+            if not isinstance(json, dict) or method == "DELETE":
+                raise ValueError(f"{method} {path} has no JSON object body to carry evidence in")
+            json = {**json, CITATIONS_FIELD: cited}
         client = self._get_client()
         last_exc: Exception | None = None
         for attempt in range(len(_RETRY_BACKOFFS) + 1):
@@ -461,14 +647,14 @@ class MipitiClient:
         if version is not None:
             if include:
                 raise ValueError("include applies to the latest version only")
-            data = await self._get(f"/api/models/{model_id}/versions/{version}")
+            data = await self._get(f"/api/models/{_seg(model_id)}/versions/{_seg(version)}")
         else:
             params = {"include": include} if include else None
-            data = await self._get(f"/api/models/{model_id}", params=params)
+            data = await self._get(f"/api/models/{_seg(model_id)}", params=params)
         return ThreatModel.model_validate(data)
 
     async def rename_model(self, model_id: str, name: str) -> RenameResult:
-        data = await self._patch(f"/api/models/{model_id}", {"title": name})
+        data = await self._patch(f"/api/models/{_seg(model_id)}", {"title": name})
         return RenameResult.model_validate(data)
 
     async def set_parent(
@@ -483,12 +669,12 @@ class MipitiClient:
         children}``.
         """
         return await self._put(
-            f"/api/models/{model_id}/parent",
+            f"/api/models/{_seg(model_id)}/parent",
             {"parent_id": parent_id},
         )
 
     async def delete_model(self, model_id: str) -> None:
-        await self._delete(f"/api/models/{model_id}")
+        await self._delete(f"/api/models/{_seg(model_id)}")
 
     # --- Reliance / delegation (Foundation primitive) ---
 
@@ -503,13 +689,13 @@ class MipitiClient:
         Calls ``PUT /api/models/{model_id}/foundation``.
         """
         return await self._put(
-            f"/api/models/{model_id}/foundation",
+            f"/api/models/{_seg(model_id)}/foundation",
             {"provides": provides, "visibility": visibility},
         )
 
     async def list_reliance(self, model_id: str) -> dict:
         """List cross-model dependency edges for a model (as consumer + provider)."""
-        return await self._get(f"/api/models/{model_id}/reliance")
+        return await self._get(f"/api/models/{_seg(model_id)}/reliance")
 
     async def create_reliance(
         self,
@@ -525,7 +711,7 @@ class MipitiClient:
         Calls ``POST /api/models/{model_id}/reliance``.
         """
         return await self._post(
-            f"/api/models/{model_id}/reliance",
+            f"/api/models/{_seg(model_id)}/reliance",
             {
                 "provider_model_id": provider_model_id,
                 "provider_control_id": provider_control_id,
@@ -540,19 +726,19 @@ class MipitiClient:
     ) -> dict:
         """Promote a draft reliance edge to active (post-validation gate)."""
         return await self._post(
-            f"/api/reliance/{edge_id}/confirm",
+            f"/api/reliance/{_seg(edge_id)}/confirm",
             {"accept_partial_as_relied_upon": accept_partial_as_relied_upon},
         )
 
     async def delete_reliance(self, edge_id: str) -> None:
-        await self._delete(f"/api/reliance/{edge_id}")
+        await self._delete(f"/api/reliance/{_seg(edge_id)}")
 
     async def propose_attach_foundation(
         self, model_id: str, foundation_model_id: str,
     ) -> dict:
         """Propose delegations from a consumer to a foundation (read-only)."""
         return await self._get(
-            f"/api/models/{model_id}/attach-foundation/{foundation_model_id}/proposals",
+            f"/api/models/{_seg(model_id)}/attach-foundation/{_seg(foundation_model_id)}/proposals",
         )
 
     async def attach_foundation(
@@ -560,7 +746,7 @@ class MipitiClient:
     ) -> dict:
         """Create draft delegation edges for the selected (objective, control) pairs."""
         return await self._post(
-            f"/api/models/{model_id}/attach-foundation",
+            f"/api/models/{_seg(model_id)}/attach-foundation",
             {"foundation_model_id": foundation_model_id, "selections": selections},
         )
 
@@ -572,7 +758,7 @@ class MipitiClient:
 
     async def get_tag(self, tag_id: str) -> dict:
         """One tag with its member model ids."""
-        return await self._get(f"/api/tags/{tag_id}")
+        return await self._get(f"/api/tags/{_seg(tag_id)}")
 
     async def create_tag(
         self, name: str, description: str = "", model_ids: list[str] | None = None,
@@ -584,34 +770,34 @@ class MipitiClient:
         )
 
     async def delete_tag(self, tag_id: str) -> None:
-        await self._delete(f"/api/tags/{tag_id}")
+        await self._delete(f"/api/tags/{_seg(tag_id)}")
 
     async def add_model_to_tag(self, tag_id: str, model_id: str) -> dict:
         return await self._post(
-            f"/api/tags/{tag_id}/models", {"model_id": model_id},
+            f"/api/tags/{_seg(tag_id)}/models", {"model_id": model_id},
         )
 
     async def remove_model_from_tag(self, tag_id: str, model_id: str) -> None:
-        await self._delete(f"/api/tags/{tag_id}/models/{model_id}")
+        await self._delete(f"/api/tags/{_seg(tag_id)}/models/{_seg(model_id)}")
 
     async def list_model_tags(self, model_id: str) -> dict:
         """List every tag a model belongs to (overlapping)."""
-        return await self._get(f"/api/models/{model_id}/tags")
+        return await self._get(f"/api/models/{_seg(model_id)}/tags")
 
     async def get_tag_risk_view(self, tag_id: str) -> dict:
         """Aggregate per-CO risk rows across a tag's member models."""
-        return await self._get(f"/api/tags/{tag_id}/risk-view")
+        return await self._get(f"/api/tags/{_seg(tag_id)}/risk-view")
 
     async def get_tag_dependencies(self, tag_id: str) -> dict:
         """The reliance edges among a tag's member models."""
-        return await self._get(f"/api/tags/{tag_id}/dependencies")
+        return await self._get(f"/api/tags/{_seg(tag_id)}/dependencies")
 
     async def select_tag_compliance_frameworks(
         self, tag_id: str, framework_ids: list[str],
     ) -> dict:
         """Select compliance frameworks for a tag, propagating them to its members."""
         return await self._post(
-            f"/api/tags/{tag_id}/compliance/frameworks",
+            f"/api/tags/{_seg(tag_id)}/compliance/frameworks",
             {"framework_ids": framework_ids},
         )
 
@@ -620,14 +806,14 @@ class MipitiClient:
     ) -> dict:
         """Cross-model compliance report scoped to a tag's members."""
         return await self._get(
-            f"/api/tags/{tag_id}/compliance/{framework_id}/report",
+            f"/api/tags/{_seg(tag_id)}/compliance/{_seg(framework_id)}/report",
             params={"level": level},
         )
 
     async def export_tag(self, tag_id: str, fmt: str = "html") -> str:
         """Fetch the signed auditor report (HTML) for a tag. Returns the body text."""
         resp = await self._get_client().get(
-            f"/api/tags/{tag_id}/export", params={"format": fmt},
+            f"/api/tags/{_seg(tag_id)}/export", params={"format": fmt},
         )
         resp.raise_for_status()
         return resp.text
@@ -640,13 +826,13 @@ class MipitiClient:
         ``fetch_operation_result(job_id)`` once status is "completed".
         """
         data = await self._get(
-            f"/api/models/{model_id}/export", params={"format": fmt},
+            f"/api/models/{_seg(model_id)}/export", params={"format": fmt},
         )
         return str(data["job_id"])
 
     async def start_export_model_full(self, model_id: str) -> str:
         """Kick off an async full-archive export job; return job_id."""
-        data = await self._get(f"/api/models/{model_id}/export/full")
+        data = await self._get(f"/api/models/{_seg(model_id)}/export/full")
         return str(data["job_id"])
 
     async def fetch_operation_result(self, job_id: str) -> bytes:
@@ -657,7 +843,7 @@ class MipitiClient:
         with the original Content-Type. Callers are expected to have
         already polled ``get_operation`` until status="completed".
         """
-        resp = await self._get_client().get(f"/api/operations/{job_id}/result")
+        resp = await self._get_client().get(f"/api/operations/{_seg(job_id)}/result")
         resp.raise_for_status()
         return resp.content
 
@@ -704,7 +890,7 @@ class MipitiClient:
             params["offset"] = offset
         if limit:
             params["limit"] = limit
-        data = await self._get(f"/api/models/{model_id}/controls", params=params)
+        data = await self._get(f"/api/models/{_seg(model_id)}/controls", params=params)
         if summary_only:
             return ControlSummariesResponse.model_validate(data)
         return ControlsResponse.model_validate(data)
@@ -712,7 +898,7 @@ class MipitiClient:
     async def get_control_generation_status(self, model_id: str) -> dict:
         """Async control-generation status for a model — the poll target after
         generate/refine returns ``controls_status`` other than complete."""
-        return await self._get(f"/api/models/{model_id}/controls/status")
+        return await self._get(f"/api/models/{_seg(model_id)}/controls/status")
 
     async def pause_control_generation(self, model_id: str) -> dict:
         """Pause the model's background control generation.
@@ -721,7 +907,7 @@ class MipitiClient:
         comes back as ``{"paused": False, "http_status": 409, **detail}`` so a
         caller can relay it. Any other failure raises."""
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/pause")
+            "POST", f"/api/models/{_seg(model_id)}/controls/pause")
         if resp.status_code == 409:
             try:
                 detail = resp.json().get("detail", {})
@@ -742,7 +928,7 @@ class MipitiClient:
         come back as ``{"resumed": False, "http_status": ..., **detail}`` so a
         caller can relay them. Any other failure raises."""
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/resume")
+            "POST", f"/api/models/{_seg(model_id)}/controls/resume")
         if resp.status_code in (409, 503):
             try:
                 detail = resp.json().get("detail", {})
@@ -791,7 +977,7 @@ class MipitiClient:
         if set_revision is not None:
             body["set_revision"] = int(set_revision)
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/strengthen", json=body)
+            "POST", f"/api/models/{_seg(model_id)}/controls/strengthen", json=body)
         if resp.status_code in (402, 409):
             return {"started": False, "http_status": resp.status_code,
                     **self._refusal(resp)}
@@ -839,7 +1025,7 @@ class MipitiClient:
         if strengthen:
             body["strengthen"] = True
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/build", json=body)
+            "POST", f"/api/models/{_seg(model_id)}/controls/build", json=body)
         if resp.status_code in (400, 402, 404, 409):
             return {"started": False, "http_status": resp.status_code,
                     **self._refusal(resp)}
@@ -853,7 +1039,7 @@ class MipitiClient:
         nothing is held) comes back as ``{"discarded": False, "http_status":
         409, **detail}``. Any other failure raises."""
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/discard")
+            "POST", f"/api/models/{_seg(model_id)}/controls/discard")
         if resp.status_code == 409:
             return {"discarded": False, "http_status": 409, **self._refusal(resp)}
         resp.raise_for_status()
@@ -863,7 +1049,7 @@ class MipitiClient:
         """GET /api/models/{model_id}/controls/revisions[?version=]."""
         params = {"version": version} if version else None
         return await self._get(
-            f"/api/models/{model_id}/controls/revisions", params=params)
+            f"/api/models/{_seg(model_id)}/controls/revisions", params=params)
 
     async def undo_control_change(self, model_id: str) -> dict:
         """POST /api/models/{model_id}/controls/undo.
@@ -873,7 +1059,7 @@ class MipitiClient:
         since) comes back as ``{"applied": False, "http_status": 409,
         **detail}``. Any other failure raises."""
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/undo")
+            "POST", f"/api/models/{_seg(model_id)}/controls/undo")
         if resp.status_code == 409:
             return {"applied": False, "http_status": 409, **self._refusal(resp)}
         resp.raise_for_status()
@@ -886,7 +1072,7 @@ class MipitiClient:
         or there is no earlier version) comes back as ``{"applied": False,
         "http_status": 409, **detail}``. Any other failure raises."""
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/revert")
+            "POST", f"/api/models/{_seg(model_id)}/revert")
         if resp.status_code == 409:
             return {"applied": False, "http_status": 409, **self._refusal(resp)}
         resp.raise_for_status()
@@ -902,7 +1088,7 @@ class MipitiClient:
         402, 409 and 503 come back as ``{"confirmed": False, "queued": 0,
         "http_status": ..., **detail}``. Any other failure raises."""
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/controls/imported/judge",
+            "POST", f"/api/models/{_seg(model_id)}/controls/imported/judge",
             json={"confirm_estimate": bool(confirm_estimate)})
         if resp.status_code in (402, 409, 503):
             return {"confirmed": False, "queued": 0,
@@ -927,7 +1113,7 @@ class MipitiClient:
             body["batch_size"] = batch_size
         if co_ids is not None:
             body["co_ids"] = co_ids
-        return await self._post(f"/api/models/{model_id}/controls/regenerate", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/controls/regenerate", body)
 
     async def update_control_status(
         self,
@@ -942,7 +1128,7 @@ class MipitiClient:
             "implementation_notes": implementation_notes,
         }
         data = await self._patch(
-            f"/api/controls/{control_id}",
+            f"/api/controls/{_seg(control_id)}",
             body,
             params={"model_id": model_id},
         )
@@ -972,7 +1158,7 @@ class MipitiClient:
         if codebase_findings:
             body["codebase_findings"] = codebase_findings
         return await self._post(
-            f"/api/models/{model_id}/controls/{control_id}/refine-job", body,
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/refine-job", body,
         )
 
     async def remap_control(
@@ -994,7 +1180,7 @@ class MipitiClient:
         }
         resp = await self._request_with_idempotency(
             "PATCH",
-            f"/api/models/{model_id}/controls/{control_id}/co-mapping",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/co-mapping",
             json=body,
         )
         resp.raise_for_status()
@@ -1020,7 +1206,7 @@ class MipitiClient:
         }
         resp = await self._request_with_idempotency(
             "POST",
-            f"/api/models/{model_id}/controls/changeset",
+            f"/api/models/{_seg(model_id)}/controls/changeset",
             json=body,
         )
         resp.raise_for_status()
@@ -1048,7 +1234,7 @@ class MipitiClient:
         }
         resp = await self._request_with_idempotency(
             "PATCH",
-            f"/api/models/{model_id}/controls/{control_id}/components",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/components",
             json=body,
         )
         resp.raise_for_status()
@@ -1078,7 +1264,7 @@ class MipitiClient:
         }
         resp = await self._request_with_idempotency(
             "PATCH",
-            f"/api/models/{model_id}/assets/{asset_id}/components",
+            f"/api/models/{_seg(model_id)}/assets/{_seg(asset_id)}/components",
             json=body,
         )
         resp.raise_for_status()
@@ -1100,7 +1286,7 @@ class MipitiClient:
         """
         params = {"co_id": co_id} if co_id else None
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/coherence", params=params,
+            f"/api/models/{_seg(model_id)}/coherence", params=params,
         )
         resp.raise_for_status()
         return resp.json()
@@ -1123,7 +1309,7 @@ class MipitiClient:
         """
         params = {"co_id": co_id} if co_id else None
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/reachability", params=params,
+            f"/api/models/{_seg(model_id)}/reachability", params=params,
         )
         resp.raise_for_status()
         return resp.json()
@@ -1145,7 +1331,7 @@ class MipitiClient:
         warnings}``.
         """
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition",
+            f"/api/models/{_seg(model_id)}/composition",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1172,7 +1358,7 @@ class MipitiClient:
         if kind:
             params["kind"] = kind
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/entities",
+            f"/api/models/{_seg(model_id)}/composition/entities",
             params=params,
         )
         resp.raise_for_status()
@@ -1185,7 +1371,7 @@ class MipitiClient:
         asset_qid, attacker_qid, security_properties, origin}, ...]}``.
         """
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/control-objectives",
+            f"/api/models/{_seg(model_id)}/composition/control-objectives",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1211,7 +1397,7 @@ class MipitiClient:
         if origin:
             params["origin"] = origin
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/coverage",
+            f"/api/models/{_seg(model_id)}/composition/coverage",
             params=params,
         )
         resp.raise_for_status()
@@ -1240,7 +1426,7 @@ class MipitiClient:
         if kind_filter:
             params["kind_filter"] = kind_filter
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/reachability",
+            f"/api/models/{_seg(model_id)}/composition/reachability",
             params=params,
         )
         resp.raise_for_status()
@@ -1253,7 +1439,7 @@ class MipitiClient:
         authored_paths, suggestions: {missing_path, dangling_path}}``.
         """
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/attack-paths",
+            f"/api/models/{_seg(model_id)}/composition/attack-paths",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1269,7 +1455,7 @@ class MipitiClient:
         """
         params = {"page": page, "page_size": page_size}
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/reconciliation",
+            f"/api/models/{_seg(model_id)}/composition/reconciliation",
             params=params,
         )
         resp.raise_for_status()
@@ -1310,7 +1496,7 @@ class MipitiClient:
         if confirm_heuristic:
             body["confirm_heuristic"] = True
         return await self._post(
-            f"/api/models/{model_id}/composition/reconciliation/apply-match",
+            f"/api/models/{_seg(model_id)}/composition/reconciliation/apply-match",
             body,
         )
 
@@ -1344,7 +1530,7 @@ class MipitiClient:
         is not configured.
         """
         return await self._post(
-            f"/api/models/{model_id}/composition/reconciliation/reject",
+            f"/api/models/{_seg(model_id)}/composition/reconciliation/reject",
             {
                 "kind": kind,
                 "own_qid": own_qid,
@@ -1370,7 +1556,7 @@ class MipitiClient:
         configured.
         """
         return await self._delete(
-            f"/api/models/{model_id}/composition/reconciliation/reject/{rejection_id}",
+            f"/api/models/{_seg(model_id)}/composition/reconciliation/reject/{_seg(rejection_id)}",
         )
 
     async def list_reconciliation_rejections(self, model_id: str) -> dict:
@@ -1387,7 +1573,7 @@ class MipitiClient:
         rejection store is not configured.
         """
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/reconciliation/rejections",
+            f"/api/models/{_seg(model_id)}/composition/reconciliation/rejections",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1456,7 +1642,7 @@ class MipitiClient:
         if skip_overapplication_gate:
             body["skip_overapplication_gate"] = True
         return await self._post(
-            f"/api/models/{model_id}/composition/lift",
+            f"/api/models/{_seg(model_id)}/composition/lift",
             body,
         )
 
@@ -1491,7 +1677,7 @@ class MipitiClient:
         enabled.
         """
         return await self._post(
-            f"/api/models/{model_id}/composition/split",
+            f"/api/models/{_seg(model_id)}/composition/split",
             {
                 "kind": kind,
                 "ancestor_local_id": ancestor_local_id,
@@ -1518,7 +1704,7 @@ class MipitiClient:
         different model; 503 where composition is not enabled.
         """
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/lift/{lift_id}/undo/preview",
+            f"/api/models/{_seg(model_id)}/composition/lift/{_seg(lift_id)}/undo/preview",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1544,7 +1730,7 @@ class MipitiClient:
         composition is not enabled.
         """
         return await self._post(
-            f"/api/models/{model_id}/composition/lift/{lift_id}/undo",
+            f"/api/models/{_seg(model_id)}/composition/lift/{_seg(lift_id)}/undo",
         )
 
     async def preview_split_undo(self, model_id: str, split_id: str) -> dict:
@@ -1556,7 +1742,7 @@ class MipitiClient:
         tombstone target copies) instead of the lift mirrors.
         """
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/composition/split/{split_id}/undo/preview",
+            f"/api/models/{_seg(model_id)}/composition/split/{_seg(split_id)}/undo/preview",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1576,48 +1762,48 @@ class MipitiClient:
         flag off.
         """
         return await self._post(
-            f"/api/models/{model_id}/composition/split/{split_id}/undo",
+            f"/api/models/{_seg(model_id)}/composition/split/{_seg(split_id)}/undo",
         )
 
     async def get_control_objective(self, model_id: str, co_id: str) -> dict:
         """Get a single control objective with its composer verdict."""
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/control-objectives/{co_id}",
+            f"/api/models/{_seg(model_id)}/control-objectives/{_seg(co_id)}",
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_asset(self, model_id: str, asset_id: str) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/assets/{asset_id}",
+            f"/api/models/{_seg(model_id)}/assets/{_seg(asset_id)}",
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_attacker(self, model_id: str, attacker_id: str) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/attackers/{attacker_id}",
+            f"/api/models/{_seg(model_id)}/attackers/{_seg(attacker_id)}",
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_component(self, model_id: str, component_id: str) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/components/{component_id}",
+            f"/api/models/{_seg(model_id)}/components/{_seg(component_id)}",
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_trust_boundary(self, model_id: str, tb_id: str) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/trust-boundaries/{tb_id}",
+            f"/api/models/{_seg(model_id)}/trust-boundaries/{_seg(tb_id)}",
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_assumption(self, model_id: str, assumption_id: str) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/assumptions/{assumption_id}",
+            f"/api/models/{_seg(model_id)}/assumptions/{_seg(assumption_id)}",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1627,7 +1813,7 @@ class MipitiClient:
     ) -> dict:
         params = {"version": version} if version else None
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/controls/{control_id}", params=params,
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}", params=params,
         )
         resp.raise_for_status()
         return resp.json()
@@ -1640,28 +1826,28 @@ class MipitiClient:
         """Un-soft-delete an asset. Tombstoned COs for that asset's
         pairs are revived at save-time with their original IDs."""
         return await self._post(
-            f"/api/models/{model_id}/assets/{asset_id}/restore", {},
+            f"/api/models/{_seg(model_id)}/assets/{_seg(asset_id)}/restore", {},
         )
 
     async def restore_attacker(self, model_id: str, attacker_id: str) -> dict:
         """Un-soft-delete an attacker. Tombstoned COs for that
         attacker's pairs are revived with their original IDs."""
         return await self._post(
-            f"/api/models/{model_id}/attackers/{attacker_id}/restore", {},
+            f"/api/models/{_seg(model_id)}/attackers/{_seg(attacker_id)}/restore", {},
         )
 
     async def restore_assumption(self, model_id: str, as_id: str) -> dict:
         """Un-soft-delete an assumption. It returns to active status;
         re-attestation is required before it mitigates COs again."""
         return await self._post(
-            f"/api/models/{model_id}/assumptions/{as_id}/restore", {},
+            f"/api/models/{_seg(model_id)}/assumptions/{_seg(as_id)}/restore", {},
         )
 
     async def restore_component(self, model_id: str, component_id: str) -> dict:
         """Un-soft-delete a component. Reinstates it under its original ID,
         restoring its trust-boundary contribution to asset reachability."""
         return await self._post(
-            f"/api/models/{model_id}/components/{component_id}/restore", {},
+            f"/api/models/{_seg(model_id)}/components/{_seg(component_id)}/restore", {},
         )
 
     async def restore_trust_boundary(self, model_id: str, tb_id: str) -> dict:
@@ -1669,14 +1855,14 @@ class MipitiClient:
         reachability it filtered re-narrows and its seal/isolation claim is
         restored."""
         return await self._post(
-            f"/api/models/{model_id}/trust-boundaries/{tb_id}/restore", {},
+            f"/api/models/{_seg(model_id)}/trust-boundaries/{_seg(tb_id)}/restore", {},
         )
 
     async def get_mitigation_groups(
         self, model_id: str, co_id: str,
     ) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups",
+            f"/api/models/{_seg(model_id)}/control-objectives/{_seg(co_id)}/mitigation-groups",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1703,7 +1889,7 @@ class MipitiClient:
             "justification": justification,
         }
         return await self._post(
-            f"/api/models/{model_id}/control-objectives/{co_id}/mitigation-groups-job",
+            f"/api/models/{_seg(model_id)}/control-objectives/{_seg(co_id)}/mitigation-groups-job",
             body,
         )
 
@@ -1711,7 +1897,7 @@ class MipitiClient:
         self, model_id: str, control_id: str,
     ) -> dict:
         resp = await self._get_client().get(
-            f"/api/models/{model_id}/controls/{control_id}/assumption-groups",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/assumption-groups",
         )
         resp.raise_for_status()
         return resp.json()
@@ -1736,7 +1922,7 @@ class MipitiClient:
             "justification": justification,
         }
         return await self._post(
-            f"/api/models/{model_id}/controls/{control_id}/assumption-groups-job",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/assumption-groups-job",
             body,
         )
 
@@ -1749,7 +1935,7 @@ class MipitiClient:
         url: str = "",
     ) -> EvidenceActionResult:
         data = await self._post(
-            f"/api/models/{model_id}/controls/{control_id}/evidence",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/evidence",
             {"type": type, "label": label, "url": url},
         )
         return EvidenceActionResult.model_validate(data)
@@ -1758,7 +1944,7 @@ class MipitiClient:
         self, model_id: str, control_id: str, evidence_index: int,
     ) -> EvidenceActionResult:
         data = await self._delete(
-            f"/api/models/{model_id}/controls/{control_id}/evidence/{evidence_index}"
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/evidence/{_seg(evidence_index)}"
         )
         return EvidenceActionResult.model_validate(data)
 
@@ -1782,7 +1968,7 @@ class MipitiClient:
         if source_label:
             body["source_label"] = source_label
         return await self._post(
-            f"/api/models/{model_id}/controls/import/preview-job", body
+            f"/api/models/{_seg(model_id)}/controls/import/preview-job", body
         )
 
     @staticmethod
@@ -1817,7 +2003,7 @@ class MipitiClient:
     ) -> ImportConfirmResult:
         """Persist the reviewed controls — the fast, stateless confirm step."""
         data = await self._post(
-            f"/api/models/{model_id}/controls/import/confirm",
+            f"/api/models/{_seg(model_id)}/controls/import/confirm",
             {"controls": controls, "source_label": source_label},
         )
         return ImportConfirmResult.model_validate(data)
@@ -1826,13 +2012,13 @@ class MipitiClient:
         self, model_id: str, control_id: str, reason: str = "",
     ) -> DeleteControlResult:
         data = await self._delete(
-            f"/api/models/{model_id}/controls/{control_id}",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}",
             params={"reason": reason} if reason else {},
         )
         return DeleteControlResult.model_validate(data)
 
     async def check_control_gaps(self, model_id: str) -> dict:
-        return await self._post(f"/api/models/{model_id}/controls/check-gaps")
+        return await self._post(f"/api/models/{_seg(model_id)}/controls/check-gaps")
 
     async def get_scan_prompt(
         self, model_id: str, control_id: str = "",
@@ -1841,7 +2027,7 @@ class MipitiClient:
         if control_id:
             params["control_id"] = control_id
         data = await self._get(
-            f"/api/models/{model_id}/controls/scan-prompt", params=params,
+            f"/api/models/{_seg(model_id)}/controls/scan-prompt", params=params,
         )
         return ScanPromptResult.model_validate(data)
 
@@ -1857,7 +2043,7 @@ class MipitiClient:
             params["offset"] = offset
         if limit:
             params["limit"] = limit
-        data = await self._get(f"/api/models/{model_id}/control-objectives", params=params)
+        data = await self._get(f"/api/models/{_seg(model_id)}/control-objectives", params=params)
         return ControlObjectivesResponse.model_validate(data)
 
     async def get_objective_grouping(self, model_id: str) -> dict:
@@ -1867,7 +2053,7 @@ class MipitiClient:
         groups it would form and the objectives formed now and after. Writes
         nothing.
         """
-        return await self._get(f"/api/models/{model_id}/objectives/grouping")
+        return await self._get(f"/api/models/{_seg(model_id)}/objectives/grouping")
 
     async def set_objective_grouping(
         self, model_id: str, enabled: bool, model_version: int,
@@ -1878,7 +2064,7 @@ class MipitiClient:
         naming the version reviewed. Creates a model version.
         """
         return await self._post(
-            f"/api/models/{model_id}/objectives/grouping",
+            f"/api/models/{_seg(model_id)}/objectives/grouping",
             {"enabled": enabled, "model_version": model_version},
         )
 
@@ -1910,7 +2096,7 @@ class MipitiClient:
         malformed output) surface as a failed job; 503 means
         retry-with-backoff, 502 means retry-now.
         """
-        return await self._post(f"/api/models/{model_id}/assets/add-job", kwargs)
+        return await self._post(f"/api/models/{_seg(model_id)}/assets/add-job", kwargs)
 
     async def start_edit_asset(self, model_id: str, asset_id: str, **kwargs: Any) -> dict:
         """Kick off an asset edit as a background job; returns ``{"job_id": ...}``.
@@ -1928,7 +2114,7 @@ class MipitiClient:
         malformed output) surface as a failed job with distinct signals.
         """
         return await self._post(
-            f"/api/models/{model_id}/assets/{asset_id}/edit-job", kwargs,
+            f"/api/models/{_seg(model_id)}/assets/{_seg(asset_id)}/edit-job", kwargs,
         )
 
     async def remove_asset(self, model_id: str, asset_id: str) -> dict:
@@ -1936,14 +2122,14 @@ class MipitiClient:
         ``{"model": ThreatModel, ...}`` envelope; the asset stays in
         ``model.assets`` with ``deleted=True``.
         """
-        return await self._delete(f"/api/models/{model_id}/assets/{asset_id}")
+        return await self._delete(f"/api/models/{_seg(model_id)}/assets/{_seg(asset_id)}")
 
     async def start_add_attacker(self, model_id: str, **kwargs: Any) -> dict:
         """Kick off an attacker add as a background job; returns
         ``{"job_id": ...}``. Same three-shape job result as
         ``start_add_asset`` (normal create / auto-restore /
         similar-rejection) plus 503 on LLM outage."""
-        return await self._post(f"/api/models/{model_id}/attackers/add-job", kwargs)
+        return await self._post(f"/api/models/{_seg(model_id)}/attackers/add-job", kwargs)
 
     async def start_remove_entity(
         self, model_id: str, entity_type: str, entity_id: str,
@@ -1958,7 +2144,7 @@ class MipitiClient:
         found or already deleted, the last live asset or attacker) fails the
         job with its message."""
         return await self._post(
-            f"/api/models/{model_id}/entities/{entity_type}/{entity_id}/remove-job", {},
+            f"/api/models/{_seg(model_id)}/entities/{_seg(entity_type)}/{_seg(entity_id)}/remove-job", {},
         )
 
     async def start_edit_attacker(self, model_id: str, attacker_id: str, **kwargs: Any) -> dict:
@@ -1967,13 +2153,13 @@ class MipitiClient:
         ``start_edit_asset`` (accepted edit / semantic rejection) plus 503
         on LLM outage."""
         return await self._post(
-            f"/api/models/{model_id}/attackers/{attacker_id}/edit-job", kwargs,
+            f"/api/models/{_seg(model_id)}/attackers/{_seg(attacker_id)}/edit-job", kwargs,
         )
 
     async def remove_attacker(self, model_id: str, attacker_id: str) -> dict:
         """DELETE /attackers/{id} soft-deletes. Returns the envelope
         with the attacker now marked ``deleted=True`` in the model."""
-        return await self._delete(f"/api/models/{model_id}/attackers/{attacker_id}")
+        return await self._delete(f"/api/models/{_seg(model_id)}/attackers/{_seg(attacker_id)}")
 
     async def start_reevaluate_factors(
         self,
@@ -2014,7 +2200,7 @@ class MipitiClient:
         if stale_only:
             body["stale_only"] = True
         return await self._post(
-            f"/api/models/{model_id}/factors/reevaluate-job", body,
+            f"/api/models/{_seg(model_id)}/factors/reevaluate-job", body,
         )
 
     async def revalidate_entities(self, model_id: str) -> dict:
@@ -2037,7 +2223,7 @@ class MipitiClient:
         model as it stands before the re-validation lands.
         """
         return await self._post(
-            f"/api/models/{model_id}/revalidate-entities", {},
+            f"/api/models/{_seg(model_id)}/revalidate-entities", {},
         )
 
     async def get_verdict_divergence(
@@ -2064,7 +2250,7 @@ class MipitiClient:
         if kind:
             params["kind"] = kind
         return await self._get(
-            f"/api/models/{model_id}/verdict-divergence", params=params,
+            f"/api/models/{_seg(model_id)}/verdict-divergence", params=params,
         )
 
     async def accept_coverage_divergences(
@@ -2086,7 +2272,7 @@ class MipitiClient:
             "change_reason": change_reason,
         }
         return await self._post(
-            f"/api/models/{model_id}/verdict-divergence/coverage/accept-batch",
+            f"/api/models/{_seg(model_id)}/verdict-divergence/coverage/accept-batch",
             body,
         )
 
@@ -2105,7 +2291,7 @@ class MipitiClient:
         """
         body: dict[str, Any] = {"items": list(items), "reason": reason}
         return await self._post(
-            f"/api/models/{model_id}/verdict-divergence/dismiss", body,
+            f"/api/models/{_seg(model_id)}/verdict-divergence/dismiss", body,
         )
 
     async def recompute_verdicts(self, model_id: str) -> dict:
@@ -2121,7 +2307,7 @@ class MipitiClient:
         observability is unavailable on the deployment.
         """
         return await self._post(
-            f"/api/models/{model_id}/verdict-divergence/recompute", {},
+            f"/api/models/{_seg(model_id)}/verdict-divergence/recompute", {},
         )
 
     async def get_recompute_quote(self, model_id: str) -> dict:
@@ -2134,7 +2320,7 @@ class MipitiClient:
         "already_evaluated", "governor"}``.
         """
         return await self._get(
-            f"/api/models/{model_id}/verdict-divergence/recompute/quote",
+            f"/api/models/{_seg(model_id)}/verdict-divergence/recompute/quote",
         )
 
     async def retry_verdicts(self, model_id: str) -> dict:
@@ -2148,7 +2334,7 @@ class MipitiClient:
         Returns ``{"model_id", "model_version", "retried_slots", "governor"}``.
         """
         return await self._post(
-            f"/api/models/{model_id}/verdicts/retry", {},
+            f"/api/models/{_seg(model_id)}/verdicts/retry", {},
         )
 
     async def judge_objective(self, model_id: str, co_id: str) -> dict:
@@ -2167,7 +2353,7 @@ class MipitiClient:
         """
         resp = await self._request_with_idempotency(
             "POST",
-            f"/api/models/{model_id}/control-objectives/{co_id}/judge",
+            f"/api/models/{_seg(model_id)}/control-objectives/{_seg(co_id)}/judge",
         )
         if resp.status_code in (402, 409, 503):
             try:
@@ -2203,7 +2389,7 @@ class MipitiClient:
         if co_ids:
             body["co_ids"] = list(co_ids)
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/control-objectives/judge", json=body)
+            "POST", f"/api/models/{_seg(model_id)}/control-objectives/judge", json=body)
         if resp.status_code in (402, 409, 503):
             try:
                 detail = resp.json().get("detail", {})
@@ -2246,7 +2432,7 @@ class MipitiClient:
         if snapshot:
             params["snapshot"] = snapshot
         resp = await self._request_with_idempotency(
-            "POST", f"/api/models/{model_id}/assess", params=params)
+            "POST", f"/api/models/{_seg(model_id)}/assess", params=params)
         if resp.status_code == 410:
             return _Base.model_validate(
                 {"http_status": resp.status_code, **self._refusal(resp)})
@@ -2286,7 +2472,7 @@ class MipitiClient:
         self, model_id: str, framework_ids: list[str],
     ) -> SelectFrameworksResult:
         data = await self._post(
-            f"/api/models/{model_id}/compliance/frameworks",
+            f"/api/models/{_seg(model_id)}/compliance/frameworks",
             {"framework_ids": framework_ids},
         )
         return SelectFrameworksResult.model_validate(data)
@@ -2310,7 +2496,7 @@ class MipitiClient:
         if limit:
             params["limit"] = limit
         data = await self._get(
-            f"/api/models/{model_id}/compliance/{framework_id}/report",
+            f"/api/models/{_seg(model_id)}/compliance/{_seg(framework_id)}/report",
             params=params,
         )
         return ComplianceReport.model_validate(data)
@@ -2325,7 +2511,7 @@ class MipitiClient:
         notes: str = "",
     ) -> _Base:
         data = await self._post(
-            f"/api/models/{model_id}/compliance/{framework_id}/mappings",
+            f"/api/models/{_seg(model_id)}/compliance/{_seg(framework_id)}/mappings",
             {
                 "requirement_id": requirement_id,
                 "control_id": control_id,
@@ -2345,14 +2531,14 @@ class MipitiClient:
         if control_id:
             body["control_id"] = control_id
         return await self._post(
-            f"/api/models/{model_id}/compliance/{framework_id}/auto-map", body,
+            f"/api/models/{_seg(model_id)}/compliance/{_seg(framework_id)}/auto-map", body,
         )
 
     async def suggest_compliance_remediation(
         self, model_id: str, framework_id: str,
     ) -> dict:
         return await self._post(
-            f"/api/models/{model_id}/compliance/{framework_id}/remediate",
+            f"/api/models/{_seg(model_id)}/compliance/{_seg(framework_id)}/remediate",
         )
 
     async def apply_compliance_remediation(
@@ -2365,7 +2551,7 @@ class MipitiClient:
         if suggestions:
             body["suggestions"] = suggestions
         data = await self._post(
-            f"/api/models/{model_id}/compliance/{framework_id}/remediate/apply",
+            f"/api/models/{_seg(model_id)}/compliance/{_seg(framework_id)}/remediate/apply",
             body,
         )
         return RemediationApplyResult.model_validate(data)
@@ -2377,7 +2563,7 @@ class MipitiClient:
     ) -> dict:
         """Trigger auto-remediation for a compliance framework."""
         data = await self._post(
-            f"/api/models/{model_id}/compliance/{framework_id}/auto-remediate",
+            f"/api/models/{_seg(model_id)}/compliance/{_seg(framework_id)}/auto-remediate",
             {},
         )
         return data
@@ -2387,7 +2573,7 @@ class MipitiClient:
     # ------------------------------------------------------------------
 
     async def get_operation(self, job_id: str) -> dict:
-        return await self._get(f"/api/operations/{job_id}")
+        return await self._get(f"/api/operations/{_seg(job_id)}")
 
     # ------------------------------------------------------------------
     # Components
@@ -2397,13 +2583,13 @@ class MipitiClient:
         body: dict = {"name": name, "repo_url": repo_url, "path": path}
         if trust_boundary_ids:
             body["trust_boundary_ids"] = trust_boundary_ids
-        return await self._post(f"/api/models/{model_id}/components", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/components", body)
 
     async def edit_component(self, model_id: str, component_id: str, **fields) -> dict:
-        return await self._put(f"/api/models/{model_id}/components/{component_id}", fields)
+        return await self._put(f"/api/models/{_seg(model_id)}/components/{_seg(component_id)}", fields)
 
     async def remove_component(self, model_id: str, component_id: str) -> dict:
-        return await self._delete(f"/api/models/{model_id}/components/{component_id}")
+        return await self._delete(f"/api/models/{_seg(model_id)}/components/{_seg(component_id)}")
 
     async def discover_components(self, repo_url: str) -> dict:
         return await self._get("/api/components/discover", params={"repo_url": repo_url})
@@ -2420,7 +2606,7 @@ class MipitiClient:
         ``cal=None`` clears the value. No new model version is created.
         """
         return await self._patch(
-            f"/api/models/{model_id}/control-objectives/{co_id}",
+            f"/api/models/{_seg(model_id)}/control-objectives/{_seg(co_id)}",
             {"cal": cal},
         )
 
@@ -2455,7 +2641,7 @@ class MipitiClient:
             body["clear_target_ml"] = True
         if clear_csf_tier:
             body["clear_csf_tier"] = True
-        return await self._put(f"/api/organizations/{org_id}", body)
+        return await self._put(f"/api/organizations/{_seg(org_id)}", body)
 
     # ------------------------------------------------------------------
     # Assertions & Verification
@@ -2470,9 +2656,9 @@ class MipitiClient:
         if not control_id and not assumption_id:
             raise ValueError("One of control_id or assumption_id is required")
         if assumption_id:
-            url = f"/api/models/{model_id}/assumptions/{assumption_id}/assertions"
+            url = f"/api/models/{_seg(model_id)}/assumptions/{_seg(assumption_id)}/assertions"
         else:
-            url = f"/api/models/{model_id}/controls/{control_id}/assertions"
+            url = f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/assertions"
         data = await self._post(url, {"assertions": assertions})
         if isinstance(data, list):
             return SubmitAssertionsResult(assertions=data)
@@ -2482,9 +2668,9 @@ class MipitiClient:
         self, model_id: str, control_id: str = "", assumption_id: str = "",
     ) -> list[_Base]:
         if assumption_id:
-            url = f"/api/models/{model_id}/assumptions/{assumption_id}/assertions"
+            url = f"/api/models/{_seg(model_id)}/assumptions/{_seg(assumption_id)}/assertions"
         else:
-            url = f"/api/models/{model_id}/controls/{control_id}/assertions"
+            url = f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/assertions"
         data = await self._get(url)
         # The assertion listing endpoints return either a flat list or an
         # ``{"own": [...], "inherited": [...]}`` wrapper, depending on whether
@@ -2524,7 +2710,7 @@ class MipitiClient:
         # the assumption_id as placeholder — backend ignores the path segment.
         path_id = control_id or assumption_id or "_"
         await self._delete(
-            f"/api/models/{model_id}/controls/{path_id}/assertions/{assertion_id}",
+            f"/api/models/{_seg(model_id)}/controls/{_seg(path_id)}/assertions/{_seg(assertion_id)}",
         )
 
     async def get_verification_report(
@@ -2544,15 +2730,12 @@ class MipitiClient:
             params["offset"] = str(offset)
         if limit:
             params["limit"] = str(limit)
-        qs = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"/api/models/{model_id}/verification/report"
-        if qs:
-            url += f"?{qs}"
-        data = await self._get(url)
+        data = await self._get(f"/api/models/{_seg(model_id)}/verification/report",
+                               params=params or None)
         return VerificationReport.model_validate(data)
 
     async def get_sufficiency(self, model_id: str, control_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/controls/{control_id}/sufficiency")
+        return await self._get(f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/sufficiency")
 
     # ------------------------------------------------------------------
     # Findings
@@ -2560,7 +2743,7 @@ class MipitiClient:
 
     async def submit_findings(self, model_id: str, findings: list[dict]) -> list[Finding]:
         data = await self._post(
-            f"/api/models/{model_id}/findings",
+            f"/api/models/{_seg(model_id)}/findings",
             {"findings": findings},
         )
         return [Finding.model_validate(f) for f in data]
@@ -2573,7 +2756,7 @@ class MipitiClient:
             params["control_id"] = control_id
         if status:
             params["status"] = status
-        data = await self._get(f"/api/models/{model_id}/findings", params=params)
+        data = await self._get(f"/api/models/{_seg(model_id)}/findings", params=params)
         # The findings endpoint returns either a flat list or a
         # ``{"own": [...], "inherited": [...]}`` wrapper, depending on whether
         # the model participates in cross-model inheritance. Flatten both arms
@@ -2605,7 +2788,7 @@ class MipitiClient:
             body["remediation_assertion_ids"] = [
                 a.strip() for a in remediation_assertion_ids.split(",") if a.strip()
             ]
-        data = await self._patch(f"/api/models/{model_id}/findings/{finding_id}", body)
+        data = await self._patch(f"/api/models/{_seg(model_id)}/findings/{_seg(finding_id)}", body)
         return Finding.model_validate(data)
 
     async def preview_finding_remediation(self, finding_id: str) -> dict:
@@ -2622,7 +2805,7 @@ class MipitiClient:
         ``HTTPStatusError`` and are wrapped by the tool layer's
         ``_api_error`` helper.
         """
-        return await self._get(f"/api/findings/{finding_id}/remediation/preview")
+        return await self._get(f"/api/findings/{_seg(finding_id)}/remediation/preview")
 
     async def start_apply_finding_remediation(
         self, finding_id: str, justification: str,
@@ -2644,7 +2827,7 @@ class MipitiClient:
         remediation handler.
         """
         return await self._post(
-            f"/api/findings/{finding_id}/remediation/apply-job",
+            f"/api/findings/{_seg(finding_id)}/remediation/apply-job",
             {"justification": justification},
         )
 
@@ -2670,7 +2853,7 @@ class MipitiClient:
         Objective with derived risk tier, asset impact, attacker
         likelihood, control coverage counts, and open-finding count.
         """
-        data = await self._get(f"/api/models/{model_id}/risk-view")
+        data = await self._get(f"/api/models/{_seg(model_id)}/risk-view")
         return ModelRiskView.model_validate(data)
 
     async def get_remediation_leverage(self, model_id: str) -> dict:
@@ -2683,7 +2866,7 @@ class MipitiClient:
         verbatim (``summary``, ``ranked``, ``greedy_plan``) so newly
         added fields surface automatically.
         """
-        return await self._get(f"/api/models/{model_id}/remediation")
+        return await self._get(f"/api/models/{_seg(model_id)}/remediation")
 
     async def list_risk_acceptances(self, model_id: str) -> list[dict[str, Any]]:
         """List all risk acceptances on a specific threat model.
@@ -2693,7 +2876,7 @@ class MipitiClient:
         accepted_at, review_by). Server-side shape; passed through
         unchanged so newly added fields surface automatically.
         """
-        data = await self._get(f"/api/models/{model_id}/risk-acceptances")
+        data = await self._get(f"/api/models/{_seg(model_id)}/risk-acceptances")
         return list(data) if isinstance(data, list) else data
 
     async def create_risk_acceptance(
@@ -2718,7 +2901,7 @@ class MipitiClient:
             "review_by": review_by,
             "kind": kind,
         }
-        return await self._post(f"/api/models/{model_id}/risk-acceptances", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/risk-acceptances", body)
 
     async def list_co_dispositions(
         self, model_id: str, *, kind: str = "",
@@ -2729,10 +2912,8 @@ class MipitiClient:
         the API returns risk acceptances only. Server-side shape; passed
         through unchanged so newly added fields surface automatically.
         """
-        path = f"/api/models/{model_id}/risk-acceptances"
-        if kind:
-            path = f"{path}?kind={kind}"
-        data = await self._get(path)
+        data = await self._get(f"/api/models/{_seg(model_id)}/risk-acceptances",
+                               params={"kind": kind} if kind else None)
         return list(data) if isinstance(data, list) else data
 
     async def revoke_co_disposition(self, model_id: str, disposition_id: str) -> dict[str, Any]:
@@ -2740,7 +2921,7 @@ class MipitiClient:
 
         Returns the revoked record (server-side shape, passed through
         unchanged)."""
-        return await self._patch(f"/api/risk-acceptances/{disposition_id}",
+        return await self._patch(f"/api/risk-acceptances/{_seg(disposition_id)}",
                                  params={"model_id": model_id})
 
     # ------------------------------------------------------------------
@@ -2770,13 +2951,13 @@ class MipitiClient:
             body["passes"] = passes
         if sealed is not None:
             body["sealed"] = sealed
-        return await self._post(f"/api/models/{model_id}/trust-boundaries", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/trust-boundaries", body)
 
     async def edit_trust_boundary(self, model_id: str, tb_id: str, **kwargs) -> dict:
-        return await self._put(f"/api/models/{model_id}/trust-boundaries/{tb_id}", kwargs)
+        return await self._put(f"/api/models/{_seg(model_id)}/trust-boundaries/{_seg(tb_id)}", kwargs)
 
     async def remove_trust_boundary(self, model_id: str, tb_id: str) -> dict:
-        return await self._delete(f"/api/models/{model_id}/trust-boundaries/{tb_id}")
+        return await self._delete(f"/api/models/{_seg(model_id)}/trust-boundaries/{_seg(tb_id)}")
 
     # --- Assumption CRUD ---
 
@@ -2805,13 +2986,13 @@ class MipitiClient:
             body["taxonomy_property"] = taxonomy_property
         if entity_ids:
             body["entity_ids"] = list(entity_ids)
-        return await self._post(f"/api/models/{model_id}/assumptions", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/assumptions", body)
 
     async def edit_assumption(self, model_id: str, as_id: str, **kwargs) -> dict:
-        return await self._put(f"/api/models/{model_id}/assumptions/{as_id}", kwargs)
+        return await self._put(f"/api/models/{_seg(model_id)}/assumptions/{_seg(as_id)}", kwargs)
 
     async def remove_assumption(self, model_id: str, as_id: str) -> dict:
-        return await self._delete(f"/api/models/{model_id}/assumptions/{as_id}")
+        return await self._delete(f"/api/models/{_seg(model_id)}/assumptions/{_seg(as_id)}")
 
     # --- Attestation ---
 
@@ -2829,13 +3010,13 @@ class MipitiClient:
             body["expires_at"] = expires_at
         if evidence_url:
             body["evidence_url"] = evidence_url
-        return await self._post(f"/api/models/{model_id}/assumptions/{assumption_id}/attest", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/assumptions/{_seg(assumption_id)}/attest", body)
 
     async def list_attestations(self, model_id: str, assumption_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/assumptions/{assumption_id}/attestations")
+        return await self._get(f"/api/models/{_seg(model_id)}/assumptions/{_seg(assumption_id)}/attestations")
 
     async def convert_assumption_to_controls(self, model_id: str, assumption_id: str) -> dict:
-        return await self._post(f"/api/models/{model_id}/assumptions/{assumption_id}/convert-to-controls", {})
+        return await self._post(f"/api/models/{_seg(model_id)}/assumptions/{_seg(assumption_id)}/convert-to-controls", {})
 
     # ------------------------------------------------------------------
     # Functional conformance (Capability × Condition)
@@ -2844,29 +3025,29 @@ class MipitiClient:
     async def generate_functional(self, model_id: str, refresh: bool = False) -> dict:
         params = {"refresh": "true"} if refresh else None
         return await self._post(
-            f"/api/models/{model_id}/functional/generate", {}, params=params,
+            f"/api/models/{_seg(model_id)}/functional/generate", {}, params=params,
         )
 
     async def list_capabilities(self, model_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/capabilities")
+        return await self._get(f"/api/models/{_seg(model_id)}/capabilities")
 
     async def get_capability(self, model_id: str, cap_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/capabilities/{cap_id}")
+        return await self._get(f"/api/models/{_seg(model_id)}/capabilities/{_seg(cap_id)}")
 
     async def list_functional_objectives(self, model_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/functional-objectives")
+        return await self._get(f"/api/models/{_seg(model_id)}/functional-objectives")
 
     async def get_functional_objective(self, model_id: str, fo_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/functional-objectives/{fo_id}")
+        return await self._get(f"/api/models/{_seg(model_id)}/functional-objectives/{_seg(fo_id)}")
 
     async def get_functional_coverage(self, model_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/functional/coverage")
+        return await self._get(f"/api/models/{_seg(model_id)}/functional/coverage")
 
     async def get_functional_gaps(self, model_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/functional/gaps")
+        return await self._get(f"/api/models/{_seg(model_id)}/functional/gaps")
 
     async def get_functional_scan_prompt(self, model_id: str) -> dict:
-        return await self._get(f"/api/models/{model_id}/functional/scan-prompt")
+        return await self._get(f"/api/models/{_seg(model_id)}/functional/scan-prompt")
 
     async def add_functional_test(
         self, model_id: str, description: str,
@@ -2874,7 +3055,7 @@ class MipitiClient:
         component_ids: list[str] | None = None,
     ) -> dict:
         return await self._post(
-            f"/api/models/{model_id}/functional-tests",
+            f"/api/models/{_seg(model_id)}/functional-tests",
             {
                 "description": description,
                 "functional_objective_ids": functional_objective_ids,
@@ -2887,7 +3068,7 @@ class MipitiClient:
         self, model_id: str, tests: list[dict],
     ) -> dict:
         return await self._post(
-            f"/api/models/{model_id}/functional/import-tests",
+            f"/api/models/{_seg(model_id)}/functional/import-tests",
             {"tests": tests},
         )
 
@@ -2895,7 +3076,7 @@ class MipitiClient:
         self, model_id: str, functional_test_id: str, assertions: list[dict],
     ) -> dict:
         return await self._post(
-            f"/api/models/{model_id}/functional-tests/{functional_test_id}/assertions",
+            f"/api/models/{_seg(model_id)}/functional-tests/{_seg(functional_test_id)}/assertions",
             {"assertions": assertions},
         )
 
@@ -2903,7 +3084,7 @@ class MipitiClient:
         self, model_id: str, test_ids: list[str],
     ) -> dict:
         return await self._post(
-            f"/api/models/{model_id}/functional/suggest-test-mappings",
+            f"/api/models/{_seg(model_id)}/functional/suggest-test-mappings",
             {"test_ids": test_ids},
         )
 
@@ -2912,7 +3093,7 @@ class MipitiClient:
         functional_objective_ids: list[str],
     ) -> dict:
         return await self._post(
-            f"/api/models/{model_id}/functional-tests/{functional_test_id}/associate",
+            f"/api/models/{_seg(model_id)}/functional-tests/{_seg(functional_test_id)}/associate",
             {"functional_objective_ids": functional_objective_ids},
         )
 
@@ -2920,7 +3101,7 @@ class MipitiClient:
         self, model_id: str, functional_objective_id: str,
     ) -> dict:
         return await self._get(
-            f"/api/models/{model_id}/functional-objectives/{functional_objective_id}"
+            f"/api/models/{_seg(model_id)}/functional-objectives/{_seg(functional_objective_id)}"
             "/satisfaction-groups"
         )
 
@@ -2929,7 +3110,7 @@ class MipitiClient:
         groups: dict, ungrouped: list[str],
     ) -> dict:
         return await self._put(
-            f"/api/models/{model_id}/functional-objectives/{functional_objective_id}"
+            f"/api/models/{_seg(model_id)}/functional-objectives/{_seg(functional_objective_id)}"
             "/satisfaction-groups",
             {"groups": groups, "ungrouped": ungrouped},
         )
@@ -2938,7 +3119,7 @@ class MipitiClient:
         self, model_id: str, functional_test_id: str,
     ) -> dict:
         return await self._get(
-            f"/api/models/{model_id}/functional-tests/{functional_test_id}/sufficiency"
+            f"/api/models/{_seg(model_id)}/functional-tests/{_seg(functional_test_id)}/sufficiency"
         )
 
     async def get_cwe_catalog(self) -> dict:
@@ -2951,7 +3132,7 @@ class MipitiClient:
         """CWE tags for a model's live control objectives, with a staleness
         marker for tags whose catalog entry has since been deprecated,
         redefined, or removed."""
-        return await self._get(f"/api/models/{model_id}/cwe")
+        return await self._get(f"/api/models/{_seg(model_id)}/cwe")
 
     async def classify_model_cwe(self, model_id: str, force: bool = False) -> dict:
         """Trigger grounded CO->CWE classification for a model's live COs.
@@ -2959,7 +3140,7 @@ class MipitiClient:
         Calls ``POST /api/models/{model_id}/cwe/classify``.
         """
         return await self._post(
-            f"/api/models/{model_id}/cwe/classify", params={"force": force},
+            f"/api/models/{_seg(model_id)}/cwe/classify", params={"force": force},
         )
 
 
@@ -2977,7 +3158,7 @@ class MipitiClient:
         Returned verbatim.
         """
         return await self._get(
-            f"/api/models/{model_id}/controls/{control_id}/work-order"
+            f"/api/models/{_seg(model_id)}/controls/{_seg(control_id)}/work-order"
         )
 
     async def reconcile_model(
@@ -2995,7 +3176,7 @@ class MipitiClient:
         outcome envelope verbatim.
         """
         return await self._post(
-            f"/api/models/{model_id}/reconcile",
+            f"/api/models/{_seg(model_id)}/reconcile",
             {
                 "changed_paths": list(changed_paths),
                 "repo_url": repo_url,
@@ -3018,7 +3199,7 @@ class MipitiClient:
         ``{proposal, created}``.
         """
         return await self._post(
-            f"/api/models/{model_id}/proposals",
+            f"/api/models/{_seg(model_id)}/proposals",
             {
                 "kind": kind,
                 "payload": payload,
@@ -3033,7 +3214,49 @@ class MipitiClient:
         Read-only. Returns ``{model_id, model_version, items, count}``.
         """
         params = {"status": status} if status else None
-        return await self._get(f"/api/models/{model_id}/proposals", params=params)
+        return await self._get(f"/api/models/{_seg(model_id)}/proposals", params=params)
+
+    # --- The review playbook and review runs --------------------------------
+
+    async def get_review_playbook(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/review-playbook. Read-only: the
+        procedure, the open items, the caller's authority, the paid acts and
+        the report's shape."""
+        return await self._get(f"/api/models/{_seg(model_id)}/review-playbook")
+
+    async def open_review_run(self, model_id: str) -> dict:
+        """POST /api/models/{model_id}/review-runs: open a run, held for
+        every later write to the model."""
+        run = await self._post(f"/api/models/{_seg(model_id)}/review-runs", {})
+        self.hold_run(model_id, run.get("id", ""))
+        return run
+
+    async def current_review_run(self, model_id: str) -> dict | None:
+        """GET /api/models/{model_id}/review-runs/current: the caller's open
+        run, or None (404)."""
+        resp = await self._get_client().get(f"/api/models/{_seg(model_id)}/review-runs/current")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+
+    async def close_review_run(self, model_id: str, run_id: str, notes: str = "") -> dict:
+        """POST /api/models/{model_id}/review-runs/{run_id}/close: record the
+        run's end and notes; answers its digest. The run is no longer held."""
+        digest = await self._post(f"/api/models/{_seg(model_id)}/review-runs/{_seg(run_id)}/close",
+                                  {"notes": notes})
+        if self.held_run(model_id) == run_id:
+            self.hold_run(model_id, "")
+        return digest
+
+    async def get_review_run(self, model_id: str, run_id: str) -> dict:
+        """GET /api/models/{model_id}/review-runs/{run_id}: the run's digest."""
+        return await self._get(f"/api/models/{_seg(model_id)}/review-runs/{_seg(run_id)}")
+
+    async def list_review_runs(self, model_id: str) -> dict:
+        """GET /api/models/{model_id}/review-runs: the model's runs, newest
+        first."""
+        return await self._get(f"/api/models/{_seg(model_id)}/review-runs")
 
     async def decide_proposal(
         self, model_id: str, proposal_id: str, decision: str, note: str = "",
@@ -3057,7 +3280,7 @@ class MipitiClient:
         if amended_text:
             body["amended_text"] = amended_text
         return await self._post(
-            f"/api/models/{model_id}/proposals/{proposal_id}/decide", body,
+            f"/api/models/{_seg(model_id)}/proposals/{_seg(proposal_id)}/decide", body,
         )
 
     async def decide_proposals(
@@ -3072,7 +3295,7 @@ class MipitiClient:
             body["expires_at"] = expires_at
         if record_only:
             body["record_only"] = True
-        return await self._post(f"/api/models/{model_id}/proposals/decide", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/proposals/decide", body)
 
     async def start_decide_proposals(
         self, model_id: str, decisions: list[dict], *, note: str = "",
@@ -3086,7 +3309,7 @@ class MipitiClient:
             body["expires_at"] = expires_at
         if record_only:
             body["record_only"] = True
-        return await self._post(f"/api/models/{model_id}/proposals/decide-job", body)
+        return await self._post(f"/api/models/{_seg(model_id)}/proposals/decide-job", body)
 
     async def decide_drift_intent(
         self, model_id: str, finding_id: str, intent: str, control_id: str = "",
@@ -3098,7 +3321,7 @@ class MipitiClient:
         defect of the code; a refusal surfaces as an HTTP 403 whose detail
         carries ``escalation_id``."""
         return await self._post(
-            f"/api/models/{model_id}/findings/{finding_id}/drift-intent",
+            f"/api/models/{_seg(model_id)}/findings/{_seg(finding_id)}/drift-intent",
             {"intent": intent, "control_id": control_id, "head_commit": head_commit,
              "note": note},
         )
@@ -3112,7 +3335,7 @@ class MipitiClient:
         by design would take out of the matrix.
         """
         return await self._get(
-            f"/api/models/{model_id}/design-leverage",
+            f"/api/models/{_seg(model_id)}/design-leverage",
             params={"include_design_moves": include_design_moves, "top": top},
         )
 
@@ -3132,7 +3355,7 @@ class MipitiClient:
         version. Returns ``{id, version, description_provenance}``.
         """
         return await self._put(
-            f"/api/models/{model_id}/provenance",
+            f"/api/models/{_seg(model_id)}/provenance",
             {
                 "kind": kind,
                 "repo_url": repo_url,
@@ -3167,7 +3390,7 @@ class MipitiClient:
         if limit:
             params["limit"] = limit
         return await self._get(
-            f"/api/models/{model_id}/decisions", params=params or None,
+            f"/api/models/{_seg(model_id)}/decisions", params=params or None,
         )
 
     # ------------------------------------------------------------------
@@ -3176,7 +3399,7 @@ class MipitiClient:
 
     @staticmethod
     def _behavioural(model_id: str, tail: str = "") -> str:
-        return f"/api/models/{model_id}/behavioural-model{tail}"
+        return f"/api/models/{_seg(model_id)}/behavioural-model{tail}"
 
     async def get_behavioural_model(
         self,
@@ -3337,7 +3560,7 @@ class MipitiClient:
         Creates no model version.
         """
         return await self._put(
-            self._behavioural(model_id, f"/links/{node_id}"),
+            self._behavioural(model_id, f"/links/{_seg(node_id)}"),
             {"entity_id": entity_id, "component_id": component_id},
         )
 
@@ -3382,7 +3605,7 @@ class MipitiClient:
         credential). Creates a model version.
         """
         return await self._put(
-            self._behavioural(model_id, f"/attackers/{attacker_id}/credentials"),
+            self._behavioural(model_id, f"/attackers/{_seg(attacker_id)}/credentials"),
             {"credential_classes": list(credential_classes)},
         )
 
@@ -3434,7 +3657,7 @@ class MipitiClient:
         privilege, and it removed. Creates a model version.
         """
         return await self._post(
-            self._behavioural(model_id, f"/attackers/{attacker_id}/split"),
+            self._behavioural(model_id, f"/attackers/{_seg(attacker_id)}/split"),
             {"parts": [list(p) for p in parts]},
         )
 
@@ -3447,7 +3670,7 @@ class MipitiClient:
         offered while that stands. Creates a model version.
         """
         return await self._post(
-            self._behavioural(model_id, f"/attackers/{attacker_id}/split/dismiss"),
+            self._behavioural(model_id, f"/attackers/{_seg(attacker_id)}/split/dismiss"),
             {"reason": reason},
         )
 
@@ -3457,7 +3680,7 @@ class MipitiClient:
 
     @staticmethod
     def _inventory(model_id: str, tail: str) -> str:
-        return f"/api/models/{model_id}/inventory{tail}"
+        return f"/api/models/{_seg(model_id)}/inventory{tail}"
 
     async def get_inventory_judgements(self, model_id: str) -> dict:
         """GET /api/models/{model_id}/inventory/judgements.
@@ -3521,14 +3744,14 @@ class MipitiClient:
         ``{entity_id, input_hash, proposal_hash}``, in one new model version;
         answers one outcome per entity.
         """
-        return await self._post(f"/api/models/{model_id}/entities/apply-proposals",
+        return await self._post(f"/api/models/{_seg(model_id)}/entities/apply-proposals",
                                 {"proposals": [dict(p) for p in proposals]})
 
     async def start_apply_entity_proposals(self, model_id: str, proposals: list[dict]) -> dict:
         """POST /api/models/{model_id}/entities/apply-proposals-job: the same
         apply as a background job; answers ``{job_id}``, polled at
         ``/api/operations/{job_id}``, whose result is the apply's answer."""
-        return await self._post(f"/api/models/{model_id}/entities/apply-proposals-job",
+        return await self._post(f"/api/models/{_seg(model_id)}/entities/apply-proposals-job",
                                 {"proposals": [dict(p) for p in proposals]})
 
     async def settle_entity_rating(self, model_id: str, entity_id: str, entity_kind: str,
@@ -3547,7 +3770,7 @@ class MipitiClient:
         if change_reason:
             body["change_reason"] = change_reason
         return await self._post(
-            f"/api/models/{model_id}/entities/{entity_id}/rating/settle", body)
+            f"/api/models/{_seg(model_id)}/entities/{_seg(entity_id)}/rating/settle", body)
 
     async def answer_entity_question(self, model_id: str, entity_id: str, text: str,
                                      input_hash: str) -> dict:
@@ -3556,7 +3779,7 @@ class MipitiClient:
         Answers the question the quality check asked about an entity, under
         the ``input_hash`` its verdict was read with.
         """
-        return await self._post(f"/api/models/{model_id}/entities/{entity_id}/answer",
+        return await self._post(f"/api/models/{_seg(model_id)}/entities/{_seg(entity_id)}/answer",
                                 {"text": text, "input_hash": input_hash})
 
     async def get_control_delta(self, model_id: str, control_id: str) -> dict:
@@ -3567,7 +3790,7 @@ class MipitiClient:
         ``declared``).
         """
         return await self._get(
-            self._behavioural(model_id, f"/controls/{control_id}/delta"))
+            self._behavioural(model_id, f"/controls/{_seg(control_id)}/delta"))
 
     async def submit_control_delta(
         self,
@@ -3584,7 +3807,7 @@ class MipitiClient:
         set revision or model version.
         """
         return await self._put(
-            self._behavioural(model_id, f"/controls/{control_id}/delta"),
+            self._behavioural(model_id, f"/controls/{_seg(control_id)}/delta"),
             {"edits": list(edits), "unexpressed": list(unexpressed or [])},
         )
 
@@ -3610,7 +3833,7 @@ class MipitiClient:
         if declaration_hash:
             body["declaration_hash"] = declaration_hash
         return await self._post(
-            self._behavioural(model_id, f"/controls/{control_id}/delta/declare"), body)
+            self._behavioural(model_id, f"/controls/{_seg(control_id)}/delta/declare"), body)
 
     async def request_delta_second_reading(
         self,

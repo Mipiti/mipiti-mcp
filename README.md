@@ -89,7 +89,19 @@ A session keeps the tool descriptions and instructions it read when it started. 
 }
 ```
 
-## Tools (<!--MCP_TOOL_COUNT-->166<!--/MCP_TOOL_COUNT-->)
+### The review skill
+
+`mipiti-mcp install-skill` writes a skill (the Agent Skills format several coding agents read) that tells an agent to read `get_review_playbook` and follow it when asked to work a model's review queue. The procedure stays on the server, so an installed skill never goes stale.
+
+```bash
+mipiti-mcp install-skill                 # .agents/skills/mipiti-review/SKILL.md
+mipiti-mcp install-skill --for claude    # .claude/skills/ (also: gemini, copilot)
+mipiti-mcp install-skill --dir path/to/skills
+```
+
+It replaces only a copy it wrote, and refuses to overwrite any other file.
+
+## Tools (<!--MCP_TOOL_COUNT-->169<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -201,12 +213,19 @@ A clause that ranges over every entry of a surface (every endpoint, every query,
 
 | Tool | Description |
 |------|-------------|
+| `get_review_playbook` | How to work a model's review queue, in one read: the procedure for each kind of item, the model's open items, what the caller may decide under the workspace's delegation policy (with evidence and without), the paid acts the items lead to, and the report's shape. Opens the caller's review run, or reuses an open one; every later write to the model is recorded under it. Read-only on the model. |
+| `close_review_run` | Close the caller's review run with notes and return its digest: what it decided and on what evidence, what it parked for a person, what it spent, and the act that undoes each decision. |
+| `get_review_run` | A review run's digest, or the model's runs when none is named or open. Read-only. |
 | `get_control_work_order` | The ticket for implementing one control: scan brief, what counts as proof (assertion contract), acceptance criteria, steps, reconcile rules, what this agent may decide on its own, open proposals, and the model's provenance. Call before implementing a control. Read-only. |
 | `reconcile_model` | Reconcile the model with the code: pass the paths changed since the recorded commit and your observations (`mechanism_named`, `component_present`, `component_absent`, `forbidden_behavior`). The platform decides the consequence of each; proposals are never applied on the agent's word, except a component change on a code-derived model, which is applied and queued for a person's review. |
 | `create_proposal` | Raise a change of scope or design (`add_component`, `remove_component`, `design_change`), an `assumption` a gap needs that only the environment can meet, whether a description-drift finding was intended (`drift_intent`), or a revised description (`description_revision`). Raising is not deciding: a person (or an agent under a delegation rule) decides it with `decide_proposal`; design changes are never applied automatically. |
 | `list_proposals` | Proposals and escalations on a model with their status (`proposed` / `applied_pending_review` open; `accepted` / `rejected` / `reverted` / `superseded` closed). A refused judgment (403 with `escalation_id`, or for an attestation the edit's `attestation.escalation_id`) appears as a `decision_request`; poll here until a person resolves it. Read-only. |
 | `decide_proposal` | Accept or reject a proposal. A judgment: refused with 403 and an `escalation_id` unless the workspace's delegation policy names the decision for this agent at the proposal's tier. Do not retry a refusal. Accepting an `assumption` proposal accepts the assumption (its own decision, `assumption_accepted`), attested until `expires_at`; rejecting one keeps the precondition from being proposed again. Accepting parked behavioural answers starts the extraction they complete, billed to whoever accepts, unless `record_only=True`. |
 | `decide_drift_intent` | Decide whether a description-drift finding was intended (the description is behind the product) or a defect of the code, naming the control whose passing assertion closes it. A judgment: refused with 403 and an `escalation_id` unless delegated. |
+Every judgment tool takes `evidence`: a JSON array of the citations the decision rests on (`{"kind": "code", "path", "lines"?, "commit"?}`, `{"kind": "url", "url", "lines"?}` or `{"kind": "quote", "source": "description" | "clarification:<id>", "text"}`). A delegation rule may require it, and it is recorded with the decision.
+
+| Tool | Description |
+|------|-------------|
 | `get_design_leverage` | What eliminating each attacker position or asset by design would remove from the matrix, ranked by critical then high at-risk objectives removed. `include_design_moves=True` authors a concrete `design_move` per row; turn one into a `design_change` proposal with `create_proposal`. Read-only. |
 | `list_decisions` | The model's decision ledger: every judgment recorded on it (finding dismissed / remediated, risk accepted, not-applicable declared, proposal accepted / rejected / reverted, assumption accepted, behavioural model answered / confirmed, a control's delta declared, a finding of its cross-check dismissed, a seal, position, privileges or surface extent attested, escalation resolved, an inventory pair decided or an entity's tags declared), newest first, with who decided and whether it was within the delegation policy. Append-only; nothing edits it. Call before raising a proposal or asking for a judgment, so you do not propose what a person rejected or ask again for what was already decided. Read-only. |
 
