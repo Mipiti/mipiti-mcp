@@ -6,10 +6,14 @@ All tools call the Mipiti REST API via MipitiClient.
 
 import asyncio
 import contextvars
+import functools
 import json
 import os
+import sys
 import time
-from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import Field
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from anyio import BrokenResourceError, ClosedResourceError
 from fastmcp import Context, FastMCP
@@ -25,7 +29,7 @@ from .assertion_types import (
     format_compact,
     validate_covers,
 )
-from .client import MipitiClient
+from .client import MipitiClient, evidence_bound
 from .types import ChatResponse
 
 # ------------------------------------------------------------------
@@ -176,6 +180,10 @@ If the alternative drops a framework binding the original carried, the platform 
 **Before acting on any risk_reason, check whether a control is actually REQUIRED for the objective.** `get_mitigation_groups` splits a CO's controls into numbered groups (within=AND, across=OR) and `defense_in_depth`. Only the groups earn mitigation credit. If a CO has controls attached but ALL of them sit in `defense_in_depth`, or it has no groups at all, then nothing is required to mitigate it and the CO cannot leave at-risk no matter how many controls you generate or how much evidence you submit. That is a modelling gap, not an evidence gap: decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups` (AI-gated, so the structure has to actually satisfy the CO). Generating or proving controls in this state is wasted work.
 
 **Action routing by risk_reason**: `missing_controls` → implement controls and submit assertions. `pending_attestation` → call `submit_attestation` for the assumption IDs listed in `pending_assumption_ids` — do NOT try to implement controls for boundary-excluded COs. `expired_attestation` → call `submit_attestation` to renew for the assumption IDs listed in `expired_assumption_ids`. `unassessed` → the CO has no controls: read the model's `proposal` in `get_control_generation_status` (or propose one with `regenerate_controls`) and, once the user agrees to its estimate, start it with `start_control_build`. If the composer says the CO is indeterminate (per `get_reachability_verdicts`), the model is missing structure — supply it (position the attacker, scope the asset to a component) rather than asserting a conclusion. If the objective genuinely does not apply to this system, record that with `create_co_disposition`: the objective stays in the matrix and the counts, carrying the owner and justification, instead of disappearing. `coverage_gap` → the controls are implemented but leave part of the CO's threat unaddressed. Inspect the linked `coverage_gap` finding via `list_findings` for the uncovered aspects + suggested control, add controls (`regenerate_controls` / `import_controls`) and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. `insufficient_by_design` → the controls *defined* for the CO's mitigation group would not mitigate the objective even if fully implemented. Do NOT just implement the defined controls — that will not help. Inspect the linked `insufficient_by_design` finding via `list_findings` for the rationale, then redesign or ADD controls to the mitigation group (`regenerate_controls` / `import_controls`, then `set_mitigation_groups`) so the group can actually span the objective's threat, and submit assertions; if it's a false positive `dismiss` the finding, or if intentional record a risk acceptance / assumption. (Contrast with `missing_controls`, where the defined controls *would* mitigate the CO and you simply implement them and submit assertions.) `no_mitigation_group` → decide which controls genuinely carry the objective and place them in a required group with `set_mitigation_groups`; do NOT generate more controls, the ones that matter are already there. `awaiting_judgement` → call `judge_objective` on the CO, or `judge_objectives` for all of them at once. Nothing has decided whether its group covers it, so neither implementing nor adding controls changes the reason; the remedy is the judgement. It may come back insufficient, which moves the objective to `coverage_gap` / `insufficient_by_design` and names real work — that is the answer, not a failure.
+
+## Working a model's review queue
+
+To work a model's review queue (decisions, proposals, behavioural questions, entity flags), call `get_review_playbook` first and follow it: it gives the procedure for each kind of item, the model's open items, what you may decide under the workspace's delegation policy, and the paid acts that need the person's agreement to their estimate. Pass `evidence` (the citations the judgment rests on) on every judgment. Close the review run it opens with `close_review_run` and give the person the digest it returns.
 
 ## Gap discovery
 
@@ -494,6 +502,49 @@ def _get_client() -> MipitiClient:
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
     return _default_client
+
+
+# ------------------------------------------------------------------
+# Judgment tools: the evidence a judgment rests on
+# ------------------------------------------------------------------
+
+
+def _evidence(raw: str) -> list | None:
+    """The citations a judgment tool was given (its ``evidence`` argument: a
+    JSON array of at most 20, each ``{"kind": "code", "path", "lines"?,
+    "commit"?}``, ``{"kind": "url", "url", "lines"?}`` or ``{"kind": "quote",
+    "source": "description" | "clarification:<id>", "text"}``), parsed, or
+    None. The platform checks their form and records them with the decision;
+    a delegation rule may require them."""
+    if not (raw or "").strip():
+        return None
+    return _json_value(raw, "evidence", list,
+                       '[{"kind": "code", "path": "src/auth.py", "lines": "40-52"}]')
+
+
+#: A judgment tool's ``evidence`` argument, described in its schema (a tool's
+#: description has no room left for it on the longest tools).
+Evidence = Annotated[str, Field(description=(
+    "JSON array of the citations this judgment rests on (at most 20, each at "
+    'most 2000 characters): {"kind": "code", "path", "lines"?, "commit"?}, '
+    '{"kind": "url", "url", "lines"?} or {"kind": "quote", "source": '
+    '"description" | "clarification:<id>", "text"}. A delegation rule may '
+    "require it: without it such a rule parks the judgment for a person. "
+    "Recorded with the decision."))]
+
+
+def _judgment(fn):
+    """A judgment tool: its ``evidence`` argument is sent in the body of every
+    write the call makes (``client.evidence_bound``), and is described in its
+    schema (``Evidence``). The tool's own signature (with ``evidence``) is the
+    one its schema is read from."""
+    fn.__annotations__["evidence"] = Evidence
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        with evidence_bound(_evidence(kwargs.get("evidence", ""))):
+            return await fn(*args, **kwargs)
+    return wrapper
 
 
 # ------------------------------------------------------------------
@@ -3526,6 +3577,7 @@ async def add_attacker(
 
 
 @mcp.tool()
+@_judgment
 async def edit_attacker(
     server_version: str,
     model_id: str,
@@ -3546,6 +3598,7 @@ async def edit_attacker(
     attest_surface_extent: Optional[bool] = None,
     attest_privileges: Optional[bool] = None,
     change_reason: Optional[str] = None,
+    evidence: str = "",
 ) -> dict:
     """Edit an attacker; only the fields given change.
 
@@ -4634,6 +4687,7 @@ async def list_findings(
 
 
 @mcp.tool()
+@_judgment
 async def update_finding(
     server_version: str,
     model_id: str,
@@ -4642,6 +4696,7 @@ async def update_finding(
     notes: str = "",
     reason: str = "",
     remediation_assertion_ids: str = "",
+    evidence: str = "",
 ) -> dict:
     """Advance a finding through its lifecycle. Mutating: updates the finding's status and metadata.
 
@@ -4664,12 +4719,14 @@ async def update_finding(
 
 
 @mcp.tool()
+@_judgment
 async def remediate_finding(
     server_version: str,
     finding_id: str,
     ctx: Context,
     apply: bool = False,
     justification: str = "",
+    evidence: str = "",
 ) -> dict:
     """Preview, and on confirmation apply, the platform's remediation of a
     finding.
@@ -4805,6 +4862,7 @@ async def list_risk_acceptances(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
+@_judgment
 async def create_risk_acceptance(
     server_version: str,
     model_id: str,
@@ -4812,6 +4870,7 @@ async def create_risk_acceptance(
     owner: str,
     justification: str,
     review_by: str,
+    evidence: str = "",
 ) -> dict:
     """Record that an operator explicitly ACCEPTS the residual risk on a control
     objective instead of mitigating it — the write counterpart to
@@ -4845,6 +4904,7 @@ async def create_risk_acceptance(
 
 
 @mcp.tool()
+@_judgment
 async def create_co_disposition(
     server_version: str,
     model_id: str,
@@ -4852,6 +4912,7 @@ async def create_co_disposition(
     owner: str,
     justification: str,
     review_by: str,
+    evidence: str = "",
 ) -> dict:
     """Record that a control objective DOES NOT APPLY to this system — a signed,
     expiring judgment, not a dismissal.
@@ -4902,10 +4963,12 @@ async def create_co_disposition(
 
 
 @mcp.tool()
+@_judgment
 async def revoke_co_disposition(
     server_version: str,
     model_id: str,
     disposition_id: str,
+    evidence: str = "",
 ) -> dict:
     """Revoke a signed judgment on a control objective: a not-applicable
     disposition or a risk acceptance. Mutating, and terminal: a revoked
@@ -5055,6 +5118,7 @@ async def add_trust_boundary(
 
 
 @mcp.tool()
+@_judgment
 async def edit_trust_boundary(
     server_version: str, model_id: str, tb_id: str,
     description: Optional[str] = None,
@@ -5063,6 +5127,7 @@ async def edit_trust_boundary(
     sealed: Optional[bool] = None,
     seal_source: Optional[str] = None,
     change_reason: Optional[str] = None,
+    evidence: str = "",
 ) -> dict:
     """Edit a trust boundary. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
@@ -5242,6 +5307,7 @@ async def add_assumption(
 
 
 @mcp.tool()
+@_judgment
 async def edit_assumption(
     server_version: str, model_id: str, assumption_id: str,
     description: Optional[str] = None,
@@ -5254,6 +5320,7 @@ async def edit_assumption(
     exclusion_co_ids: Optional[str] = None,
     clear_exclusion: bool = False,
     entity_ids: Optional[str] = None,
+    evidence: str = "",
 ) -> dict:
     """Edit an assumption. Creates a new model version. Returns ``{model,
     entities, ...}``: the model's id, version and title, and
@@ -5331,10 +5398,11 @@ async def edit_assumption(
 
 
 @mcp.tool()
+@_judgment
 async def submit_attestation(
     server_version: str, model_id: str, assumption_id: str,
     attested_by: str = "", statement: str = "",
-    expires_at: str = "", evidence_url: str = "",
+    expires_at: str = "", evidence_url: str = "", evidence: str = "",
 ) -> dict:
     """Record that a responsible party affirmed an assumption holds.
 
@@ -7395,6 +7463,110 @@ async def list_proposals(
 
 
 @mcp.tool()
+async def get_review_playbook(server_version: str, model_id: str) -> dict:
+    """How to work this model's review queue, in one read: start here. Read
+    it before deciding anything on the model, and again after a round of
+    work. Read-only on the model; it opens a review run for you (or reuses
+    your open one), which every later write to the model is recorded under.
+
+    It returns:
+    - ``procedure``: the order of work, the rules, how each kind of
+      review-queue item is worked (what to verify, where, and which tool acts
+      on each outcome) and the report's shape. Follow it.
+    - ``open``: the model's open items by kind, in the queue's order, with
+      their ids, decision counts, tools, and whether only a person acts on
+      them.
+    - ``authority``: for each decision, the tiers you may decide at with
+      evidence and without, and a status: ``delegated``, ``parked`` (the call
+      parks it for a person), ``outside`` (it proceeds, recorded outside
+      policy), ``person_only`` or ``person``.
+    - ``paid``: the paid acts the open items lead to and the tool that
+      estimates each. Run one only with the person's agreement to its
+      estimate, or within the workspace's spending allowance.
+    - ``report``: what to report when you are done.
+    - ``review_run``: the run you are working under. Close it with
+      ``close_review_run`` and give the person its digest.
+
+    Pass ``evidence`` on every judgment. A refused judgment is parked for a
+    person: never retry it.
+
+    Args:
+        model_id: ID of the threat model.
+
+    Returns the playbook with ``review_run`` beside it.
+    """
+    try:
+        client = _get_client()
+        playbook = await client.get_review_playbook(model_id)
+        run = await client.current_review_run(model_id)
+        if run:
+            client.hold_run(model_id, run.get("id", ""))
+        else:
+            run = await client.open_review_run(model_id)
+        return {**playbook, "review_run": run}
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def close_review_run(server_version: str, model_id: str, notes: str = "",
+                           run_id: str = "") -> dict:
+    """Close your review run on the model with your notes, and get its
+    digest to give the person: what the run decided and on what evidence,
+    what it parked for them, what it spent, your notes beside them, and the
+    act that undoes each decision. The digest is read from the platform's
+    records, not from your notes. Mutating: records the run's end.
+
+    Args:
+        model_id: ID of the threat model.
+        notes: What you did and why, in your words (shown as yours).
+        run_id: The run to close. Empty (default): your open run.
+
+    Returns the run's digest.
+    """
+    try:
+        client = _get_client()
+        rid = run_id.strip() or client.held_run(model_id)
+        if not rid:
+            run = await client.current_review_run(model_id)
+            rid = (run or {}).get("id", "")
+        if not rid:
+            raise ToolError("No open review run on this model: get_review_playbook opens one.")
+        return await client.close_review_run(model_id, rid, notes)
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_review_run(server_version: str, model_id: str, run_id: str = "") -> dict:
+    """A review run's digest: what it decided and on what evidence, what it
+    parked, what it spent, its notes, and the undo of each decision (offered
+    while that decision is still the latest of its subject). Read-only.
+
+    Args:
+        model_id: ID of the threat model.
+        run_id: The run. Empty (default): your open run, else the model's
+            runs, newest first.
+
+    Returns the digest, or ``{model_id, runs}`` when no run is named or open.
+    """
+    try:
+        client = _get_client()
+        rid = run_id.strip() or client.held_run(model_id)
+        if not rid:
+            run = await client.current_review_run(model_id)
+            rid = (run or {}).get("id", "")
+        if not rid:
+            return await client.list_review_runs(model_id)
+        return await client.get_review_run(model_id, rid)
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+@_judgment
 async def decide_proposal(
     server_version: str,
     model_id: str,
@@ -7404,6 +7576,7 @@ async def decide_proposal(
     expires_at: str = "",
     record_only: bool = False,
     amended_text: str = "",
+    evidence: str = "",
 ) -> dict:
     """Accept or reject a proposal, or reconsider a rejected one. Call this
     only when the workspace's delegation policy names this decision for this
@@ -7473,6 +7646,7 @@ async def decide_proposal(
 
 
 @mcp.tool()
+@_judgment
 async def decide_proposals(
     server_version: str,
     model_id: str,
@@ -7481,6 +7655,7 @@ async def decide_proposals(
     note: str = "",
     expires_at: str = "",
     record_only: bool = False,
+    evidence: str = "",
 ) -> dict:
     """Decide several proposals and escalations of one model together (at
     most 200), each exactly as ``decide_proposal`` decides one, in its own
@@ -7533,6 +7708,7 @@ async def decide_proposals(
 
 
 @mcp.tool()
+@_judgment
 async def decide_drift_intent(
     server_version: str,
     model_id: str,
@@ -7541,6 +7717,7 @@ async def decide_drift_intent(
     control_id: str = "",
     head_commit: str = "",
     note: str = "",
+    evidence: str = "",
 ) -> dict:
     """Decide whether a description-drift finding (the code reported to do
     more, or less, than a sentence of the description) was intended or is a
@@ -7934,6 +8111,7 @@ _ANSWER_DISPOSITIONS = ("fact", "not_needed", "not_behaviour", "unknown", "as_st
 
 
 @mcp.tool()
+@_judgment
 async def answer_behavioural_questions(
     server_version: str,
     model_id: str,
@@ -7941,6 +8119,7 @@ async def answer_behavioural_questions(
     extract_now: bool = False,
     dry_run: bool = False,
     collect_only: bool = False,
+    evidence: str = "",
 ) -> dict:
     """Answer open behavioural questions, many in one call. Mutating; creates
     a model version.
@@ -8125,11 +8304,13 @@ async def remove_behavioural_element(
 
 
 @mcp.tool()
+@_judgment
 async def confirm_behavioural_model(
     server_version: str,
     model_id: str,
     ir_hash: str,
     note: str = "",
+    evidence: str = "",
 ) -> dict:
     """Confirm a model's behavioural model as reviewed. Mutating; creates a
     model version.
@@ -8182,12 +8363,14 @@ async def get_behavioural_links(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
+@_judgment
 async def declare_behavioural_link(
     server_version: str,
     model_id: str,
     node_id: str,
     entity_id: str,
     component_id: str = "",
+    evidence: str = "",
 ) -> dict:
     """Declare the asset or trust boundary a behavioural element or zone is.
     Mutating; creates no model version.
@@ -8261,10 +8444,12 @@ async def match_behavioural_links(
 
 
 @mcp.tool()
+@_judgment
 async def accept_behavioural_link_proposals(
     server_version: str,
     model_id: str,
     proposals_hash: str,
+    evidence: str = "",
 ) -> dict:
     """Declare every link proposal as shown, in one act. Mutating; creates no
     model version.
@@ -8340,11 +8525,13 @@ async def get_behavioural_attackers(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
+@_judgment
 async def answer_attacker_credentials(
     server_version: str,
     model_id: str,
     attacker_id: str,
     credential_classes: str = "",
+    evidence: str = "",
 ) -> dict:
     """Say which of the behavioural model's credential classes an attacker
     holds. Mutating; creates a model version.
@@ -8385,11 +8572,13 @@ async def answer_attacker_credentials(
 
 
 @mcp.tool()
+@_judgment
 async def add_proposed_attacker(
     server_version: str,
     model_id: str,
     credential_classes: str = "",
     zone: str = "",
+    evidence: str = "",
 ) -> dict:
     """Add the attacker the attacker closure proposes for a credential set.
     Mutating; creates a model version.
@@ -8437,6 +8626,7 @@ async def add_proposed_attacker(
 
 
 @mcp.tool()
+@_judgment
 async def dismiss_proposed_attacker(
     server_version: str,
     model_id: str,
@@ -8444,6 +8634,7 @@ async def dismiss_proposed_attacker(
     credential_classes: str = "",
     zones: str = "",
     zone: str = "",
+    evidence: str = "",
 ) -> dict:
     """Dismiss the attacker the attacker closure proposes for a credential
     set, with why, or some zones of a part of the zones nobody stands at.
@@ -8497,11 +8688,13 @@ def _parts(raw: str) -> list[list[str]]:
 
 
 @mcp.tool()
+@_judgment
 async def split_grouped_attacker(
     server_version: str,
     model_id: str,
     attacker_id: str,
     parts: str,
+    evidence: str = "",
 ) -> dict:
     """Split an attacker that stands for zones of several capabilities into
     the parts ``get_behavioural_attackers`` offers under ``splits``.
@@ -8547,11 +8740,13 @@ async def split_grouped_attacker(
 
 
 @mcp.tool()
+@_judgment
 async def keep_attacker_whole(
     server_version: str,
     model_id: str,
     attacker_id: str,
     reason: str,
+    evidence: str = "",
 ) -> dict:
     """Keep an attacker offered for a split whole, with why. Mutating;
     creates a model version.
@@ -8645,6 +8840,7 @@ async def request_inventory_checks(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
+@_judgment
 async def decide_inventory_pair(
     server_version: str,
     model_id: str,
@@ -8653,6 +8849,7 @@ async def decide_inventory_pair(
     b: str,
     verdict: Literal["same", "different"],
     rationale: str = "",
+    evidence: str = "",
 ) -> dict:
     """Decide that two entries of a model's inventory are, or are not, one
     entity. Mutating; creates no model version; a judgment.
@@ -8695,6 +8892,7 @@ async def decide_inventory_pair(
 
 
 @mcp.tool()
+@_judgment
 async def declare_inventory_tags(
     server_version: str,
     model_id: str,
@@ -8702,6 +8900,7 @@ async def declare_inventory_tags(
     entity_id: str,
     tags: str = "[]",
     rationale: str = "",
+    evidence: str = "",
 ) -> dict:
     """Declare the taxonomy primitives an entity of a model's inventory
     answers. Mutating; creates no model version; a judgment.
@@ -8745,11 +8944,13 @@ async def declare_inventory_tags(
 
 
 @mcp.tool()
+@_judgment
 async def apply_entity_proposals(
     server_version: str,
     model_id: str,
     proposals: str,
     ctx: Context,
+    evidence: str = "",
 ) -> dict:
     """Accept the quality check's corrections of assets and attackers, in
     one new model version.
@@ -8869,12 +9070,14 @@ async def check_entity_quality(
 
 
 @mcp.tool()
+@_judgment
 async def answer_entity_question(
     server_version: str,
     model_id: str,
     entity_id: str,
     text: str,
     input_hash: str,
+    evidence: str = "",
 ) -> dict:
     """Answer, with a fact, the flag the quality check raised about an asset
     or attacker. Mutating; creates no model version.
@@ -8926,6 +9129,7 @@ _SETTLE_CHOICES = ("keep_person", "take_model", "set")
 
 
 @mcp.tool()
+@_judgment
 async def settle_entity_rating(
     server_version: str,
     model_id: str,
@@ -8936,6 +9140,7 @@ async def settle_entity_rating(
     factors: str = "",
     rationale: str = "",
     change_reason: str = "",
+    evidence: str = "",
 ) -> dict:
     """Settle the rating held pending for an asset or attacker. Mutating.
 
@@ -9373,7 +9578,11 @@ mcp.instructions = build_instructions("pro")
 
 
 def main() -> None:
-    """Console script entry point (mipiti-mcp command)."""
+    """Console script entry point (mipiti-mcp command): the stdio server, or
+    ``mipiti-mcp install-skill`` (``skill_install``)."""
+    if sys.argv[1:2] == ["install-skill"]:
+        from .skill_install import main as install_main
+        raise SystemExit(install_main(sys.argv[2:]))
     mcp.run()
 
 

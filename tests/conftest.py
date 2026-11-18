@@ -9,6 +9,38 @@ os.environ.setdefault("SERVER_VERSION", "test")
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _runs_held_only(monkeypatch: pytest.MonkeyPatch):
+    """A write carries only a run a test holds: no test meets the platform
+    lookup of the caller's open run (``MipitiClient._run_for_write``) unless
+    it asks for it (``real_run_lookup``), so a mocked API need not answer it."""
+    from mipiti_mcp import client as client_mod
+
+    async def held(self, model_id: str) -> str:
+        return self.held_run(model_id)
+
+    client_mod.forget_runs()
+    monkeypatch.setattr(client_mod.MipitiClient, "_run_for_write", held)
+    yield
+    client_mod.forget_runs()
+
+
+@pytest.fixture()
+def real_run_lookup(monkeypatch: pytest.MonkeyPatch):
+    """The real lookup of the caller's open run on a write."""
+    from mipiti_mcp import client as client_mod
+
+    monkeypatch.setattr(client_mod.MipitiClient, "_run_for_write", _REAL_RUN_FOR_WRITE)
+
+
+def _real_run_for_write():
+    from mipiti_mcp.client import MipitiClient
+    return MipitiClient._run_for_write
+
+
+_REAL_RUN_FOR_WRITE = _real_run_for_write()
+
+
 @pytest.fixture()
 def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set required env vars for MipitiClient."""
