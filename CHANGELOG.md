@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.106.0] - 2026-11-18
+
+### Added
+
+- `decide_proposal` and `decide_proposals` accept `reconsider`, which reopens a rejected proposal so it can be decided again. (#390)
+- `decide_proposal` accepts `amended_text` to accept a proposed assumption with corrected wording, keeping the behavioural model change it carries. (#390)
+
 ## [0.105.1] - 2026-11-15
 
 ### Changed
