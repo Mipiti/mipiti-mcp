@@ -7477,6 +7477,7 @@ async def decide_proposals(
     server_version: str,
     model_id: str,
     decisions: str,
+    ctx: Context,
     note: str = "",
     expires_at: str = "",
     record_only: bool = False,
@@ -7487,7 +7488,12 @@ async def decide_proposals(
     Mutating; each is a judgment under the same delegation rules, and a
     program refused one gets that item's refusal (its ``escalation_id``)
     beside the others' outcomes. Use it to clear a review queue's parked
-    decisions in one call rather than one at a time.
+    decisions in one call rather than one at a time: the batch runs as a job
+    on the server, reported here as each item is decided, so a batch of any
+    length is answered whole. Should this call end before the job does, the
+    job goes on: read the proposals (``list_proposals``) before deciding any
+    again. An item already decided as asked is answered ``already_decided``
+    and nothing is written for it, so asking again is safe.
 
     Args:
         model_id: ID of the threat model.
@@ -7500,9 +7506,10 @@ async def decide_proposals(
             ``decide_proposal``).
         record_only: As on ``decide_proposal``, for every item.
 
-    Returns ``{model_id, results, decided, refused}``: per item
-    ``{proposal_id, ok, ...}``, a decided one with ``proposal`` and
-    ``effect``, a refused one with ``status_code`` and ``detail``.
+    Returns ``{model_id, results, decided, already_decided, refused}``: per
+    item ``{proposal_id, ok, ...}``, a decided one with ``proposal`` and
+    ``effect`` (``already_decided: true`` where it was decided so before), a
+    refused one with ``status_code`` and ``detail``.
     """
     parsed = _json_value(decisions, "decisions", list,
                          '[{"proposal_id": "...", "decision": "accept"}]')
@@ -7516,8 +7523,11 @@ async def decide_proposals(
                             "of 'accept', 'reject' or 'reconsider'.")
         items.append({"proposal_id": str(d["proposal_id"]).strip(), "decision": d["decision"]})
     try:
-        return await _get_client().decide_proposals(
+        client = _get_client()
+        started = await client.start_decide_proposals(
             model_id, items, note=note, expires_at=expires_at, record_only=record_only)
+        return await _await_backend_job(client, started["job_id"], ctx, timeout=1800,
+                                        heartbeat=True)
     except Exception as exc:
         raise _api_error(exc) from exc
 

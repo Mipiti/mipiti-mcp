@@ -1,4 +1,4 @@
-"""The review queue's tools: decisions taken together, the quality check's
+"""The review queue's tools: decisions taken together as a polled job, the quality check's
 corrections applied as a polled job, an assumption naming the entities it is
 about, the behavioural elements never matched matched on request, a link's
 compact answer, and the list's count of flagged entities."""
@@ -30,24 +30,54 @@ def _body(route) -> dict:
     return json.loads(route.calls.last.request.content)
 
 
+def _job_answering(answer: dict, *, job_id: str = "jd") -> None:
+    """The operations route: running once, then complete with ``answer``."""
+    respx.get(f"{API}/operations/{job_id}").mock(side_effect=[
+        httpx.Response(200, json={"status": "running", "progress": "p1: decided",
+                                  "progress_current": 1, "progress_total": 2,
+                                  "poll_after_seconds": 0}),
+        httpx.Response(200, json={"status": "completed", "result": answer}),
+    ])
+
+
 @pytest.mark.asyncio
 @respx.mock
-async def test_decisions_are_taken_together_in_one_call(mock_env: None) -> None:
-    answer = {"model_id": "tm-1", "decided": 1, "refused": 1, "results": [
-        {"proposal_id": "p1", "ok": True},
-        {"proposal_id": "p2", "ok": False, "status_code": 403,
-         "detail": {"escalation_id": "e2"}}]}
-    route = respx.post(f"{MODEL}/proposals/decide").mock(
-        return_value=httpx.Response(200, json=answer))
+async def test_decisions_are_taken_together_as_a_job_polled_to_its_answer(
+        mock_env: None) -> None:
+    answer = {"model_id": "tm-1", "decided": 1, "already_decided": 0, "refused": 1,
+              "results": [
+                  {"proposal_id": "p1", "ok": True},
+                  {"proposal_id": "p2", "ok": False, "status_code": 403,
+                   "detail": {"escalation_id": "e2"}}]}
+    route = respx.post(f"{MODEL}/proposals/decide-job").mock(
+        return_value=httpx.Response(200, json={"job_id": "jd"}))
+    _job_answering(answer)
+    ctx = _ctx()
     with patch("mipiti_mcp.server._get_client", return_value=MipitiClient()):
         out = await server.decide_proposals(
-            server_version="0", model_id="tm-1", note="read both",
+            server_version="0", model_id="tm-1", note="read both", ctx=ctx,
             decisions=json.dumps([{"proposal_id": "p1", "decision": "accept"},
                                   {"proposal_id": "p2", "decision": "reject"}]))
     assert out == answer
     assert _body(route) == {"decisions": [{"proposal_id": "p1", "decision": "accept"},
                                           {"proposal_id": "p2", "decision": "reject"}],
                             "note": "read both"}
+    # Each item decided is reported as it lands.
+    ctx.report_progress.assert_awaited()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_failed_job_is_the_tool_s_error(mock_env: None) -> None:
+    respx.post(f"{MODEL}/proposals/decide-job").mock(
+        return_value=httpx.Response(200, json={"job_id": "jf"}))
+    respx.get(f"{API}/operations/jf").mock(return_value=httpx.Response(
+        200, json={"status": "failed", "error": "the model is not readable"}))
+    with patch("mipiti_mcp.server._get_client", return_value=MipitiClient()):
+        with pytest.raises(ToolError, match="the model is not readable"):
+            await server.decide_proposals(
+                server_version="0", model_id="tm-1", ctx=_ctx(),
+                decisions=json.dumps([{"proposal_id": "p1", "decision": "accept"}]))
 
 
 @pytest.mark.asyncio
@@ -55,11 +85,12 @@ async def test_decisions_are_taken_together_in_one_call(mock_env: None) -> None:
 async def test_a_rejection_is_reconsidered_in_a_batch(mock_env: None) -> None:
     answer = {"model_id": "tm-1", "decided": 1, "refused": 0,
               "results": [{"proposal_id": "p3", "ok": True}]}
-    route = respx.post(f"{MODEL}/proposals/decide").mock(
-        return_value=httpx.Response(200, json=answer))
+    route = respx.post(f"{MODEL}/proposals/decide-job").mock(
+        return_value=httpx.Response(200, json={"job_id": "jd"}))
+    _job_answering(answer)
     with patch("mipiti_mcp.server._get_client", return_value=MipitiClient()):
         await server.decide_proposals(
-            server_version="0", model_id="tm-1",
+            server_version="0", model_id="tm-1", ctx=_ctx(),
             decisions=json.dumps([{"proposal_id": "p3", "decision": "reconsider"}]))
     assert _body(route)["decisions"] == [{"proposal_id": "p3", "decision": "reconsider"}]
 
@@ -81,11 +112,11 @@ async def test_an_amended_acceptance_sends_its_wording(mock_env: None) -> None:
 async def test_a_decision_that_is_neither_accept_nor_reject_is_refused_before_any_call(
         mock_env: None) -> None:
     with pytest.raises(ToolError):
-        await server.decide_proposals(server_version="0", model_id="tm-1",
+        await server.decide_proposals(server_version="0", model_id="tm-1", ctx=_ctx(),
                                       decisions=json.dumps([{"proposal_id": "p1",
                                                              "decision": "maybe"}]))
     with pytest.raises(ToolError):
-        await server.decide_proposals(server_version="0", model_id="tm-1",
+        await server.decide_proposals(server_version="0", model_id="tm-1", ctx=_ctx(),
                                       decisions=json.dumps([]))
 
 

@@ -3074,6 +3074,20 @@ class MipitiClient:
             body["record_only"] = True
         return await self._post(f"/api/models/{model_id}/proposals/decide", body)
 
+    async def start_decide_proposals(
+        self, model_id: str, decisions: list[dict], *, note: str = "",
+        expires_at: str = "", record_only: bool = False,
+    ) -> dict:
+        """POST /api/models/{model_id}/proposals/decide-job: the same decisions
+        as a background job; answers ``{job_id}``, polled at
+        ``/api/operations/{job_id}``, whose result is the decisions' answer."""
+        body: dict[str, Any] = {"decisions": [dict(d) for d in decisions], "note": note}
+        if expires_at:
+            body["expires_at"] = expires_at
+        if record_only:
+            body["record_only"] = True
+        return await self._post(f"/api/models/{model_id}/proposals/decide-job", body)
+
     async def decide_drift_intent(
         self, model_id: str, finding_id: str, intent: str, control_id: str = "",
         head_commit: str = "", note: str = "",
