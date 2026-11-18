@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.106.1] - 2026-11-18
+
+### Fixed
+
+- `decide_proposals` runs a batch as a server-side job and waits for its answer, reporting each decision as it lands. A large batch no longer fails partway with no detail. An item already decided as asked is answered `already_decided`. (#392)
+
 ## [0.106.0] - 2026-11-18
 
 ### Added
