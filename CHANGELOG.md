@@ -9,6 +9,15 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.107.0] - 2026-11-18
+
+### Added
+
+- `get_review_playbook` gives an agent, in one read, how to work a model's review queue: the procedure for each kind of item, the model's open items, what it may decide under your delegation policy, and the paid acts that need you. It opens a review run that every later change to the model is recorded under; `close_review_run` returns the run's digest (what was decided and on what evidence, what waits on you, what was spent, and how each decision is undone), and `get_review_run` reads it. (#394)
+- Every judgment tool takes `evidence`: the file and lines, URL, or quoted sentence the decision rests on. A delegation rule can require it, and it is recorded with the decision. (#394)
+- `mipiti-mcp install-skill` installs a skill that points Claude Code, Codex, Gemini CLI or Copilot at the playbook. (#394)
+- An id holding a slash, a query or a dot segment (such as `../admin`) can no longer move a tool's request to another endpoint: ids are sent encoded as one path segment, an id that is `.` or `..` is refused, and the client refuses any request whose path its HTTP library would change. (#394)
+
 ## [0.106.1] - 2026-11-18
 
 ### Fixed
