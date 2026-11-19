@@ -1545,34 +1545,106 @@ class TestDeleteThreatModel:
         mock.delete_model.assert_awaited_once()
 
 
+def _done(filename: str, content: bytes, content_type: str) -> dict:
+    """A completed export's poll as the platform answers it: described, never
+    carried."""
+    import hashlib as _h
+    return {"status": "completed", "expires_at": 1_800_000_000.0, "result": {
+        "kind": "file", "filename": filename, "content_type": content_type,
+        "size": len(content), "sha256": _h.sha256(content).hexdigest(),
+        "download_path": "/api/operations/job/result",
+        "download_page": "https://app.example/exports/job",
+    }}
+
+
 class TestExportThreatModelArchive:
     @pytest.mark.asyncio
-    async def test_returns_envelope(self) -> None:
-        import json as _json
-        envelope = {
-            "format_version": 1,
-            "title": "Checkout",
-            "versions": [{"version": 1, "data": {}, "created_at": "2026-04-20T00:00:00Z"}],
-        }
+    async def test_describes_the_archive_and_never_carries_it(self) -> None:
+        content = b'{"format_version": 3}'
         mock = _mock_client(
             start_export_model_full=AsyncMock(return_value="job_full_1"),
-            get_operation=AsyncMock(return_value={"status": "completed", "result": {
-                "kind": "file", "filename": "audit.json",
-                "content_type": "application/json", "content_b64": "",
-            }}),
-            fetch_operation_result=AsyncMock(
-                return_value=_json.dumps(envelope).encode("utf-8"),
-            ),
+            get_operation=AsyncMock(return_value=_done("audit.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
         )
-        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await export_report(
                 server_version="0", scope="model", scope_id="tm-001",
-                ctx=ctx, format="archive",
+                ctx=_mock_ctx(), format="archive",
             )
-        assert result["envelope"] == envelope
+        assert result["status"] == "completed" and result["job_id"] == "job_full_1"
+        assert result["download_url"] == "https://app.example/exports/job"
+        assert result["size"] == len(content) and len(result["sha256"]) == 64
+        assert "envelope" not in result and "content_b64" not in result and "content" not in result
         mock.start_export_model_full.assert_awaited_once_with("tm-001")
-        mock.fetch_operation_result.assert_awaited_once_with("job_full_1")
+        mock.fetch_operation_result.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_running_export_answers_its_job_to_poll(self, monkeypatch) -> None:
+        monkeypatch.setattr(server, "EXPORT_WAIT_SECONDS", 0)
+        mock = _mock_client(
+            start_export_model_full=AsyncMock(return_value="job_full_2"),
+            get_operation=AsyncMock(return_value={"status": "running", "expires_at": 1.0}),
+        )
+        with _patch_client(mock):
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001",
+                ctx=_mock_ctx(), format="archive",
+            )
+        assert result["status"] == "running" and result["job_id"] == "job_full_2"
+        assert result["poll_with"] == "get_export_status"
+        mock.get_operation.return_value = _done("audit.json", b"{}", "application/json")
+        with _patch_client(mock):
+            later = await server.get_export_status(server_version="0", job_id="job_full_2")
+        assert later["status"] == "completed" and later["download_url"]
+
+    @pytest.mark.asyncio
+    async def test_save_to_writes_the_file_after_checking_it(self, tmp_path) -> None:
+        content = b'{"format_version": 3}'
+        mock = _mock_client(
+            start_export_model_full=AsyncMock(return_value="job_full_3"),
+            get_operation=AsyncMock(return_value=_done("audit.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001",
+                ctx=_mock_ctx(), format="archive", save_to=str(tmp_path),
+            )
+        assert result["saved_to"] == str(tmp_path / "audit.json")
+        assert (tmp_path / "audit.json").read_bytes() == content
+
+    @pytest.mark.asyncio
+    async def test_save_to_refuses_bytes_that_do_not_match(self, tmp_path) -> None:
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done("audit.json", b"what was made", "application/json")),
+            fetch_operation_result=AsyncMock(return_value=b"something else"),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="do not match"):
+                await server.get_export_status(server_version="0", job_id="j",
+                                               save_to=str(tmp_path / "a.json"))
+        assert not (tmp_path / "a.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_the_hosted_server_refuses_save_to(self, tmp_path) -> None:
+        token = server._request_client.set(_mock_client())
+        try:
+            with pytest.raises(ToolError, match="hosted server"):
+                await export_report(server_version="0", scope="model", scope_id="tm-001",
+                                    ctx=_mock_ctx(), format="archive", save_to=str(tmp_path))
+            with pytest.raises(ToolError, match="hosted server"):
+                await server.get_export_status(server_version="0", job_id="j",
+                                               save_to=str(tmp_path))
+        finally:
+            server._request_client.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_export_says_why(self) -> None:
+        mock = _mock_client(get_operation=AsyncMock(
+            return_value={"status": "failed", "error": "the model is gone"}))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="the model is gone"):
+                await server.get_export_status(server_version="0", job_id="j")
 
 
 class TestImportThreatModelArchive:
@@ -1644,27 +1716,23 @@ class TestExportThreatModel:
         mock.start_export_model.assert_awaited_once_with("tm-001", "csv")
 
     @pytest.mark.asyncio
-    async def test_pdf_returns_b64(self) -> None:
-        import base64 as _b64
+    async def test_pdf_is_described_with_its_link_never_carried(self) -> None:
         pdf_bytes = b"%PDF-binary"
         mock = _mock_client(
             start_export_model=AsyncMock(return_value="job_pdf_1"),
-            get_operation=AsyncMock(return_value={"status": "completed", "result": {
-                "kind": "file", "filename": "report.pdf",
-                "content_type": "application/pdf", "content_b64": "",
-            }}),
+            get_operation=AsyncMock(return_value=_done("report.pdf", pdf_bytes, "application/pdf")),
             fetch_operation_result=AsyncMock(return_value=pdf_bytes),
         )
-        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await export_report(
-                server_version="0", scope="model", scope_id="tm-001", ctx=ctx, format="pdf",
+                server_version="0", scope="model", scope_id="tm-001", ctx=_mock_ctx(), format="pdf",
             )
         assert result["format"] == "pdf"
         assert result["filename"] == "report.pdf"
         assert result["content_type"] == "application/pdf"
-        assert _b64.b64decode(result["content_b64"]) == pdf_bytes
+        assert result["download_url"] and "content_b64" not in result
         mock.start_export_model.assert_awaited_once_with("tm-001", "pdf")
+        mock.fetch_operation_result.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_invalid_format(self) -> None:

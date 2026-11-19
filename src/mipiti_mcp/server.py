@@ -1741,8 +1741,8 @@ async def import_threat_model_archive(
     envelope: dict,
     workspace_id: str,
 ) -> dict:
-    """Import a JSON audit archive (from ``export_report (scope="model", format="archive")``)
-    into a target workspace.
+    """Import a JSON audit archive (a file ``export_report (scope="model", format="archive")``
+    produced) into a target workspace, given inline as ``envelope``.
 
     Mutating: creates a NEW threat model in the target workspace. Requires
     write access to that workspace. A fresh model_id is assigned on every
@@ -1751,9 +1751,10 @@ async def import_threat_model_archive(
     auto-suffix ``(imported YYYY-MM-DD)``. Non-destructive — never
     overwrites or touches an existing model.
 
-    Use to move or clone a model between workspaces or across instances;
-    the envelope round-trips through ``export_report (scope="model", format="archive")``
-    first.
+    For an archive small enough to pass inline. A large one, or one from
+    another workspace, is imported by the person in the app, signed in to
+    the target workspace: ``export_report`` never returns an archive's
+    contents, only a link where a person downloads it.
 
     The archive carries the model's current state, and the import creates it
     as version 1 of a new model: its controls, live assertions, decisions in
@@ -6236,6 +6237,79 @@ async def select_compliance_frameworks(
     except Exception as exc:
         raise _api_error(exc) from exc
 
+#: How long ``export_report`` waits for an export job before answering with
+#: the job's id for ``get_export_status``.
+EXPORT_WAIT_SECONDS = 20
+
+
+def _hosted() -> bool:
+    """Whether this server is the hosted one (a request's own client), where
+    a path names the server's disk, never the caller's."""
+    return _request_client.get(None) is not None
+
+
+async def _save_export(client: MipitiClient, job_id: str, save_to: str,
+                       filename: str, sha256: str) -> str:
+    """Fetch a finished export's bytes with this package's own key and write
+    them at ``save_to`` (a file, or a directory the file is named into), after
+    checking them against the SHA-256 the job recorded. Returns the path."""
+    import hashlib
+    from pathlib import Path
+
+    target = Path(save_to).expanduser()
+    if target.is_dir():
+        target = target / (filename or f"export-{job_id}")
+    content = await client.fetch_operation_result(job_id)
+    got = hashlib.sha256(content).hexdigest()
+    if sha256 and got != sha256:
+        raise ToolError(f"The export's bytes do not match its SHA-256 ({got} != {sha256}); "
+                        "nothing was written.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return str(target)
+
+
+async def _export_state(client: MipitiClient, job_id: str, *, save_to: str = "") -> dict:
+    """An export job as it stands: running (with the tool to poll it with), or
+    done, described and never carried: its name, type, size, SHA-256, the web
+    app's page a signed-in person downloads it from, when it expires, and,
+    with ``save_to`` (stdio only), the path it was saved at."""
+    data = await client.get_operation(job_id)
+    status = data.get("status")
+    if status == "failed":
+        raise ToolError(data.get("error") or "The export failed.")
+    out: dict = {"job_id": job_id, "status": status, "expires_at": data.get("expires_at")}
+    if status != "completed":
+        out["poll_with"] = "get_export_status"
+        return out
+    r = data.get("result") or {}
+    out.update({"filename": r.get("filename"), "content_type": r.get("content_type"),
+                "size": r.get("size"), "sha256": r.get("sha256"),
+                "download_url": r.get("download_page")})
+    if save_to:
+        out["saved_to"] = await _save_export(client, job_id, save_to,
+                                             r.get("filename") or "", r.get("sha256") or "")
+    return out
+
+
+async def _wait_for_export(client: MipitiClient, job_id: str, ctx: Context,
+                           save_to: str = "") -> dict:
+    """Poll an export job for up to ``EXPORT_WAIT_SECONDS``, reporting
+    progress, and answer its state then: done or still running."""
+    deadline = time.monotonic() + EXPORT_WAIT_SECONDS
+    polls = 0
+    while True:
+        state = await _export_state(client, job_id)
+        if state["status"] == "completed" or time.monotonic() >= deadline:
+            break
+        polls += 1
+        await _safe_report_progress(ctx, polls, None, f"export {job_id}: {state['status']}")
+        await asyncio.sleep(2)
+    if state["status"] == "completed" and save_to:
+        return await _export_state(client, job_id, save_to=save_to)
+    return state
+
+
 @mcp.tool()
 async def export_report(
     server_version: str,
@@ -6243,6 +6317,7 @@ async def export_report(
     scope_id: str,
     ctx: Context,
     format: Literal["csv", "pdf", "html", "archive"] = "csv",
+    save_to: str = "",
 ) -> dict:
     """Export a threat model or a tag as a downloadable document. Read-only; no side effects on the source.
 
@@ -6250,19 +6325,21 @@ async def export_report(
 
     - ``scope="model"`` (``scope_id`` = model id) supports ``format`` ∈ {``csv``, ``pdf``, ``html``, ``archive``}:
         - ``csv`` — the model's current state rendered as CSV; returned inline as UTF-8 text in ``content``.
-        - ``pdf`` / ``html`` — rendered document returned base64-encoded in ``content_b64`` (with ``content_type``). Runs as a server-side job; progress is reported automatically while it completes, which may take time for large models.
-        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle of the model's current state: its latest version and controls, live assertions (with Tier 1 / Tier 2 verdicts and attested flags) and the runs behind them, open findings and those a person closed, risk acceptances and other decisions in force, assumption overrides, attestations, and instance sufficiency signatures; each control's per-clause evidence basis travels with it. Earlier versions, activity and chat are not in it. Those verdicts are the origin's record of what it claimed, which is what a third party checks against the signatures; an importing workspace credits what its own verification establishes (see ``import_threat_model_archive``). Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
-    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, every member model's report after the reliance edges among the members (each with its status and whether it credits its objective), in one HTML document returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
+        - ``pdf`` / ``html`` — the rendered report, produced by a server-side job.
+        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle of the model's current state (controls, live assertions and their runs, findings, decisions in force, attestations, sufficiency signatures; not earlier versions, activity or chat). **Model scope only.**
+    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report of every member model, inline in ``content``.
+
+    A model's ``pdf``, ``html`` or ``archive`` is never returned inline: it can be megabytes. The tool starts the export and waits briefly. Done, it answers ``filename``, ``content_type``, ``size``, ``sha256``, ``expires_at`` (an hour after it started) and ``download_url``, a web app page where a signed-in person with access downloads it: give the person that link. Still running, ``job_id`` and ``status``: poll ``get_export_status(job_id)``. To move a model to another workspace, the person downloads the archive and imports it in the app, signed in there.
 
     Args:
         scope: export boundary — "model" or "tag".
         scope_id: id of the model or tag selected by ``scope``.
         format: "csv" (default), "pdf", "html", or "archive". Tag scope requires "html"; "archive" is model-only.
+        save_to: a path to save a model's pdf, html or archive at, once done (a file, or a directory it is named into). The locally run package only, with its own key: the hosted server refuses it, since it would write on the server.
 
     Returns:
         model csv → ``{scope, scope_id, format, filename, content}`` (inline UTF-8 text).
-        model pdf/html → ``{scope, scope_id, format, filename, content_type, content_b64}`` (base64-encoded bytes).
-        model archive → ``{scope, scope_id, format, envelope}``.
+        model pdf/html/archive → ``{scope, scope_id, format, job_id, status, expires_at, ...}``: done, with ``filename``, ``content_type``, ``size``, ``sha256``, ``download_url`` (and ``saved_to``); running, with ``poll_with``.
         tag html → ``{scope, scope_id, format, content}`` (inline HTML).
     """
     if scope not in ("model", "tag"):
@@ -6274,43 +6351,60 @@ async def export_report(
             raise ToolError("format='archive' is model-only; tag scope supports only 'html'.")
         if format != "html":
             raise ToolError("tag scope supports only format='html' (the signed auditor report).")
+    if save_to and (scope != "model" or format == "csv"):
+        raise ToolError("save_to applies to a model's pdf, html or archive.")
+    if save_to and _hosted():
+        raise ToolError(
+            "save_to writes on the machine this server runs on, and this is the hosted server: "
+            "give the person the download_url instead, or use the locally run package.")
     try:
         client = _get_client()
         if scope == "tag":
             content = await client.export_tag(scope_id, "html")
             return {"scope": "tag", "scope_id": scope_id, "format": "html", "content": content}
         # scope == "model"
-        if format == "archive":
-            job_id = await client.start_export_model_full(scope_id)
-            await _await_backend_job(client, job_id, ctx)
-            content_bytes = await client.fetch_operation_result(job_id)
-            envelope = json.loads(content_bytes.decode("utf-8"))
-            return {"scope": "model", "scope_id": scope_id, "format": "archive", "envelope": envelope}
-        job_id = await client.start_export_model(scope_id, format)
-        result = await _await_backend_job(client, job_id, ctx)
-        # The backend job result is the file envelope.
-        filename = (result or {}).get("filename") or f"threat_model.{format}"
-        content_type = (result or {}).get("content_type") or ""
-        content_bytes = await client.fetch_operation_result(job_id)
         if format == "csv":
+            job_id = await client.start_export_model(scope_id, "csv")
+            result = await _await_backend_job(client, job_id, ctx)
+            content_bytes = await client.fetch_operation_result(job_id)
             return {
                 "scope": "model",
                 "scope_id": scope_id,
                 "format": "csv",
-                "filename": filename,
+                "filename": (result or {}).get("filename") or "threat_model.csv",
                 "content": content_bytes.decode("utf-8"),
             }
-        import base64 as _b64
-        return {
-            "scope": "model",
-            "scope_id": scope_id,
-            "format": format,
-            "filename": filename,
-            "content_type": content_type or (
-                "application/pdf" if format == "pdf" else "text/html"
-            ),
-            "content_b64": _b64.b64encode(content_bytes).decode("ascii"),
-        }
+        job_id = (await client.start_export_model_full(scope_id) if format == "archive"
+                  else await client.start_export_model(scope_id, format))
+        state = await _wait_for_export(client, job_id, ctx, save_to=save_to)
+        return {"scope": "model", "scope_id": scope_id, "format": format, **state}
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_export_status(server_version: str, job_id: str, save_to: str = "") -> dict:
+    """The state of an export ``export_report`` started: running, or done and described. Read-only.
+
+    Done, it answers the file's ``filename``, ``content_type``, ``size``, ``sha256``, ``expires_at`` and ``download_url`` (a page of the web app where a signed-in person with access to the model downloads it; give the person that link), never the file itself. Running, ``status`` and ``poll_with``. An export of another workspace, another person's, or one expired (an hour after it started) is not found.
+
+    Args:
+        job_id: the export's ``job_id``.
+        save_to: once done, a path to save the file at (a file, or a directory it is named into). The locally run package only; the hosted server refuses it.
+
+    Returns:
+        ``{job_id, status, expires_at, ...}`` as ``export_report`` answers it.
+    """
+    if save_to and _hosted():
+        raise ToolError(
+            "save_to writes on the machine this server runs on, and this is the hosted server: "
+            "give the person the download_url instead, or use the locally run package.")
+    try:
+        return await _export_state(_get_client(), job_id, save_to=save_to)
+    except ToolError:
+        raise
     except Exception as exc:
         raise _api_error(exc) from exc
 

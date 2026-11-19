@@ -101,7 +101,7 @@ mipiti-mcp install-skill --dir path/to/skills
 
 It replaces only a copy it wrote, and refuses to overwrite any other file.
 
-## Tools (<!--MCP_TOOL_COUNT-->170<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->171<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -115,9 +115,10 @@ It replaces only a copy it wrote, and refuses to overwrite any other file.
 | `get_threat_model` | Get a threat model (trust boundaries, assets, attackers, assumptions, components). Use `include_cos=True` to include control objectives. The answers to its questions are counted and left out unless `include_clarifications=True`, which pages them. A read longer than 200,000 characters is cut, and `cuts` names what was cut and the read that serves it: the objectives first, then the clarifications, then each entity collection, largest first, kept as rows that name its entities. `include_inventory_completeness=True` adds how much of the inventory the claims rest on: for each entity holding the tier down, `grounding_gaps` names every ground it lacks and the act that supplies it: the tool and its `mcp_arguments`, ready to send. |
 | `list_threat_models` | List all saved threat models with IDs, titles, versions, and creation dates. Supports `source` filter and `include_assessment_summary=True` to inline per-model posture counts in one call (avoids N+1 looping `assess_model`); each summary's `posture` says when its counts are from, whether they are current, or that they are still being computed. |
 | `delete_threat_model` | Permanently delete a model and all its data. |
-| `export_report (scope="model")` | Export as PDF, HTML, or CSV. |
-| `export_report (scope="model", format="archive")` | Export the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures). Independently verifiable: the verdicts in it are the origin's record of what it claimed, which is what a third party checks against the signatures. |
-| `import_threat_model_archive` | Restore an audit archive into a target workspace as version 1 of a new model. Fresh `model_id` per import; title collisions auto-suffix. It queues no judgement: the result carries the estimate, and `judge_objectives` queues it on request. The restored model arrives unverified — the origin's assertion verdicts and run-attested flags are not credited in the importing workspace, which earns them by running verification against code it can reach. |
+| `export_report (scope="model")` | Export as PDF, HTML, or CSV. CSV is returned inline; a PDF or HTML report is produced by a job and never returned inline: done, the answer describes the file (name, type, size, SHA-256, when it expires) and gives a link to a page of the web app where a signed-in person with access downloads it; still running, it gives the job to poll. |
+| `export_report (scope="model", format="archive")` | Export the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures), as a job, answered as a PDF is. Independently verifiable: the verdicts in it are the origin's record of what it claimed, which is what a third party checks against the signatures. Run locally, `save_to` saves the file at a path with your key; the hosted server refuses it. |
+| `get_export_status` | The state of an export `export_report` started: running, or done and described with its download link. An export of another workspace, another person's or one expired (an hour after it started) is not found. |
+| `import_threat_model_archive` | Restore an audit archive into a target workspace as version 1 of a new model, given inline (a large archive, or one from another workspace, is imported by the person in the app). Fresh `model_id` per import; title collisions auto-suffix. It queues no judgement: the result carries the estimate, and `judge_objectives` queues it on request. The restored model arrives unverified — the origin's assertion verdicts and run-attested flags are not credited in the importing workspace, which earns them by running verification against code it can reach. |
 
 ### Entity CRUD
 
