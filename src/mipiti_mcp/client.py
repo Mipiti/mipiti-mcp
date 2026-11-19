@@ -860,6 +860,11 @@ class MipitiClient:
             {"envelope": envelope, "workspace_id": workspace_id},
         )
 
+    async def get_import_place(self) -> dict:
+        """Where a person imports an audit archive in the app:
+        ``{"import_in_app": {"where": ..., "url": ...}}``."""
+        return await self._get("/api/models/import")
+
     # ------------------------------------------------------------------
     # Controls
     # ------------------------------------------------------------------

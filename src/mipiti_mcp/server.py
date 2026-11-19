@@ -1738,23 +1738,28 @@ async def get_threat_model(
 @mcp.tool()
 async def import_threat_model_archive(
     server_version: str,
-    envelope: dict,
     workspace_id: str,
+    file: str = "",
 ) -> dict:
     """Import a JSON audit archive (a file ``export_report (scope="model", format="archive")``
-    produced) into a target workspace, given inline as ``envelope``.
+    produced) into a target workspace. Its contents never pass through this
+    call: they must arrive exactly, and copied as text they would fill your
+    context and could change.
 
-    Mutating: creates a NEW threat model in the target workspace. Requires
-    write access to that workspace. A fresh model_id is assigned on every
-    import, so the same envelope can be imported any number of times
-    without collisions; title collisions in the target workspace
+    - Locally run package: name the archive with ``file``, a file in the
+      exports folder (the ``saved_to`` path ``export_report(save=True)``
+      gave, or that path relative to the folder). This server reads it from
+      disk and uploads it; a path outside the folder is refused.
+    - Hosted server, or no ``file``: nothing is imported. The answer's
+      ``import_in_app`` (``where``, ``url``) is where the person imports it
+      in the app, signed in to the target workspace: give them both.
+
+    Mutating when it imports: creates a NEW threat model in the target
+    workspace. Requires write access to that workspace. A fresh model_id is
+    assigned on every import, so the same archive can be imported any number
+    of times without collisions; title collisions in the target workspace
     auto-suffix ``(imported YYYY-MM-DD)``. Non-destructive — never
     overwrites or touches an existing model.
-
-    For an archive small enough to pass inline. A large one, or one from
-    another workspace, is imported by the person in the app, signed in to
-    the target workspace: ``export_report`` never returns an archive's
-    contents, only a link where a person downloads it.
 
     The archive carries the model's current state, and the import creates it
     as version 1 of a new model: its controls, live assertions, decisions in
@@ -1773,12 +1778,14 @@ async def import_threat_model_archive(
     awaiting judgement until someone asks for them.
 
     Args:
-        envelope: The full archive dict returned by
-            ``export_report (scope="model", format="archive")``.
         workspace_id: Target workspace to import into.
+        file: The archive in the exports folder (locally run package only).
 
     Returns:
-        ``{"model_id": "<new id>", "judgement": {...}}``. ``judgement`` is
+        Where nothing was imported: ``{"imported": false, "import_in_app":
+        {...}, "reason": ...}``. Where it was: ``{"imported": true,
+        "imported_from": <path>, "model_id": "<new id>", "judgement":
+        {...}}``. ``judgement`` is
         what judging the imported model would cost (the answer
         ``judge_objectives`` gives without ``confirm_estimate``: ``scope``,
         ``estimate``, ``ungrouped``), with ``available: false`` when no
@@ -1786,14 +1793,24 @@ async def import_threat_model_archive(
         ``judge_objectives(model_id, confirm_estimate=True)`` to queue the
         judgements once they agree.
     """
-    if not isinstance(envelope, dict):
-        raise ToolError("envelope must be a dict returned by export_threat_model_archive.")
     if not workspace_id:
         raise ToolError("workspace_id is required.")
+    client = _get_client()
+    if _hosted() or not file:
+        reason = (_HOSTED_IMPORT if _hosted() else
+                  "No file named: the person imports the archive in the app.")
+        try:
+            place = (await client.get_import_place()).get("import_in_app") or {}
+        except Exception as exc:
+            raise _api_error(exc) from exc
+        return {"imported": False, "import_in_app": place, "reason": reason}
+    path = _import_path(file)
+    envelope = _read_archive(path)
     try:
-        return await _get_client().import_model_full(envelope, workspace_id)
+        result = await client.import_model_full(envelope, workspace_id)
     except Exception as exc:
         raise _api_error(exc) from exc
+    return {"imported": True, "imported_from": str(path), **(result or {})}
 
 
 # === Controls ===
@@ -6258,6 +6275,57 @@ _HOSTED_SAVE = ("save writes on the machine this server runs on, and this is the
                 "give the person the download_url instead, or use the locally run package.")
 
 
+_HOSTED_IMPORT = ("file names the disk of the machine this server runs on, and this is the hosted "
+                  "server: the person imports the archive in the app, or use the locally run "
+                  "package.")
+#: The largest archive the locally run package reads for an import.
+IMPORT_MAX_BYTES = 200 * 1024 * 1024
+
+
+def _export_base() -> "Path":
+    from pathlib import Path
+    return Path(os.environ.get("MIPITI_EXPORT_DIR") or EXPORT_DIR_DEFAULT).expanduser()
+
+
+def _import_path(file: str) -> "Path":
+    """The archive ``file`` names in the exports folder, resolved (links
+    followed) and refused unless it lies within the resolved folder and is a
+    regular file: an import uploads what it reads, so a path elsewhere would
+    send a file of this machine to the platform."""
+    from pathlib import Path
+
+    root = _export_base().resolve()
+    named = Path(file).expanduser()
+    resolved = (named if named.is_absolute() else root / named).resolve()
+    if not resolved.is_relative_to(root):
+        raise ToolError(f"Refused to import from outside {root}: {resolved}")
+    if not resolved.is_file():
+        raise ToolError(f"No archive at {resolved}.")
+    return resolved
+
+
+def _read_archive(path: "Path") -> dict:
+    """The archive at ``path`` (already contained), read without following a
+    link swapped in since it was resolved, bounded by ``IMPORT_MAX_BYTES``."""
+    import json
+
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ToolError(f"Could not open {path}: {exc.strerror}") from None
+    with os.fdopen(fd, "rb") as fh:
+        content = fh.read(IMPORT_MAX_BYTES + 1)
+    if len(content) > IMPORT_MAX_BYTES:
+        raise ToolError(f"{path} is larger than {IMPORT_MAX_BYTES} bytes; import it in the app.")
+    try:
+        envelope = json.loads(content)
+    except ValueError:
+        raise ToolError(f"{path} is not a JSON audit archive.") from None
+    if not isinstance(envelope, dict):
+        raise ToolError(f"{path} is not a JSON audit archive.")
+    return envelope
+
+
 def _clean(text: str, limit: int = 60) -> str:
     """A name as a path part: letters, digits, ``-`` and ``_`` alone, cut to
     ``limit``; never empty, never ``.`` or ``..``."""
@@ -6293,7 +6361,6 @@ async def _save_export(client: MipitiClient, job_id: str, result: dict) -> str:
     folder (``_export_path``), created exclusively so no file and no link
     already at the name is followed or overwritten. Returns the path."""
     import hashlib
-    from pathlib import Path
 
     sha256 = str(result.get("sha256") or "")
     content = await client.fetch_operation_result(job_id)
@@ -6301,7 +6368,7 @@ async def _save_export(client: MipitiClient, job_id: str, result: dict) -> str:
     if not sha256 or got != sha256:
         raise ToolError(f"The export's bytes do not match its SHA-256 ({got} != {sha256}); "
                         "nothing was written.")
-    base = Path(os.environ.get("MIPITI_EXPORT_DIR") or EXPORT_DIR_DEFAULT).expanduser()
+    base = _export_base()
     target = _export_path(base, str(result.get("workspace_id") or ""),
                           str(result.get("model_id") or ""), str(result.get("model_title") or ""),
                           sha256, str(result.get("content_type") or ""),

@@ -1711,34 +1711,116 @@ class TestExportThreatModelArchive:
                 await server.get_export_status(server_version="0", job_id="j")
 
 
+_PLACE = {"import_in_app": {"where": "the Models page", "url": "https://app/models?import=1"}}
+_ARCHIVE = {"format_version": 3, "versions": [{"version": 1, "data": {}}]}
+
+
+def _import_client(**methods: AsyncMock) -> AsyncMock:
+    """A mocked client with the import methods named set on it."""
+    client = _mock_client()
+    for name, method in methods.items():
+        setattr(client, name, method)
+    return client
+
+
+def _archive_in(folder: Path, name: str = "ws-1/tm-1/a.json") -> Path:
+    import json
+    path = folder / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_ARCHIVE))
+    return path
+
+
 class TestImportThreatModelArchive:
-    @pytest.mark.asyncio
-    async def test_imports_and_returns_new_id(self) -> None:
-        mock = _mock_client()
-        mock.import_model_full = AsyncMock(return_value={"model_id": "tm-new"})
-        envelope = {"format_version": 1, "versions": [{"version": 1, "data": {}}]}
-        with _patch_client(mock):
-            result = await import_threat_model_archive(
-                server_version="0", envelope=envelope, workspace_id="ws-1",
-            )
-        assert result["model_id"] == "tm-new"
-        mock.import_model_full.assert_awaited_once_with(envelope, "ws-1")
+    """An archive's contents never pass through the call: the locally run
+    package reads a file in the exports folder, and otherwise the person is
+    given the app's import page."""
 
     @pytest.mark.asyncio
-    async def test_requires_envelope_dict(self) -> None:
-        with _patch_client():
-            with pytest.raises(ToolError):
-                await import_threat_model_archive(
-                    server_version="0", envelope="not a dict", workspace_id="ws-1",  # type: ignore[arg-type]
-                )
+    async def test_imports_a_file_from_the_exports_folder(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        path = _archive_in(tmp_path)
+        mock = _import_client(import_model_full=AsyncMock(return_value={"model_id": "tm-new"}))
+        with _patch_client(mock):
+            by_abs = await import_threat_model_archive(
+                server_version="0", workspace_id="ws-1", file=str(path))
+            by_rel = await import_threat_model_archive(
+                server_version="0", workspace_id="ws-1", file="ws-1/tm-1/a.json")
+        assert by_abs["imported"] and by_abs["model_id"] == "tm-new"
+        assert by_abs["imported_from"] == by_rel["imported_from"] == str(path.resolve())
+        mock.import_model_full.assert_awaited_with(_ARCHIVE, "ws-1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["../outside.json", "/etc/hosts", "~/x.json"])
+    async def test_a_file_outside_the_exports_folder_is_refused(
+            self, tmp_path, monkeypatch, name) -> None:
+        base = tmp_path / "exports"
+        base.mkdir()
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(base))
+        _archive_in(tmp_path, "outside.json")
+        mock = _import_client(import_model_full=AsyncMock())
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="outside"):
+                await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                  file=name)
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_link_out_of_the_exports_folder_is_refused(self, tmp_path, monkeypatch) -> None:
+        base = tmp_path / "exports"
+        base.mkdir()
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(base))
+        (base / "link.json").symlink_to(_archive_in(tmp_path, "secret.json"))
+        mock = _import_client(import_model_full=AsyncMock())
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="outside"):
+                await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                  file="link.json")
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_is_not_an_archive_is_refused(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        (tmp_path / "x.json").write_text("[1, 2]")
+        (tmp_path / "y.json").write_text("not json")
+        mock = _import_client(import_model_full=AsyncMock())
+        with _patch_client(mock):
+            for name in ("x.json", "y.json", "missing.json"):
+                with pytest.raises(ToolError):
+                    await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                      file=name)
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_without_a_file_the_person_is_given_the_import_page(self) -> None:
+        mock = _import_client(get_import_place=AsyncMock(return_value=_PLACE),
+                            import_model_full=AsyncMock())
+        with _patch_client(mock):
+            result = await import_threat_model_archive(server_version="0", workspace_id="ws-1")
+        assert result["imported"] is False
+        assert result["import_in_app"] == _PLACE["import_in_app"]
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_hosted_server_never_reads_a_file(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        path = _archive_in(tmp_path)
+        mock = _import_client(get_import_place=AsyncMock(return_value=_PLACE),
+                            import_model_full=AsyncMock())
+        token = server._request_client.set(mock)
+        try:
+            result = await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                       file=str(path))
+        finally:
+            server._request_client.reset(token)
+        assert result["imported"] is False and "hosted server" in result["reason"]
+        mock.import_model_full.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_requires_workspace_id(self) -> None:
         with _patch_client():
             with pytest.raises(ToolError):
-                await import_threat_model_archive(
-                    server_version="0", envelope={"format_version": 1}, workspace_id="",
-                )
+                await import_threat_model_archive(server_version="0", workspace_id="")
 
 
 class TestGetThreatModel:
