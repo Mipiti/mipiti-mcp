@@ -6248,32 +6248,79 @@ def _hosted() -> bool:
     return _request_client.get(None) is not None
 
 
-async def _save_export(client: MipitiClient, job_id: str, save_to: str,
-                       filename: str, sha256: str) -> str:
-    """Fetch a finished export's bytes with this package's own key and write
-    them at ``save_to`` (a file, or a directory the file is named into), after
-    checking them against the SHA-256 the job recorded. Returns the path."""
+#: Where the locally run package files the exports it saves, unless
+#: ``MIPITI_EXPORT_DIR`` names another folder: a user-level folder, never the
+#: working directory, which is usually a project checkout an export would be
+#: committed into.
+EXPORT_DIR_DEFAULT = "~/.mipiti/model_exports"
+_EXTENSIONS = {"application/json": "json", "application/pdf": "pdf", "text/html": "html"}
+_HOSTED_SAVE = ("save writes on the machine this server runs on, and this is the hosted server: "
+                "give the person the download_url instead, or use the locally run package.")
+
+
+def _clean(text: str, limit: int = 60) -> str:
+    """A name as a path part: letters, digits, ``-`` and ``_`` alone, cut to
+    ``limit``; never empty, never ``.`` or ``..``."""
+    kept = "".join(c if (c.isascii() and c.isalnum()) or c in "-_" else "-" for c in text or "")
+    kept = "-".join(p for p in kept.split("-") if p)[:limit].strip("-_")
+    return kept or "export"
+
+
+def _export_path(base: "Path", workspace_id: str, model_id: str, title: str,
+                 sha256: str, content_type: str, filename: str) -> "Path":
+    """Where a saved export is filed: ``{base}/{workspace}/{model}/{title}-
+    {UTC time}-{first 12 of the SHA-256}.{ext}``, every part cleaned, and the
+    resolved path refused unless it lies within the resolved base (a ``..``,
+    or a folder that is a link to elsewhere)."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    ext = _EXTENSIONS.get(content_type) or _clean(Path(filename or "").suffix.lstrip("."), 8)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = (base / _clean(workspace_id) / _clean(model_id)
+              / f"{_clean(title)}-{stamp}-{_clean(sha256, 12)}.{ext}")
+    root = base.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    resolved = target.parent.resolve() / target.name
+    if not resolved.is_relative_to(root):
+        raise ToolError(f"Refused to save outside {root}: {resolved}")
+    return resolved
+
+
+async def _save_export(client: MipitiClient, job_id: str, result: dict) -> str:
+    """Fetch a finished export's bytes with this package's own key, check them
+    against the SHA-256 the job recorded, and file them under the exports
+    folder (``_export_path``), created exclusively so no file and no link
+    already at the name is followed or overwritten. Returns the path."""
     import hashlib
     from pathlib import Path
 
-    target = Path(save_to).expanduser()
-    if target.is_dir():
-        target = target / (filename or f"export-{job_id}")
+    sha256 = str(result.get("sha256") or "")
     content = await client.fetch_operation_result(job_id)
     got = hashlib.sha256(content).hexdigest()
-    if sha256 and got != sha256:
+    if not sha256 or got != sha256:
         raise ToolError(f"The export's bytes do not match its SHA-256 ({got} != {sha256}); "
                         "nothing was written.")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    base = Path(os.environ.get("MIPITI_EXPORT_DIR") or EXPORT_DIR_DEFAULT).expanduser()
+    target = _export_path(base, str(result.get("workspace_id") or ""),
+                          str(result.get("model_id") or ""), str(result.get("model_title") or ""),
+                          sha256, str(result.get("content_type") or ""),
+                          str(result.get("filename") or ""))
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o600)
+    except FileExistsError:
+        raise ToolError(f"Not saved: {target} already exists.") from None
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(content)
     return str(target)
 
 
-async def _export_state(client: MipitiClient, job_id: str, *, save_to: str = "") -> dict:
+async def _export_state(client: MipitiClient, job_id: str, *, save: bool = False) -> dict:
     """An export job as it stands: running (with the tool to poll it with), or
     done, described and never carried: its name, type, size, SHA-256, the web
     app's page a signed-in person downloads it from, when it expires, and,
-    with ``save_to`` (stdio only), the path it was saved at."""
+    with ``save`` (the locally run package only), the path it was filed at."""
     data = await client.get_operation(job_id)
     status = data.get("status")
     if status == "failed":
@@ -6286,14 +6333,13 @@ async def _export_state(client: MipitiClient, job_id: str, *, save_to: str = "")
     out.update({"filename": r.get("filename"), "content_type": r.get("content_type"),
                 "size": r.get("size"), "sha256": r.get("sha256"),
                 "download_url": r.get("download_page")})
-    if save_to:
-        out["saved_to"] = await _save_export(client, job_id, save_to,
-                                             r.get("filename") or "", r.get("sha256") or "")
+    if save:
+        out["saved_to"] = await _save_export(client, job_id, r)
     return out
 
 
 async def _wait_for_export(client: MipitiClient, job_id: str, ctx: Context,
-                           save_to: str = "") -> dict:
+                           save: bool = False) -> dict:
     """Poll an export job for up to ``EXPORT_WAIT_SECONDS``, reporting
     progress, and answer its state then: done or still running."""
     deadline = time.monotonic() + EXPORT_WAIT_SECONDS
@@ -6305,8 +6351,8 @@ async def _wait_for_export(client: MipitiClient, job_id: str, ctx: Context,
         polls += 1
         await _safe_report_progress(ctx, polls, None, f"export {job_id}: {state['status']}")
         await asyncio.sleep(2)
-    if state["status"] == "completed" and save_to:
-        return await _export_state(client, job_id, save_to=save_to)
+    if state["status"] == "completed" and save:
+        return await _export_state(client, job_id, save=True)
     return state
 
 
@@ -6317,7 +6363,7 @@ async def export_report(
     scope_id: str,
     ctx: Context,
     format: Literal["csv", "pdf", "html", "archive"] = "csv",
-    save_to: str = "",
+    save: bool = False,
 ) -> dict:
     """Export a threat model or a tag as a downloadable document. Read-only; no side effects on the source.
 
@@ -6335,7 +6381,7 @@ async def export_report(
         scope: export boundary — "model" or "tag".
         scope_id: id of the model or tag selected by ``scope``.
         format: "csv" (default), "pdf", "html", or "archive". Tag scope requires "html"; "archive" is model-only.
-        save_to: a path to save a model's pdf, html or archive at, once done (a file, or a directory it is named into). The locally run package only, with its own key: the hosted server refuses it, since it would write on the server.
+        save: once done, save a model's pdf, html or archive in the exports folder (``~/.mipiti/model_exports``, or ``MIPITI_EXPORT_DIR``), filed by workspace and model and named by title, time and digest; the answer's ``saved_to`` gives the path. The locally run package only: the hosted server refuses it.
 
     Returns:
         model csv → ``{scope, scope_id, format, filename, content}`` (inline UTF-8 text).
@@ -6351,12 +6397,10 @@ async def export_report(
             raise ToolError("format='archive' is model-only; tag scope supports only 'html'.")
         if format != "html":
             raise ToolError("tag scope supports only format='html' (the signed auditor report).")
-    if save_to and (scope != "model" or format == "csv"):
-        raise ToolError("save_to applies to a model's pdf, html or archive.")
-    if save_to and _hosted():
-        raise ToolError(
-            "save_to writes on the machine this server runs on, and this is the hosted server: "
-            "give the person the download_url instead, or use the locally run package.")
+    if save and (scope != "model" or format == "csv"):
+        raise ToolError("save applies to a model's pdf, html or archive.")
+    if save and _hosted():
+        raise ToolError(_HOSTED_SAVE)
     try:
         client = _get_client()
         if scope == "tag":
@@ -6376,7 +6420,7 @@ async def export_report(
             }
         job_id = (await client.start_export_model_full(scope_id) if format == "archive"
                   else await client.start_export_model(scope_id, format))
-        state = await _wait_for_export(client, job_id, ctx, save_to=save_to)
+        state = await _wait_for_export(client, job_id, ctx, save=save)
         return {"scope": "model", "scope_id": scope_id, "format": format, **state}
     except ToolError:
         raise
@@ -6385,24 +6429,22 @@ async def export_report(
 
 
 @mcp.tool()
-async def get_export_status(server_version: str, job_id: str, save_to: str = "") -> dict:
+async def get_export_status(server_version: str, job_id: str, save: bool = False) -> dict:
     """The state of an export ``export_report`` started: running, or done and described. Read-only.
 
     Done, it answers the file's ``filename``, ``content_type``, ``size``, ``sha256``, ``expires_at`` and ``download_url`` (a page of the web app where a signed-in person with access to the model downloads it; give the person that link), never the file itself. Running, ``status`` and ``poll_with``. An export of another workspace, another person's, or one expired (an hour after it started) is not found.
 
     Args:
         job_id: the export's ``job_id``.
-        save_to: once done, a path to save the file at (a file, or a directory it is named into). The locally run package only; the hosted server refuses it.
+        save: once done, save the file in the exports folder, as ``export_report`` does. The locally run package only; the hosted server refuses it.
 
     Returns:
         ``{job_id, status, expires_at, ...}`` as ``export_report`` answers it.
     """
-    if save_to and _hosted():
-        raise ToolError(
-            "save_to writes on the machine this server runs on, and this is the hosted server: "
-            "give the person the download_url instead, or use the locally run package.")
+    if save and _hosted():
+        raise ToolError(_HOSTED_SAVE)
     try:
-        return await _export_state(_get_client(), job_id, save_to=save_to)
+        return await _export_state(_get_client(), job_id, save=save)
     except ToolError:
         raise
     except Exception as exc:

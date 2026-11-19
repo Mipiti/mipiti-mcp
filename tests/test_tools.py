@@ -1,6 +1,7 @@
 """Unit tests for MCP tool implementations."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1545,7 +1546,8 @@ class TestDeleteThreatModel:
         mock.delete_model.assert_awaited_once()
 
 
-def _done(filename: str, content: bytes, content_type: str) -> dict:
+def _done(filename: str, content: bytes, content_type: str, *, workspace_id: str = "ws-1",
+          model_id: str = "tm-001", model_title: str = "Checkout service") -> dict:
     """A completed export's poll as the platform answers it: described, never
     carried."""
     import hashlib as _h
@@ -1554,6 +1556,7 @@ def _done(filename: str, content: bytes, content_type: str) -> dict:
         "size": len(content), "sha256": _h.sha256(content).hexdigest(),
         "download_path": "/api/operations/job/result",
         "download_page": "https://app.example/exports/job",
+        "workspace_id": workspace_id, "model_id": model_id, "model_title": model_title,
     }}
 
 
@@ -1598,7 +1601,11 @@ class TestExportThreatModelArchive:
         assert later["status"] == "completed" and later["download_url"]
 
     @pytest.mark.asyncio
-    async def test_save_to_writes_the_file_after_checking_it(self, tmp_path) -> None:
+    async def test_save_files_it_by_workspace_and_model_named_by_title_time_and_digest(
+            self, tmp_path, monkeypatch) -> None:
+        import hashlib as _h
+        import re as _re
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
         content = b'{"format_version": 3}'
         mock = _mock_client(
             start_export_model_full=AsyncMock(return_value="job_full_3"),
@@ -1608,33 +1615,90 @@ class TestExportThreatModelArchive:
         with _patch_client(mock):
             result = await export_report(
                 server_version="0", scope="model", scope_id="tm-001",
-                ctx=_mock_ctx(), format="archive", save_to=str(tmp_path),
+                ctx=_mock_ctx(), format="archive", save=True,
             )
-        assert result["saved_to"] == str(tmp_path / "audit.json")
-        assert (tmp_path / "audit.json").read_bytes() == content
+        saved = Path(result["saved_to"])
+        assert saved.parent == (tmp_path / "ws-1" / "tm-001").resolve()
+        digest = _h.sha256(content).hexdigest()[:12]
+        assert _re.fullmatch(rf"Checkout-service-\d{{8}}T\d{{6}}Z-{digest}\.json", saved.name), saved.name
+        assert saved.read_bytes() == content
 
     @pytest.mark.asyncio
-    async def test_save_to_refuses_bytes_that_do_not_match(self, tmp_path) -> None:
+    async def test_save_keeps_a_hostile_name_inside_the_exports_folder(
+            self, tmp_path, monkeypatch) -> None:
+        """A title or id a program could set never becomes a path."""
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path / "exports"))
+        content = b"%PDF"
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done(
+                "x.pdf", content, "application/pdf", workspace_id="../../..",
+                model_id="/etc", model_title="../../.ssh/authorized_keys")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            result = await server.get_export_status(server_version="0", job_id="j", save=True)
+        saved = Path(result["saved_to"])
+        assert saved.is_relative_to((tmp_path / "exports").resolve()), saved
+        assert ".." not in saved.parts and saved.suffix == ".pdf"
+
+    @pytest.mark.asyncio
+    async def test_save_refuses_a_folder_that_links_outside(self, tmp_path, monkeypatch) -> None:
+        base = tmp_path / "exports"
+        (base / "ws-1").mkdir(parents=True)
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (base / "ws-1" / "tm-001").symlink_to(outside)
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(base))
+        content = b"{}"
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done("a.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="Refused to save outside"):
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        assert not any(outside.iterdir())
+
+    @pytest.mark.asyncio
+    async def test_save_never_overwrites_or_follows_what_is_at_the_name(
+            self, tmp_path, monkeypatch) -> None:
+        target = tmp_path / "exports" / "ws-1" / "tm-001" / "a.json"
+        target.parent.mkdir(parents=True)
+        victim = tmp_path / "victim"
+        victim.write_bytes(b"keep me")
+        target.symlink_to(victim)
+        monkeypatch.setattr(server, "_export_path", lambda *a, **k: target)
+        content = b"{}"
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done("a.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="already exists"):
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        assert victim.read_bytes() == b"keep me"
+
+    @pytest.mark.asyncio
+    async def test_save_refuses_bytes_that_do_not_match(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
         mock = _mock_client(
             get_operation=AsyncMock(return_value=_done("audit.json", b"what was made", "application/json")),
             fetch_operation_result=AsyncMock(return_value=b"something else"),
         )
         with _patch_client(mock):
             with pytest.raises(ToolError, match="do not match"):
-                await server.get_export_status(server_version="0", job_id="j",
-                                               save_to=str(tmp_path / "a.json"))
-        assert not (tmp_path / "a.json").exists()
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        assert not any(tmp_path.rglob("*.json"))
 
     @pytest.mark.asyncio
-    async def test_the_hosted_server_refuses_save_to(self, tmp_path) -> None:
+    async def test_the_hosted_server_refuses_save(self) -> None:
         token = server._request_client.set(_mock_client())
         try:
             with pytest.raises(ToolError, match="hosted server"):
                 await export_report(server_version="0", scope="model", scope_id="tm-001",
-                                    ctx=_mock_ctx(), format="archive", save_to=str(tmp_path))
+                                    ctx=_mock_ctx(), format="archive", save=True)
             with pytest.raises(ToolError, match="hosted server"):
-                await server.get_export_status(server_version="0", job_id="j",
-                                               save_to=str(tmp_path))
+                await server.get_export_status(server_version="0", job_id="j", save=True)
         finally:
             server._request_client.reset(token)
 
