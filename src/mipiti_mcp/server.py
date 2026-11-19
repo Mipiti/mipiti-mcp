@@ -1800,7 +1800,7 @@ async def import_threat_model_archive(
         reason = (_HOSTED_IMPORT if _hosted() else
                   "No file named: the person imports the archive in the app.")
         try:
-            place = (await client.get_import_place()).get("import_in_app") or {}
+            place = await client.get_import_place()
         except Exception as exc:
             raise _api_error(exc) from exc
         return {"imported": False, "import_in_app": place, "reason": reason}
@@ -6389,17 +6389,28 @@ async def _export_state(client: MipitiClient, job_id: str, *, save: bool = False
     app's page a signed-in person downloads it from, when it expires, and,
     with ``save`` (the locally run package only), the path it was filed at."""
     data = await client.get_operation(job_id)
-    status = data.get("status")
+    status = data.get("status") if isinstance(data, dict) else None
     if status == "failed":
         raise ToolError(data.get("error") or "The export failed.")
+    if status not in ("running", "completed"):
+        # Anything else would read as still running until the wait gave up,
+        # and then forever.
+        raise ToolError(f"The platform answered export {job_id} with no status it uses: {data!r}")
     out: dict = {"job_id": job_id, "status": status, "expires_at": data.get("expires_at")}
     if status != "completed":
         out["poll_with"] = "get_export_status"
         return out
-    r = data.get("result") or {}
-    out.update({"filename": r.get("filename"), "content_type": r.get("content_type"),
-                "size": r.get("size"), "sha256": r.get("sha256"),
-                "download_url": r.get("download_page")})
+    r = data.get("result")
+    missing = [k for k in ("filename", "content_type", "size", "sha256", "download_page")
+               if not isinstance(r, dict) or r.get(k) in (None, "")]
+    if missing:
+        # A done export with no link or digest leaves the person nothing to
+        # download and nothing to check it against.
+        raise ToolError(f"Export {job_id} is done but its description lacks "
+                        f"{', '.join(missing)}: {r!r}")
+    out.update({"filename": r["filename"], "content_type": r["content_type"],
+                "size": r["size"], "sha256": r["sha256"],
+                "download_url": r["download_page"]})
     if save:
         out["saved_to"] = await _save_export(client, job_id, r)
     return out

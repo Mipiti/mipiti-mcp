@@ -1703,6 +1703,32 @@ class TestExportThreatModelArchive:
             server._request_client.reset(token)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("answer", [{}, {"status": "pending"}, {"status": None}])
+    async def test_an_export_with_no_status_it_uses_is_refused(self, answer) -> None:
+        """Never read as still running: that would hold the wait to its end,
+        then answer running forever."""
+        mock = _mock_client(get_operation=AsyncMock(return_value=answer))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="no status it uses"):
+                await server.get_export_status(server_version="0", job_id="j")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("missing", ["download_page", "sha256", "size", "filename",
+                                         "content_type", "result"])
+    async def test_a_done_export_without_its_description_is_refused(self, missing) -> None:
+        """A done export with no link or digest is no answer: the person has
+        nothing to download and nothing to check it against."""
+        answer = _done("a.json", b"{}", "application/json")
+        if missing == "result":
+            del answer["result"]
+        else:
+            answer["result"][missing] = None
+        mock = _mock_client(get_operation=AsyncMock(return_value=answer))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="lacks"):
+                await server.get_export_status(server_version="0", job_id="j")
+
+    @pytest.mark.asyncio
     async def test_a_failed_export_says_why(self) -> None:
         mock = _mock_client(get_operation=AsyncMock(
             return_value={"status": "failed", "error": "the model is gone"}))
@@ -1711,7 +1737,7 @@ class TestExportThreatModelArchive:
                 await server.get_export_status(server_version="0", job_id="j")
 
 
-_PLACE = {"import_in_app": {"where": "the Models page", "url": "https://app/models?import=1"}}
+_PLACE = {"where": "the Models page", "url": "https://app/models?import=1"}
 _ARCHIVE = {"format_version": 3, "versions": [{"version": 1, "data": {}}]}
 
 
@@ -1798,7 +1824,7 @@ class TestImportThreatModelArchive:
         with _patch_client(mock):
             result = await import_threat_model_archive(server_version="0", workspace_id="ws-1")
         assert result["imported"] is False
-        assert result["import_in_app"] == _PLACE["import_in_app"]
+        assert result["import_in_app"] == _PLACE
         mock.import_model_full.assert_not_awaited()
 
     @pytest.mark.asyncio

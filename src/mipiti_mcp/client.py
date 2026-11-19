@@ -861,9 +861,19 @@ class MipitiClient:
         )
 
     async def get_import_place(self) -> dict:
-        """Where a person imports an audit archive in the app:
-        ``{"import_in_app": {"where": ..., "url": ...}}``."""
-        return await self._get("/api/models/import")
+        """The platform's place for a person to import an audit archive in
+        the app (``GET /api/models/import``): ``{"where": <words for the
+        person>, "url": <a link that opens the app there>}``.
+
+        Raises ``ValueError`` when the answer holds no such place: an empty
+        one would leave the agent nothing to give the person."""
+        answer = await self._get("/api/models/import")
+        place = answer.get("import_in_app") if isinstance(answer, dict) else None
+        if not (isinstance(place, dict)
+                and all(isinstance(place.get(k), str) and place[k].strip()
+                        for k in ("where", "url"))):
+            raise ValueError(f"The platform named no import place: {answer!r}")
+        return {"where": place["where"], "url": place["url"]}
 
     # ------------------------------------------------------------------
     # Controls
