@@ -2330,3 +2330,30 @@ async def test_a_compact_control_listing_is_typed_as_summaries(mock_env: None) -
     assert out.controls[0].co_ids == ["CO1"]
     assert "control_objective_ids" not in out.controls[0].model_dump()
     await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_import_place_is_returned_as_the_place(mock_env: None) -> None:
+    place = {"where": "the Models page", "url": "https://app.example/models?import=1"}
+    respx.get(f"{_BASE}/api/models/import").mock(
+        return_value=httpx.Response(200, json={"import_in_app": place}))
+    client = MipitiClient()
+    assert await client.get_import_place() == place
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("answer", [
+    {}, {"import_in_app": None}, {"import_in_app": {}}, {"import_in_app": {"where": "x"}},
+    {"import_in_app": {"where": "x", "url": " "}}, {"import_in_app": {"where": 1, "url": "u"}},
+    [],
+])
+async def test_an_answer_naming_no_import_place_is_refused(mock_env: None, answer) -> None:
+    """An empty place would leave the agent nothing to give the person."""
+    respx.get(f"{_BASE}/api/models/import").mock(return_value=httpx.Response(200, json=answer))
+    client = MipitiClient()
+    with pytest.raises(ValueError, match="no import place"):
+        await client.get_import_place()
+    await client.close()

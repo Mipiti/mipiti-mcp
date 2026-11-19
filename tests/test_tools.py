@@ -1,6 +1,7 @@
 """Unit tests for MCP tool implementations."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1545,64 +1546,307 @@ class TestDeleteThreatModel:
         mock.delete_model.assert_awaited_once()
 
 
+def _done(filename: str, content: bytes, content_type: str, *, workspace_id: str = "ws-1",
+          model_id: str = "tm-001", model_title: str = "Checkout service") -> dict:
+    """A completed export's poll as the platform answers it: described, never
+    carried."""
+    import hashlib as _h
+    return {"status": "completed", "expires_at": 1_800_000_000.0, "result": {
+        "kind": "file", "filename": filename, "content_type": content_type,
+        "size": len(content), "sha256": _h.sha256(content).hexdigest(),
+        "download_path": "/api/operations/job/result",
+        "download_page": "https://app.example/exports/job",
+        "workspace_id": workspace_id, "model_id": model_id, "model_title": model_title,
+    }}
+
+
 class TestExportThreatModelArchive:
     @pytest.mark.asyncio
-    async def test_returns_envelope(self) -> None:
-        import json as _json
-        envelope = {
-            "format_version": 1,
-            "title": "Checkout",
-            "versions": [{"version": 1, "data": {}, "created_at": "2026-04-20T00:00:00Z"}],
-        }
+    async def test_describes_the_archive_and_never_carries_it(self) -> None:
+        content = b'{"format_version": 3}'
         mock = _mock_client(
             start_export_model_full=AsyncMock(return_value="job_full_1"),
-            get_operation=AsyncMock(return_value={"status": "completed", "result": {
-                "kind": "file", "filename": "audit.json",
-                "content_type": "application/json", "content_b64": "",
-            }}),
-            fetch_operation_result=AsyncMock(
-                return_value=_json.dumps(envelope).encode("utf-8"),
-            ),
+            get_operation=AsyncMock(return_value=_done("audit.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
         )
-        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await export_report(
                 server_version="0", scope="model", scope_id="tm-001",
-                ctx=ctx, format="archive",
+                ctx=_mock_ctx(), format="archive",
             )
-        assert result["envelope"] == envelope
+        assert result["status"] == "completed" and result["job_id"] == "job_full_1"
+        assert result["download_url"] == "https://app.example/exports/job"
+        assert result["size"] == len(content) and len(result["sha256"]) == 64
+        assert "envelope" not in result and "content_b64" not in result and "content" not in result
         mock.start_export_model_full.assert_awaited_once_with("tm-001")
-        mock.fetch_operation_result.assert_awaited_once_with("job_full_1")
+        mock.fetch_operation_result.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_running_export_answers_its_job_to_poll(self, monkeypatch) -> None:
+        monkeypatch.setattr(server, "EXPORT_WAIT_SECONDS", 0)
+        mock = _mock_client(
+            start_export_model_full=AsyncMock(return_value="job_full_2"),
+            get_operation=AsyncMock(return_value={"status": "running", "expires_at": 1.0}),
+        )
+        with _patch_client(mock):
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001",
+                ctx=_mock_ctx(), format="archive",
+            )
+        assert result["status"] == "running" and result["job_id"] == "job_full_2"
+        assert result["poll_with"] == "get_export_status"
+        mock.get_operation.return_value = _done("audit.json", b"{}", "application/json")
+        with _patch_client(mock):
+            later = await server.get_export_status(server_version="0", job_id="job_full_2")
+        assert later["status"] == "completed" and later["download_url"]
+
+    @pytest.mark.asyncio
+    async def test_save_files_it_by_workspace_and_model_named_by_title_time_and_digest(
+            self, tmp_path, monkeypatch) -> None:
+        import hashlib as _h
+        import re as _re
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        content = b'{"format_version": 3}'
+        mock = _mock_client(
+            start_export_model_full=AsyncMock(return_value="job_full_3"),
+            get_operation=AsyncMock(return_value=_done("audit.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            result = await export_report(
+                server_version="0", scope="model", scope_id="tm-001",
+                ctx=_mock_ctx(), format="archive", save=True,
+            )
+        saved = Path(result["saved_to"])
+        assert saved.parent == (tmp_path / "ws-1" / "tm-001").resolve()
+        digest = _h.sha256(content).hexdigest()[:12]
+        assert _re.fullmatch(rf"Checkout-service-\d{{8}}T\d{{6}}Z-{digest}\.json", saved.name), saved.name
+        assert saved.read_bytes() == content
+
+    @pytest.mark.asyncio
+    async def test_save_keeps_a_hostile_name_inside_the_exports_folder(
+            self, tmp_path, monkeypatch) -> None:
+        """A title or id a program could set never becomes a path."""
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path / "exports"))
+        content = b"%PDF"
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done(
+                "x.pdf", content, "application/pdf", workspace_id="../../..",
+                model_id="/etc", model_title="../../.ssh/authorized_keys")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            result = await server.get_export_status(server_version="0", job_id="j", save=True)
+        saved = Path(result["saved_to"])
+        assert saved.is_relative_to((tmp_path / "exports").resolve()), saved
+        assert ".." not in saved.parts and saved.suffix == ".pdf"
+
+    @pytest.mark.asyncio
+    async def test_save_refuses_a_folder_that_links_outside(self, tmp_path, monkeypatch) -> None:
+        base = tmp_path / "exports"
+        (base / "ws-1").mkdir(parents=True)
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (base / "ws-1" / "tm-001").symlink_to(outside)
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(base))
+        content = b"{}"
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done("a.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="Refused to save outside"):
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        assert not any(outside.iterdir())
+
+    @pytest.mark.asyncio
+    async def test_save_never_overwrites_or_follows_what_is_at_the_name(
+            self, tmp_path, monkeypatch) -> None:
+        target = tmp_path / "exports" / "ws-1" / "tm-001" / "a.json"
+        target.parent.mkdir(parents=True)
+        victim = tmp_path / "victim"
+        victim.write_bytes(b"keep me")
+        target.symlink_to(victim)
+        monkeypatch.setattr(server, "_export_path", lambda *a, **k: target)
+        content = b"{}"
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done("a.json", content, "application/json")),
+            fetch_operation_result=AsyncMock(return_value=content),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="already exists"):
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        assert victim.read_bytes() == b"keep me"
+
+    @pytest.mark.asyncio
+    async def test_save_refuses_bytes_that_do_not_match(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        mock = _mock_client(
+            get_operation=AsyncMock(return_value=_done("audit.json", b"what was made", "application/json")),
+            fetch_operation_result=AsyncMock(return_value=b"something else"),
+        )
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="do not match"):
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        assert not any(tmp_path.rglob("*.json"))
+
+    @pytest.mark.asyncio
+    async def test_the_hosted_server_refuses_save(self) -> None:
+        token = server._request_client.set(_mock_client())
+        try:
+            with pytest.raises(ToolError, match="hosted server"):
+                await export_report(server_version="0", scope="model", scope_id="tm-001",
+                                    ctx=_mock_ctx(), format="archive", save=True)
+            with pytest.raises(ToolError, match="hosted server"):
+                await server.get_export_status(server_version="0", job_id="j", save=True)
+        finally:
+            server._request_client.reset(token)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("answer", [{}, {"status": "pending"}, {"status": None}])
+    async def test_an_export_with_no_status_it_uses_is_refused(self, answer) -> None:
+        """Never read as still running: that would hold the wait to its end,
+        then answer running forever."""
+        mock = _mock_client(get_operation=AsyncMock(return_value=answer))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="no status it uses"):
+                await server.get_export_status(server_version="0", job_id="j")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("missing", ["download_page", "sha256", "size", "filename",
+                                         "content_type", "result"])
+    async def test_a_done_export_without_its_description_is_refused(self, missing) -> None:
+        """A done export with no link or digest is no answer: the person has
+        nothing to download and nothing to check it against."""
+        answer = _done("a.json", b"{}", "application/json")
+        if missing == "result":
+            del answer["result"]
+        else:
+            answer["result"][missing] = None
+        mock = _mock_client(get_operation=AsyncMock(return_value=answer))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="lacks"):
+                await server.get_export_status(server_version="0", job_id="j")
+
+    @pytest.mark.asyncio
+    async def test_a_failed_export_says_why(self) -> None:
+        mock = _mock_client(get_operation=AsyncMock(
+            return_value={"status": "failed", "error": "the model is gone"}))
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="the model is gone"):
+                await server.get_export_status(server_version="0", job_id="j")
+
+
+_PLACE = {"where": "the Models page", "url": "https://app/models?import=1"}
+_ARCHIVE = {"format_version": 3, "versions": [{"version": 1, "data": {}}]}
+
+
+def _import_client(**methods: AsyncMock) -> AsyncMock:
+    """A mocked client with the import methods named set on it."""
+    client = _mock_client()
+    for name, method in methods.items():
+        setattr(client, name, method)
+    return client
+
+
+def _archive_in(folder: Path, name: str = "ws-1/tm-1/a.json") -> Path:
+    import json
+    path = folder / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_ARCHIVE))
+    return path
 
 
 class TestImportThreatModelArchive:
-    @pytest.mark.asyncio
-    async def test_imports_and_returns_new_id(self) -> None:
-        mock = _mock_client()
-        mock.import_model_full = AsyncMock(return_value={"model_id": "tm-new"})
-        envelope = {"format_version": 1, "versions": [{"version": 1, "data": {}}]}
-        with _patch_client(mock):
-            result = await import_threat_model_archive(
-                server_version="0", envelope=envelope, workspace_id="ws-1",
-            )
-        assert result["model_id"] == "tm-new"
-        mock.import_model_full.assert_awaited_once_with(envelope, "ws-1")
+    """An archive's contents never pass through the call: the locally run
+    package reads a file in the exports folder, and otherwise the person is
+    given the app's import page."""
 
     @pytest.mark.asyncio
-    async def test_requires_envelope_dict(self) -> None:
-        with _patch_client():
-            with pytest.raises(ToolError):
-                await import_threat_model_archive(
-                    server_version="0", envelope="not a dict", workspace_id="ws-1",  # type: ignore[arg-type]
-                )
+    async def test_imports_a_file_from_the_exports_folder(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        path = _archive_in(tmp_path)
+        mock = _import_client(import_model_full=AsyncMock(return_value={"model_id": "tm-new"}))
+        with _patch_client(mock):
+            by_abs = await import_threat_model_archive(
+                server_version="0", workspace_id="ws-1", file=str(path))
+            by_rel = await import_threat_model_archive(
+                server_version="0", workspace_id="ws-1", file="ws-1/tm-1/a.json")
+        assert by_abs["imported"] and by_abs["model_id"] == "tm-new"
+        assert by_abs["imported_from"] == by_rel["imported_from"] == str(path.resolve())
+        mock.import_model_full.assert_awaited_with(_ARCHIVE, "ws-1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["../outside.json", "/etc/hosts", "~/x.json"])
+    async def test_a_file_outside_the_exports_folder_is_refused(
+            self, tmp_path, monkeypatch, name) -> None:
+        base = tmp_path / "exports"
+        base.mkdir()
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(base))
+        _archive_in(tmp_path, "outside.json")
+        mock = _import_client(import_model_full=AsyncMock())
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="outside"):
+                await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                  file=name)
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_link_out_of_the_exports_folder_is_refused(self, tmp_path, monkeypatch) -> None:
+        base = tmp_path / "exports"
+        base.mkdir()
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(base))
+        (base / "link.json").symlink_to(_archive_in(tmp_path, "secret.json"))
+        mock = _import_client(import_model_full=AsyncMock())
+        with _patch_client(mock):
+            with pytest.raises(ToolError, match="outside"):
+                await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                  file="link.json")
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_is_not_an_archive_is_refused(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        (tmp_path / "x.json").write_text("[1, 2]")
+        (tmp_path / "y.json").write_text("not json")
+        mock = _import_client(import_model_full=AsyncMock())
+        with _patch_client(mock):
+            for name in ("x.json", "y.json", "missing.json"):
+                with pytest.raises(ToolError):
+                    await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                      file=name)
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_without_a_file_the_person_is_given_the_import_page(self) -> None:
+        mock = _import_client(get_import_place=AsyncMock(return_value=_PLACE),
+                            import_model_full=AsyncMock())
+        with _patch_client(mock):
+            result = await import_threat_model_archive(server_version="0", workspace_id="ws-1")
+        assert result["imported"] is False
+        assert result["import_in_app"] == _PLACE
+        mock.import_model_full.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_hosted_server_never_reads_a_file(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("MIPITI_EXPORT_DIR", str(tmp_path))
+        path = _archive_in(tmp_path)
+        mock = _import_client(get_import_place=AsyncMock(return_value=_PLACE),
+                            import_model_full=AsyncMock())
+        token = server._request_client.set(mock)
+        try:
+            result = await import_threat_model_archive(server_version="0", workspace_id="ws-1",
+                                                       file=str(path))
+        finally:
+            server._request_client.reset(token)
+        assert result["imported"] is False and "hosted server" in result["reason"]
+        mock.import_model_full.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_requires_workspace_id(self) -> None:
         with _patch_client():
             with pytest.raises(ToolError):
-                await import_threat_model_archive(
-                    server_version="0", envelope={"format_version": 1}, workspace_id="",
-                )
+                await import_threat_model_archive(server_version="0", workspace_id="")
 
 
 class TestGetThreatModel:
@@ -1644,27 +1888,23 @@ class TestExportThreatModel:
         mock.start_export_model.assert_awaited_once_with("tm-001", "csv")
 
     @pytest.mark.asyncio
-    async def test_pdf_returns_b64(self) -> None:
-        import base64 as _b64
+    async def test_pdf_is_described_with_its_link_never_carried(self) -> None:
         pdf_bytes = b"%PDF-binary"
         mock = _mock_client(
             start_export_model=AsyncMock(return_value="job_pdf_1"),
-            get_operation=AsyncMock(return_value={"status": "completed", "result": {
-                "kind": "file", "filename": "report.pdf",
-                "content_type": "application/pdf", "content_b64": "",
-            }}),
+            get_operation=AsyncMock(return_value=_done("report.pdf", pdf_bytes, "application/pdf")),
             fetch_operation_result=AsyncMock(return_value=pdf_bytes),
         )
-        ctx = _mock_ctx()
         with _patch_client(mock):
             result = await export_report(
-                server_version="0", scope="model", scope_id="tm-001", ctx=ctx, format="pdf",
+                server_version="0", scope="model", scope_id="tm-001", ctx=_mock_ctx(), format="pdf",
             )
         assert result["format"] == "pdf"
         assert result["filename"] == "report.pdf"
         assert result["content_type"] == "application/pdf"
-        assert _b64.b64decode(result["content_b64"]) == pdf_bytes
+        assert result["download_url"] and "content_b64" not in result
         mock.start_export_model.assert_awaited_once_with("tm-001", "pdf")
+        mock.fetch_operation_result.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_invalid_format(self) -> None:

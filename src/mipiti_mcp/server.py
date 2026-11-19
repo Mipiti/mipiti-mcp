@@ -102,7 +102,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
 - `delete_threat_model` — permanently delete a model and all its data.
 - `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces a tag's auditor report (see Tags).
-- `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
+- `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Its contents never pass through the call: the locally run package imports a `file` from its exports folder, and otherwise the answer's `import_in_app` is where the person imports it. Assigns a fresh model_id every time; a title already used in the workspace gets a numbered suffix (`Checkout (2)`). The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
 
 ## Controls and assertions
 
@@ -1738,22 +1738,28 @@ async def get_threat_model(
 @mcp.tool()
 async def import_threat_model_archive(
     server_version: str,
-    envelope: dict,
     workspace_id: str,
+    file: str = "",
 ) -> dict:
-    """Import a JSON audit archive (from ``export_report (scope="model", format="archive")``)
-    into a target workspace.
+    """Import a JSON audit archive (a file ``export_report (scope="model", format="archive")``
+    produced) into a target workspace. Its contents never pass through this
+    call: they must arrive exactly, and copied as text they would fill your
+    context and could change.
 
-    Mutating: creates a NEW threat model in the target workspace. Requires
-    write access to that workspace. A fresh model_id is assigned on every
-    import, so the same envelope can be imported any number of times
-    without collisions; title collisions in the target workspace
-    auto-suffix ``(imported YYYY-MM-DD)``. Non-destructive — never
+    - Locally run package: name the archive with ``file``, a file in the
+      exports folder (the ``saved_to`` path ``export_report(save=True)``
+      gave, or that path relative to the folder). This server reads it from
+      disk and uploads it; a path outside the folder is refused.
+    - Hosted server, or no ``file``: nothing is imported. The answer's
+      ``import_in_app`` (``where``, ``url``) is where the person imports it
+      in the app, signed in to the target workspace: give them both.
+
+    Mutating when it imports: creates a NEW threat model in the target
+    workspace. Requires write access to that workspace. A fresh model_id is
+    assigned on every import, so the same archive can be imported any number
+    of times without collisions; a title already used in the target
+    workspace gets a numbered suffix (``Checkout (2)``). Non-destructive — never
     overwrites or touches an existing model.
-
-    Use to move or clone a model between workspaces or across instances;
-    the envelope round-trips through ``export_report (scope="model", format="archive")``
-    first.
 
     The archive carries the model's current state, and the import creates it
     as version 1 of a new model: its controls, live assertions, decisions in
@@ -1772,12 +1778,14 @@ async def import_threat_model_archive(
     awaiting judgement until someone asks for them.
 
     Args:
-        envelope: The full archive dict returned by
-            ``export_report (scope="model", format="archive")``.
         workspace_id: Target workspace to import into.
+        file: The archive in the exports folder (locally run package only).
 
     Returns:
-        ``{"model_id": "<new id>", "judgement": {...}}``. ``judgement`` is
+        Where nothing was imported: ``{"imported": false, "import_in_app":
+        {...}, "reason": ...}``. Where it was: ``{"imported": true,
+        "imported_from": <path>, "model_id": "<new id>", "judgement":
+        {...}}``. ``judgement`` is
         what judging the imported model would cost (the answer
         ``judge_objectives`` gives without ``confirm_estimate``: ``scope``,
         ``estimate``, ``ungrouped``), with ``available: false`` when no
@@ -1785,14 +1793,24 @@ async def import_threat_model_archive(
         ``judge_objectives(model_id, confirm_estimate=True)`` to queue the
         judgements once they agree.
     """
-    if not isinstance(envelope, dict):
-        raise ToolError("envelope must be a dict returned by export_threat_model_archive.")
     if not workspace_id:
         raise ToolError("workspace_id is required.")
+    client = _get_client()
+    if _hosted() or not file:
+        reason = (_HOSTED_IMPORT if _hosted() else
+                  "No file named: the person imports the archive in the app.")
+        try:
+            place = await client.get_import_place()
+        except Exception as exc:
+            raise _api_error(exc) from exc
+        return {"imported": False, "import_in_app": place, "reason": reason}
+    path = _import_path(file)
+    envelope = _read_archive(path)
     try:
-        return await _get_client().import_model_full(envelope, workspace_id)
+        result = await client.import_model_full(envelope, workspace_id)
     except Exception as exc:
         raise _api_error(exc) from exc
+    return {"imported": True, "imported_from": str(path), **(result or {})}
 
 
 # === Controls ===
@@ -6236,6 +6254,186 @@ async def select_compliance_frameworks(
     except Exception as exc:
         raise _api_error(exc) from exc
 
+#: How long ``export_report`` waits for an export job before answering with
+#: the job's id for ``get_export_status``.
+EXPORT_WAIT_SECONDS = 20
+
+
+def _hosted() -> bool:
+    """Whether this server is the hosted one (a request's own client), where
+    a path names the server's disk, never the caller's."""
+    return _request_client.get(None) is not None
+
+
+#: Where the locally run package files the exports it saves, unless
+#: ``MIPITI_EXPORT_DIR`` names another folder: a user-level folder, never the
+#: working directory, which is usually a project checkout an export would be
+#: committed into.
+EXPORT_DIR_DEFAULT = "~/.mipiti/model_exports"
+_EXTENSIONS = {"application/json": "json", "application/pdf": "pdf", "text/html": "html"}
+_HOSTED_SAVE = ("save writes on the machine this server runs on, and this is the hosted server: "
+                "give the person the download_url instead, or use the locally run package.")
+
+
+_HOSTED_IMPORT = ("file names the disk of the machine this server runs on, and this is the hosted "
+                  "server: the person imports the archive in the app, or use the locally run "
+                  "package.")
+#: The largest archive the locally run package reads for an import.
+IMPORT_MAX_BYTES = 200 * 1024 * 1024
+
+
+def _export_base() -> "Path":
+    from pathlib import Path
+    return Path(os.environ.get("MIPITI_EXPORT_DIR") or EXPORT_DIR_DEFAULT).expanduser()
+
+
+def _import_path(file: str) -> "Path":
+    """The archive ``file`` names in the exports folder, resolved (links
+    followed) and refused unless it lies within the resolved folder and is a
+    regular file: an import uploads what it reads, so a path elsewhere would
+    send a file of this machine to the platform."""
+    from pathlib import Path
+
+    root = _export_base().resolve()
+    named = Path(file).expanduser()
+    resolved = (named if named.is_absolute() else root / named).resolve()
+    if not resolved.is_relative_to(root):
+        raise ToolError(f"Refused to import from outside {root}: {resolved}")
+    if not resolved.is_file():
+        raise ToolError(f"No archive at {resolved}.")
+    return resolved
+
+
+def _read_archive(path: "Path") -> dict:
+    """The archive at ``path`` (already contained), read without following a
+    link swapped in since it was resolved, bounded by ``IMPORT_MAX_BYTES``."""
+    import json
+
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ToolError(f"Could not open {path}: {exc.strerror}") from None
+    with os.fdopen(fd, "rb") as fh:
+        content = fh.read(IMPORT_MAX_BYTES + 1)
+    if len(content) > IMPORT_MAX_BYTES:
+        raise ToolError(f"{path} is larger than {IMPORT_MAX_BYTES} bytes; import it in the app.")
+    try:
+        envelope = json.loads(content)
+    except ValueError:
+        raise ToolError(f"{path} is not a JSON audit archive.") from None
+    if not isinstance(envelope, dict):
+        raise ToolError(f"{path} is not a JSON audit archive.")
+    return envelope
+
+
+def _clean(text: str, limit: int = 60) -> str:
+    """A name as a path part: letters, digits, ``-`` and ``_`` alone, cut to
+    ``limit``; never empty, never ``.`` or ``..``."""
+    kept = "".join(c if (c.isascii() and c.isalnum()) or c in "-_" else "-" for c in text or "")
+    kept = "-".join(p for p in kept.split("-") if p)[:limit].strip("-_")
+    return kept or "export"
+
+
+def _export_path(base: "Path", workspace_id: str, model_id: str, title: str,
+                 sha256: str, content_type: str, filename: str) -> "Path":
+    """Where a saved export is filed: ``{base}/{workspace}/{model}/{title}-
+    {UTC time}-{first 12 of the SHA-256}.{ext}``, every part cleaned, and the
+    resolved path refused unless it lies within the resolved base (a ``..``,
+    or a folder that is a link to elsewhere)."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    ext = _EXTENSIONS.get(content_type) or _clean(Path(filename or "").suffix.lstrip("."), 8)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = (base / _clean(workspace_id) / _clean(model_id)
+              / f"{_clean(title)}-{stamp}-{_clean(sha256, 12)}.{ext}")
+    root = base.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    resolved = target.parent.resolve() / target.name
+    if not resolved.is_relative_to(root):
+        raise ToolError(f"Refused to save outside {root}: {resolved}")
+    return resolved
+
+
+async def _save_export(client: MipitiClient, job_id: str, result: dict) -> str:
+    """Fetch a finished export's bytes with this package's own key, check them
+    against the SHA-256 the job recorded, and file them under the exports
+    folder (``_export_path``), created exclusively so no file and no link
+    already at the name is followed or overwritten. Returns the path."""
+    import hashlib
+
+    sha256 = str(result.get("sha256") or "")
+    content = await client.fetch_operation_result(job_id)
+    got = hashlib.sha256(content).hexdigest()
+    if not sha256 or got != sha256:
+        raise ToolError(f"The export's bytes do not match its SHA-256 ({got} != {sha256}); "
+                        "nothing was written.")
+    base = _export_base()
+    target = _export_path(base, str(result.get("workspace_id") or ""),
+                          str(result.get("model_id") or ""), str(result.get("model_title") or ""),
+                          sha256, str(result.get("content_type") or ""),
+                          str(result.get("filename") or ""))
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o600)
+    except FileExistsError:
+        raise ToolError(f"Not saved: {target} already exists.") from None
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(content)
+    return str(target)
+
+
+async def _export_state(client: MipitiClient, job_id: str, *, save: bool = False) -> dict:
+    """An export job as it stands: running (with the tool to poll it with), or
+    done, described and never carried: its name, type, size, SHA-256, the web
+    app's page a signed-in person downloads it from, when it expires, and,
+    with ``save`` (the locally run package only), the path it was filed at."""
+    data = await client.get_operation(job_id)
+    status = data.get("status") if isinstance(data, dict) else None
+    if status == "failed":
+        raise ToolError(data.get("error") or "The export failed.")
+    if status not in ("running", "completed"):
+        # Anything else would read as still running until the wait gave up,
+        # and then forever.
+        raise ToolError(f"The platform answered export {job_id} with no status it uses: {data!r}")
+    out: dict = {"job_id": job_id, "status": status, "expires_at": data.get("expires_at")}
+    if status != "completed":
+        out["poll_with"] = "get_export_status"
+        return out
+    r = data.get("result")
+    missing = [k for k in ("filename", "content_type", "size", "sha256", "download_page")
+               if not isinstance(r, dict) or r.get(k) in (None, "")]
+    if missing:
+        # A done export with no link or digest leaves the person nothing to
+        # download and nothing to check it against.
+        raise ToolError(f"Export {job_id} is done but its description lacks "
+                        f"{', '.join(missing)}: {r!r}")
+    out.update({"filename": r["filename"], "content_type": r["content_type"],
+                "size": r["size"], "sha256": r["sha256"],
+                "download_url": r["download_page"]})
+    if save:
+        out["saved_to"] = await _save_export(client, job_id, r)
+    return out
+
+
+async def _wait_for_export(client: MipitiClient, job_id: str, ctx: Context,
+                           save: bool = False) -> dict:
+    """Poll an export job for up to ``EXPORT_WAIT_SECONDS``, reporting
+    progress, and answer its state then: done or still running."""
+    deadline = time.monotonic() + EXPORT_WAIT_SECONDS
+    polls = 0
+    while True:
+        state = await _export_state(client, job_id)
+        if state["status"] == "completed" or time.monotonic() >= deadline:
+            break
+        polls += 1
+        await _safe_report_progress(ctx, polls, None, f"export {job_id}: {state['status']}")
+        await asyncio.sleep(2)
+    if state["status"] == "completed" and save:
+        return await _export_state(client, job_id, save=True)
+    return state
+
+
 @mcp.tool()
 async def export_report(
     server_version: str,
@@ -6243,6 +6441,7 @@ async def export_report(
     scope_id: str,
     ctx: Context,
     format: Literal["csv", "pdf", "html", "archive"] = "csv",
+    save: bool = False,
 ) -> dict:
     """Export a threat model or a tag as a downloadable document. Read-only; no side effects on the source.
 
@@ -6250,19 +6449,21 @@ async def export_report(
 
     - ``scope="model"`` (``scope_id`` = model id) supports ``format`` ∈ {``csv``, ``pdf``, ``html``, ``archive``}:
         - ``csv`` — the model's current state rendered as CSV; returned inline as UTF-8 text in ``content``.
-        - ``pdf`` / ``html`` — rendered document returned base64-encoded in ``content_b64`` (with ``content_type``). Runs as a server-side job; progress is reported automatically while it completes, which may take time for large models.
-        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle of the model's current state: its latest version and controls, live assertions (with Tier 1 / Tier 2 verdicts and attested flags) and the runs behind them, open findings and those a person closed, risk acceptances and other decisions in force, assumption overrides, attestations, and instance sufficiency signatures; each control's per-clause evidence basis travels with it. Earlier versions, activity and chat are not in it. Those verdicts are the origin's record of what it claimed, which is what a third party checks against the signatures; an importing workspace credits what its own verification establishes (see ``import_threat_model_archive``). Returned as ``{..., "envelope": <dict>}``; feed the envelope to ``import_threat_model_archive`` to restore it into any workspace. **Model scope only.**
-    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report, every member model's report after the reliance edges among the members (each with its status and whether it credits its objective), in one HTML document returned inline in ``content``. ``csv``, ``pdf``, and ``archive`` are rejected for tag scope.
+        - ``pdf`` / ``html`` — the rendered report, produced by a server-side job.
+        - ``archive`` — the self-contained, independently-verifiable JSON audit bundle of the model's current state (controls, live assertions and their runs, findings, decisions in force, attestations, sufficiency signatures; not earlier versions, activity or chat). **Model scope only.**
+    - ``scope="tag"`` (``scope_id`` = tag id) supports only ``format="html"``: the signed auditor report of every member model, inline in ``content``.
+
+    A model's ``pdf``, ``html`` or ``archive`` is never returned inline: it can be megabytes. The tool starts the export and waits briefly. Done, it answers ``filename``, ``content_type``, ``size``, ``sha256``, ``expires_at`` (an hour after it started) and ``download_url``, a web app page where a signed-in person with access downloads it: give the person that link. Still running, ``job_id`` and ``status``: poll ``get_export_status(job_id)``. To move a model to another workspace, the person downloads the archive and imports it in the app, signed in there.
 
     Args:
         scope: export boundary — "model" or "tag".
         scope_id: id of the model or tag selected by ``scope``.
         format: "csv" (default), "pdf", "html", or "archive". Tag scope requires "html"; "archive" is model-only.
+        save: once done, save a model's pdf, html or archive in the exports folder (``~/.mipiti/model_exports``, or ``MIPITI_EXPORT_DIR``), filed by workspace and model and named by title, time and digest; the answer's ``saved_to`` gives the path. The locally run package only: the hosted server refuses it.
 
     Returns:
         model csv → ``{scope, scope_id, format, filename, content}`` (inline UTF-8 text).
-        model pdf/html → ``{scope, scope_id, format, filename, content_type, content_b64}`` (base64-encoded bytes).
-        model archive → ``{scope, scope_id, format, envelope}``.
+        model pdf/html/archive → ``{scope, scope_id, format, job_id, status, expires_at, ...}``: done, with ``filename``, ``content_type``, ``size``, ``sha256``, ``download_url`` (and ``saved_to``); running, with ``poll_with``.
         tag html → ``{scope, scope_id, format, content}`` (inline HTML).
     """
     if scope not in ("model", "tag"):
@@ -6274,43 +6475,56 @@ async def export_report(
             raise ToolError("format='archive' is model-only; tag scope supports only 'html'.")
         if format != "html":
             raise ToolError("tag scope supports only format='html' (the signed auditor report).")
+    if save and (scope != "model" or format == "csv"):
+        raise ToolError("save applies to a model's pdf, html or archive.")
+    if save and _hosted():
+        raise ToolError(_HOSTED_SAVE)
     try:
         client = _get_client()
         if scope == "tag":
             content = await client.export_tag(scope_id, "html")
             return {"scope": "tag", "scope_id": scope_id, "format": "html", "content": content}
         # scope == "model"
-        if format == "archive":
-            job_id = await client.start_export_model_full(scope_id)
-            await _await_backend_job(client, job_id, ctx)
-            content_bytes = await client.fetch_operation_result(job_id)
-            envelope = json.loads(content_bytes.decode("utf-8"))
-            return {"scope": "model", "scope_id": scope_id, "format": "archive", "envelope": envelope}
-        job_id = await client.start_export_model(scope_id, format)
-        result = await _await_backend_job(client, job_id, ctx)
-        # The backend job result is the file envelope.
-        filename = (result or {}).get("filename") or f"threat_model.{format}"
-        content_type = (result or {}).get("content_type") or ""
-        content_bytes = await client.fetch_operation_result(job_id)
         if format == "csv":
+            job_id = await client.start_export_model(scope_id, "csv")
+            result = await _await_backend_job(client, job_id, ctx)
+            content_bytes = await client.fetch_operation_result(job_id)
             return {
                 "scope": "model",
                 "scope_id": scope_id,
                 "format": "csv",
-                "filename": filename,
+                "filename": (result or {}).get("filename") or "threat_model.csv",
                 "content": content_bytes.decode("utf-8"),
             }
-        import base64 as _b64
-        return {
-            "scope": "model",
-            "scope_id": scope_id,
-            "format": format,
-            "filename": filename,
-            "content_type": content_type or (
-                "application/pdf" if format == "pdf" else "text/html"
-            ),
-            "content_b64": _b64.b64encode(content_bytes).decode("ascii"),
-        }
+        job_id = (await client.start_export_model_full(scope_id) if format == "archive"
+                  else await client.start_export_model(scope_id, format))
+        state = await _wait_for_export(client, job_id, ctx, save=save)
+        return {"scope": "model", "scope_id": scope_id, "format": format, **state}
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def get_export_status(server_version: str, job_id: str, save: bool = False) -> dict:
+    """The state of an export ``export_report`` started: running, or done and described. Read-only.
+
+    Done, it answers the file's ``filename``, ``content_type``, ``size``, ``sha256``, ``expires_at`` and ``download_url`` (a page of the web app where a signed-in person with access to the model downloads it; give the person that link), never the file itself. Running, ``status`` and ``poll_with``. An export of another workspace, another person's, or one expired (an hour after it started) is not found.
+
+    Args:
+        job_id: the export's ``job_id``.
+        save: once done, save the file in the exports folder, as ``export_report`` does. The locally run package only; the hosted server refuses it.
+
+    Returns:
+        ``{job_id, status, expires_at, ...}`` as ``export_report`` answers it.
+    """
+    if save and _hosted():
+        raise ToolError(_HOSTED_SAVE)
+    try:
+        return await _export_state(_get_client(), job_id, save=save)
+    except ToolError:
+        raise
     except Exception as exc:
         raise _api_error(exc) from exc
 
