@@ -3528,6 +3528,19 @@ class MipitiClient:
             {"collection": collection, "element_id": element_id},
         )
 
+    async def release_behavioural_element(
+        self, model_id: str, collection: str, element_id: str,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/elements/release.
+
+        Returns an element held as written to the rank an extraction gives:
+        the next extraction reads it again. Creates a model version.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/elements/release"),
+            {"collection": collection, "element_id": element_id},
+        )
+
     async def confirm_behavioural_model(
         self, model_id: str, ir_hash: str, note: str = "",
     ) -> dict:

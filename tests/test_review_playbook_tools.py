@@ -27,7 +27,14 @@ JUDGMENT_TOOLS = {
     "dismiss_proposed_attacker", "keep_attacker_whole", "split_grouped_attacker",
     "answer_attacker_credentials", "update_finding", "remediate_finding",
     "create_risk_acceptance", "confirm_behavioural_model", "answer_entity_question",
+    "edit_asset", "add_assumption", "edit_behavioural_element", "remove_behavioural_element",
+    "release_behavioural_element",
 }
+
+#: Tools whose description names a judgment without being one: they read, and
+#: say what the judgments they list are.
+_NAMES_JUDGMENTS_ONLY = {"get_threat_model", "get_review_queue", "list_co_dispositions",
+                         "list_proposals", "list_decisions"}
 
 
 def _tools() -> dict:
@@ -45,6 +52,22 @@ def test_every_judgment_tool_takes_evidence_and_says_so():
         prop = tools[name].parameters["properties"].get("evidence")
         assert prop is not None, name
         assert "citations this judgment rests on" in prop.get("description", ""), name
+
+
+def test_every_tool_that_says_it_is_a_judgment_takes_evidence():
+    """The list above is checked against the tools' own words, so a judgment
+    tool added without ``evidence`` fails here rather than being parked for a
+    person every time a rule requires evidence: any tool whose description
+    says it is a judgment takes it, unless it only reads and names them."""
+    import re
+
+    tools = _tools()
+    saying = {name for name, t in tools.items()
+              if re.search(r"\bis a judgment\b|\ba judgment \(|\bare judgments\b",
+                           t.description or "")}
+    missing = sorted(n for n in saying - _NAMES_JUDGMENTS_ONLY
+                     if "evidence" not in tools[n].parameters["properties"])
+    assert not missing, f"judgment tools without evidence: {missing}"
 
 
 def test_the_instructions_send_an_agent_to_the_playbook():

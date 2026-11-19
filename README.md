@@ -101,7 +101,7 @@ mipiti-mcp install-skill --dir path/to/skills
 
 It replaces only a copy it wrote, and refuses to overwrite any other file.
 
-## Tools (<!--MCP_TOOL_COUNT-->169<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->170<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -240,6 +240,7 @@ A behavioural model states what a system does: its elements, the actions on them
 | `answer_behavioural_questions` | Answer open questions, many in one call. The model is extracted in the background, billed to the caller, once every open owner question has an answer or when `extract_now=True`. A question about the model's own structure takes a `structured` answer, applied at once with no extraction. A question about what a zone holds (closure `zone_contents`) offers the `contents` form, `structured: {"elements": [...]}`, each element an id or `{"id": "<id>", "secret": true}`: an id the offer lists under `elements` names an element already in the zone, any other is a new element declared there (409 `id_in_use` when another element holds it elsewhere, 422 `structured_malformed` for an empty or malformed list); `disposition: "not_needed"` says the zone holds nothing of the system's, and `unknown` is refused. An answer read from the code may say the code `contradicts` its sentence. `dry_run=True` records nothing and returns what the answers would do: whether they extract and at what estimate, and the questions they leave open or raise. |
 | `edit_behavioural_element` | Replace or add one element as a person wrote it. Voids a confirmation. |
 | `remove_behavioural_element` | Remove an element the system does not have; every later extraction withholds it. Refused 409 `referenced` while anything names it. A judgment; voids a confirmation. An edit under the removed id withdraws the removal. |
+| `release_behavioural_element` | Release an element held as written (`rank: declared`), so the next extraction reads it again from the answers that stand. A judgment. |
 | `confirm_behavioural_model` | Confirm the model whose `ir_hash` was reviewed. Refused when the model changed since (`review_stale`), the description moved (`stale`) or an owner question is open (`needs_answers`). |
 | `get_behavioural_links` | The links from elements and zones to assets and trust boundaries, the proposals with the `proposals_hash` a bulk acceptance names, and the open link questions. Read-only. |
 | `declare_behavioural_link` | Declare the asset or trust boundary an element or zone is. Creates no model version. |

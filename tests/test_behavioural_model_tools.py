@@ -113,6 +113,10 @@ async def test_writes_use_the_verbs_and_bodies_the_api_takes(mock_env: None) -> 
     await client.remove_behavioural_element("tm-1", "state_elements", "copies")
     assert _body(remove) == {"collection": "state_elements", "element_id": "copies"}
 
+    release = respx.post(BASE + "/elements/release").mock(return_value=ok)
+    await client.release_behavioural_element("tm-1", "channels", "ch1")
+    assert _body(release) == {"collection": "channels", "element_id": "ch1"}
+
     confirm = respx.post(BASE + "/confirm").mock(return_value=ok)
     await client.confirm_behavioural_model("tm-1", "abc", note="reviewed")
     assert _body(confirm) == {"ir_hash": "abc", "note": "reviewed"}
@@ -144,6 +148,33 @@ async def test_writes_use_the_verbs_and_bodies_the_api_takes(mock_env: None) -> 
     await client.request_delta_second_reading("tm-1", ["CTRL-1", "CTRL-2"])
     assert _body(reading) == {"control_ids": ["CTRL-1", "CTRL-2"],
                               "confirm_estimate": False}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_element_write_answers_what_it_did_not_the_whole_model(mock_env: None) -> None:
+    """A large model's whole state runs to megabytes, more than a client
+    holds beside its work: an edit, a removal and a release each answer the
+    element as it now stands, the questions about it and the counts."""
+    whole = {"model_id": "tm-1", "model_version": 9, "changed": True, "status": "extracted",
+             "ir_hash": "h9", "owner_questions_open": 1,
+             "ir": {"channels": [{"id": "ch1", "rank": "declared"}, {"id": "ch2"}],
+                    "actions": [{"id": "a" * 20} for _ in range(500)]},
+             "questions": [{"question_id": "q1", "element_ref": "ch1", "closure": "held"},
+                           {"question_id": "q2", "element_ref": "ch2", "closure": "traced"}]}
+    for verb, tail, tool, arg in (
+            ("put", "/elements", server.edit_behavioural_element,
+             {"element": json.dumps({"id": "ch1"})}),
+            ("post", "/elements/remove", server.remove_behavioural_element, {"element_id": "ch1"}),
+            ("post", "/elements/release", server.release_behavioural_element,
+             {"element_id": "ch1"})):
+        getattr(respx, verb)(BASE + tail).mock(return_value=httpx.Response(200, json=whole))
+        out = await tool(server_version="x", model_id="tm-1", collection="channels", **arg)
+        assert "ir" not in out and out["ir_hash"] == "h9" and out["model_version"] == 9
+        assert out["element"] == {"id": "ch1", "rank": "declared"}
+        assert [q["question_id"] for q in out["questions_about_it"]] == ["q1"]
+        assert out["questions_open"] == 2
+        assert len(json.dumps(out)) < 2000
 
 
 @pytest.mark.asyncio
