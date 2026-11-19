@@ -9,6 +9,14 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.107.1] - 2026-11-19
+
+### Fixed
+
+- Fixed: editing, removing or releasing a behavioural model element, editing an asset, and adding an assumption now carry their evidence, so a delegation rule that requires evidence admits them. (#396)
+- Added: `release_behavioural_element`, which hands an element held as written back to the next extraction. (#396)
+- Changed: element edits, removals and releases return what changed and where the model stands, not the whole model. (#396)
+
 ## [0.107.0] - 2026-11-18
 
 ### Added
