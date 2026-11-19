@@ -9,6 +9,14 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.108.0] - 2026-11-19
+
+### Added
+
+- `export_report` answers a model's PDF, HTML or archive with the file's description and a link where a signed-in person downloads it, never the file itself. `get_export_status` follows an export still being prepared. Run locally, `save=true` files it under `~/.mipiti/model_exports`. (#398)
+- `import_threat_model_archive` no longer takes an archive inline. Run locally, `file` imports an archive from the exports folder. Otherwise the answer gives the web app's import page for the person. (#398)
+- The import's description now states that a title already used in the workspace gets a numbered suffix (`Checkout (2)`). It had said a dated suffix, which was never added. (#398)
+
 ## [0.107.1] - 2026-11-19
 
 ### Fixed
