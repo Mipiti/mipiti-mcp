@@ -102,7 +102,7 @@ Pass all of this as a multi-paragraph `feature_description`. The backend will de
 - `update_threat_model` — a model's metadata: `name` (no new version; titles are unique within a workspace, case-insensitive), `parent_id` or `clear_parent` (its place on the recursive composition tree; cycles and over-deep chains are refused; no new version), and `provenance_*` (where its description came from; bumps the version).
 - `delete_threat_model` — permanently delete a model and all its data.
 - `export_report` — export a threat model. Its scope/format params produce a PDF, HTML, or CSV report, or the self-contained JSON audit archive of the model's current state (latest version, controls, live assertions with CI verdicts, findings, decisions in force, attestations, sufficiency signatures — independently verifiable without origin-instance access). The verdicts in it are the origin's record of what it claimed, which is what a third party checks; what an importing workspace credits is decided by its own verification (see `import_threat_model_archive`). The same tool produces a tag's auditor report (see Tags).
-- `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Assigns a fresh model_id every time; title collisions auto-suffix `(imported YYYY-MM-DD)`. The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
+- `import_threat_model_archive` — restore an audit archive into a workspace as version 1 of a new model. Its contents never pass through the call: the locally run package imports a `file` from its exports folder, and otherwise the answer's `import_in_app` is where the person imports it. Assigns a fresh model_id every time; a title already used in the workspace gets a numbered suffix (`Checkout (2)`). The restored model arrives unverified: the tier verdicts and run-attested flags on its assertions are the origin's record and are not credited here, so plan for the model to read unverified until verification runs against code this workspace can reach. It queues no judgement either: the result's `judgement` is the estimate, and `judge_objectives` with `confirm_estimate=True` queues it.
 
 ## Controls and assertions
 
@@ -1757,8 +1757,8 @@ async def import_threat_model_archive(
     Mutating when it imports: creates a NEW threat model in the target
     workspace. Requires write access to that workspace. A fresh model_id is
     assigned on every import, so the same archive can be imported any number
-    of times without collisions; title collisions in the target workspace
-    auto-suffix ``(imported YYYY-MM-DD)``. Non-destructive — never
+    of times without collisions; a title already used in the target
+    workspace gets a numbered suffix (``Checkout (2)``). Non-destructive — never
     overwrites or touches an existing model.
 
     The archive carries the model's current state, and the import creates it
