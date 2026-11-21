@@ -212,8 +212,8 @@ def test_the_tools_are_published_with_their_rules() -> None:
                  "creates no model version", "charged to whoever answers", "``billing``",
                  "``message``", "relay the cost to the person", "reads ``unchecked``"):
         assert word in tools["answer_entity_question"], word
-    # The answer's flag is not served once it is stored: the text never says
-    # the verdict stands until the check runs.
+    # Once an answer is stored its flag is not served: the text describes the
+    # entity as unchecked meanwhile, never as keeping its verdict.
     assert "stands until" not in tools["answer_entity_question"]
     assert "``quality``" in tools["get_entity"]
     instructions = server.build_instructions("pro", "user")
