@@ -3436,7 +3436,9 @@ class MipitiClient:
 
         ``view`` ``status`` serves no IR and no questions; ``questions``
         serves that and the open questions from ``offset``, ``limit`` of
-        them. ``wait_seconds`` (at most 50) answers once the extraction job's
+        them; ``answers`` serves every stored answer, standing first, then
+        those a later fact replaced, paged the same way, without the IR.
+        ``wait_seconds`` (at most 50) answers once the extraction job's
         state, pass or calls completed change, or when the time is up. Only
         values other than the defaults are sent.
         """
