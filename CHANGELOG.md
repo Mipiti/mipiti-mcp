@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.109.0] - 2026-11-21
+
+### Added
+
+- `get_behavioural_model` reads a model's stored answers a page at a time (`view="answers"`). (#400)
+- `answer_entity_question` returns the balance an answer's check is charged to and the most it costs, and says the entity reads `unchecked` until the check runs. (#400)
+
 ## [0.108.0] - 2026-11-19
 
 ### Added
