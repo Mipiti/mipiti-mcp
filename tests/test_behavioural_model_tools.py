@@ -755,10 +755,43 @@ async def test_the_questions_view_is_read_a_page_at_a_time() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_answers_view_is_read_a_page_at_a_time() -> None:
+    """The stored answers are paged without the IR, so a large model's answers
+    are read whole however large the model is."""
+    client = _client(get_behavioural_model={"view": "answers", "total": 300,
+                                            "standing_total": 280, "next_offset": 250,
+                                            "truncated": False})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.get_behavioural_model(
+            server_version="0", model_id="tm-1", ctx=AsyncMock(), view="answers",
+            offset=50, limit=200)
+    client.get_behavioural_model.assert_awaited_once_with(
+        "tm-1", view="answers", offset=50, limit=200)
+    assert out["next_offset"] == 250 and out["standing_total"] == 280
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_answers_view_sends_its_page(mock_env: None) -> None:
+    read = respx.get(BASE).mock(return_value=httpx.Response(200, json={"view": "answers"}))
+    await MipitiClient().get_behavioural_model("tm-1", view="answers", offset=10, limit=5)
+    assert dict(read.calls.last.request.url.params) == {"view": "answers",
+                                                        "offset": "10", "limit": "5"}
+
+
+def test_the_published_text_offers_the_answers_view() -> None:
+    text = _descriptions()["get_behavioural_model"]
+    assert 'view="answers"' in text and "standing_total" in text
+    assert 'view="answers"' in build_instructions()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("kwargs", [
     {"view": "everything"}, {"wait_seconds": 51}, {"wait_seconds": -1},
     {"view": "questions", "limit": 0}, {"view": "questions", "limit": 201},
     {"view": "questions", "offset": -1},
+    {"view": "answers", "limit": 0}, {"view": "answers", "limit": 201},
+    {"view": "answers", "offset": -1},
 ])
 async def test_a_behavioural_read_outside_the_api_bounds_is_refused(kwargs) -> None:
     client = _client()

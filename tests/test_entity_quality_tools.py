@@ -208,11 +208,16 @@ def test_the_tools_are_published_with_their_rules() -> None:
     for name in ("edit_asset", "edit_attacker"):
         assert "settles the pair" in tools[name], name
     for word in ("``not_flagged``", "``defect``", "``invalid``", "never guess",
-                 "never weaken a true claim", "It decides nothing",
-                 "creates no model version"):
+                 "never weaken a true claim", "The answer decides nothing",
+                 "creates no model version", "charged to whoever answers", "``billing``",
+                 "``message``", "relay the cost to the person", "reads ``unchecked``"):
         assert word in tools["answer_entity_question"], word
+    # Once an answer is stored its flag is not served: the text describes the
+    # entity as unchecked meanwhile, never as keeping its verdict.
+    assert "stands until" not in tools["answer_entity_question"]
     assert "``quality``" in tools["get_entity"]
     instructions = server.build_instructions("pro", "user")
     for name in ("apply_entity_proposals", "answer_entity_question", "settle_entity_rating"):
         assert f"`{name}`" in instructions, name
     assert "`proposal_hash`" in instructions and "`stale_only`" in instructions
+    assert "paid by whoever answers" in instructions
