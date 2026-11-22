@@ -9,6 +9,12 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.110.0] - 2026-11-22
+
+### Added
+
+- `release_behavioural_elements` releases several held behavioural elements in one model version, answering each element. (#402)
+
 ## [0.109.0] - 2026-11-21
 
 ### Added
