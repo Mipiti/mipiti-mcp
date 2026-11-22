@@ -28,7 +28,7 @@ JUDGMENT_TOOLS = {
     "answer_attacker_credentials", "update_finding", "remediate_finding",
     "create_risk_acceptance", "confirm_behavioural_model", "answer_entity_question",
     "edit_asset", "add_assumption", "edit_behavioural_element", "remove_behavioural_element",
-    "release_behavioural_element",
+    "release_behavioural_element", "release_behavioural_elements",
 }
 
 #: Tools whose description names a judgment without being one: they read, and
