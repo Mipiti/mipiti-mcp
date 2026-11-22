@@ -3558,6 +3558,19 @@ class MipitiClient:
             {"collection": collection, "element_id": element_id},
         )
 
+    async def release_behavioural_elements(
+        self, model_id: str, elements: list[dict],
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/elements/release-many.
+
+        Releases several elements held as written in one model version, each
+        answered in ``results``; no version where none was held.
+        """
+        return await self._post(
+            self._behavioural(model_id, "/elements/release-many"),
+            {"elements": elements},
+        )
+
     async def confirm_behavioural_model(
         self, model_id: str, ir_hash: str, note: str = "",
     ) -> dict:

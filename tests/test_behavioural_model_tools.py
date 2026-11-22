@@ -117,6 +117,13 @@ async def test_writes_use_the_verbs_and_bodies_the_api_takes(mock_env: None) -> 
     await client.release_behavioural_element("tm-1", "channels", "ch1")
     assert _body(release) == {"collection": "channels", "element_id": "ch1"}
 
+    many = respx.post(BASE + "/elements/release-many").mock(return_value=ok)
+    await client.release_behavioural_elements(
+        "tm-1", [{"collection": "channels", "element_id": "ch1"},
+                 {"collection": "actions", "element_id": "a1"}])
+    assert _body(many) == {"elements": [{"collection": "channels", "element_id": "ch1"},
+                                        {"collection": "actions", "element_id": "a1"}]}
+
     confirm = respx.post(BASE + "/confirm").mock(return_value=ok)
     await client.confirm_behavioural_model("tm-1", "abc", note="reviewed")
     assert _body(confirm) == {"ir_hash": "abc", "note": "reviewed"}
@@ -175,6 +182,43 @@ async def test_an_element_write_answers_what_it_did_not_the_whole_model(mock_env
         assert [q["question_id"] for q in out["questions_about_it"]] == ["q1"]
         assert out["questions_open"] == 2
         assert len(json.dumps(out)) < 2000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_batch_release_answers_each_element_and_never_the_whole_model(
+        mock_env: None) -> None:
+    whole = {"model_id": "tm-1", "model_version": 10, "changed": True, "status": "extracted",
+             "ir_hash": "h10", "ir": {"actions": [{"id": "a" * 20} for _ in range(500)]},
+             "questions": [{"question_id": "q1"}],
+             "results": [{"collection": "channels", "element_id": "ch1", "outcome": "released"},
+                         {"collection": "channels", "element_id": "ch2",
+                          "outcome": "not_declared"}]}
+    route = respx.post(BASE + "/elements/release-many").mock(
+        return_value=httpx.Response(200, json=whole))
+    out = await server.release_behavioural_elements(
+        server_version="x", model_id="tm-1",
+        elements=json.dumps([{"collection": "channels", "element_id": "ch1"},
+                             {"collection": " channels ", "element_id": " ch2 "}]))
+    assert _body(route) == {"elements": [{"collection": "channels", "element_id": "ch1"},
+                                         {"collection": "channels", "element_id": "ch2"}]}
+    assert "ir" not in out and out["model_version"] == 10 and out["questions_open"] == 1
+    assert [r["outcome"] for r in out["results"]] == ["released", "not_declared"]
+    assert len(json.dumps(out)) < 2000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elements", [
+    "[]", "{}", "not json", '[{"collection": "actions"}]', '[{"element_id": "a1"}]',
+    json.dumps([{"collection": "actions", "element_id": f"a{i}"} for i in range(201)]),
+])
+async def test_a_batch_release_the_api_would_refuse_is_refused_before_the_call(elements) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.release_behavioural_elements(
+                server_version="x", model_id="tm-1", elements=elements)
+    client.release_behavioural_elements.assert_not_awaited()
 
 
 @pytest.mark.asyncio
