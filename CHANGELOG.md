@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.110.1] - 2026-11-23
+
+### Changed
+
+- Agents wait for a queued quality check (`check.runs_after`) instead of requesting it again, and read an entity's previous verdict as `quality.last_verdict` while it waits. (#404)
+- Agents ask for an extraction rather than answering a `traced` question the extraction itself settles. (#404)
+
 ## [0.110.0] - 2026-11-22
 
 ### Added
