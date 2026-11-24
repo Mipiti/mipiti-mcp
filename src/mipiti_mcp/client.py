@@ -3573,16 +3573,36 @@ class MipitiClient:
 
     async def confirm_behavioural_model(
         self, model_id: str, ir_hash: str, note: str = "",
+        confirm_estimate: bool = False, model_version: int | None = None,
     ) -> dict:
         """POST /api/models/{model_id}/behavioural-model/confirm.
 
         Confirms the model whose ``ir_hash`` the caller reviewed. Creates a
-        model version.
+        model version. Where a regeneration is owed before certification the
+        confirmation is a paid act: without ``confirm_estimate`` the answer
+        carries the itemised ``estimate`` and nothing is charged or written;
+        with it, ``model_version`` names the version the estimate was given
+        for. ``confirm_estimate`` and ``model_version`` are sent only when
+        set.
+
+        A 402 (the balance cannot cover the estimate) and a 409 (the version
+        moved, a job is running, the estimate is still computing) are answers,
+        not errors: they come back as
+        ``{"confirmed": False, "http_status": ..., **detail}`` so a caller can
+        relay them. Any other failure, a 403 refusal included, raises.
         """
-        return await self._post(
-            self._behavioural(model_id, "/confirm"),
-            {"ir_hash": ir_hash, "note": note},
-        )
+        body: dict[str, Any] = {"ir_hash": ir_hash, "note": note}
+        if confirm_estimate:
+            body["confirm_estimate"] = True
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        resp = await self._request_with_idempotency(
+            "POST", self._behavioural(model_id, "/confirm"), json=body)
+        if resp.status_code in (402, 409):
+            return {"confirmed": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
 
     async def get_behavioural_links(self, model_id: str) -> dict:
         """GET /api/models/{model_id}/behavioural-model/links.

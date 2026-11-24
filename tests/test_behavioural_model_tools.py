@@ -414,6 +414,77 @@ async def test_a_refused_judgment_raises_with_its_escalation(mock_env: None) -> 
     assert "E-1" in err.value.response.text
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_estimate_sends_only_what_is_set(mock_env: None) -> None:
+    route = respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
+        200, json={"confirmed": False, "model_version": 7,
+                   "estimate": {"regeneration": 3.0, "certifications": 2,
+                                "ceiling": 9.0}}))
+    out = await MipitiClient().confirm_behavioural_model("tm-1", "abc")
+    assert out["estimate"]["ceiling"] == 9.0
+    assert _body(route) == {"ir_hash": "abc", "note": ""}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_computing_estimate_is_passed_through(mock_env: None) -> None:
+    respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
+        200, json={"estimate": {"status": "computing"}, "poll_after_seconds": 5}))
+    out = await MipitiClient().confirm_behavioural_model("tm-1", "abc")
+    assert out["estimate"]["status"] == "computing"
+    assert out["poll_after_seconds"] == 5
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_with_estimate_names_the_version(mock_env: None) -> None:
+    route = respx.post(BASE + "/confirm").mock(
+        return_value=httpx.Response(200, json={"status": "confirmed"}))
+    await MipitiClient().confirm_behavioural_model(
+        "tm-1", "abc", confirm_estimate=True, model_version=7)
+    assert _body(route) == {"ir_hash": "abc", "note": "", "confirm_estimate": True,
+                            "model_version": 7}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "review_stale"),
+                                         (409, "estimate_computing"),
+                                         (409, "extraction_running"),
+                                         (402, "insufficient_credits")])
+async def test_confirm_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().confirm_behavioural_model(
+        "tm-1", "abc", confirm_estimate=True, model_version=7)
+    assert out["confirmed"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_confirm_tool_forwards_the_estimate_flow() -> None:
+    client = _client(confirm_behavioural_model={"confirmed": False})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.confirm_behavioural_model(
+            server_version="0", model_id="tm-1", ir_hash=" abc ",
+            confirm_estimate=True, model_version=7)
+    client.confirm_behavioural_model.assert_awaited_once_with(
+        "tm-1", "abc", note="", confirm_estimate=True, model_version=7)
+
+
+def test_confirm_tool_text_tells_the_flow() -> None:
+    import asyncio
+    tools = {t.name: " ".join((t.description or "").split())
+             for t in asyncio.run(server.mcp.list_tools())}
+    for word in ("``confirm_estimate``", "``model_version``", "``estimate_computing``",
+                 "``poll_after_seconds``", "spending allowance",
+                 "Never retry a 402 or a 403"):
+        assert word in tools["confirm_behavioural_model"], word
+    assert "``regeneration_owed``" in tools["get_behavioural_model"]
+
+
 # ------------------------------------------------------------------
 # Tools
 # ------------------------------------------------------------------

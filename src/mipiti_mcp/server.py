@@ -8244,7 +8244,9 @@ async def get_behavioural_model(
     expected, estimated finish); ``extraction.dropped_elements``: what it
     could not keep, each asked by a question of its own (closure
     ``dropped``), which takes no dismissal. ``generation_ready``: call
-    ``generate_from_behavioural_model``.
+    ``generate_from_behavioural_model``. ``regeneration_owed`` and
+    ``certifications_awaiting_consent`` show work owed: estimate
+    ``confirm_behavioural_model`` first.
 
     ``view="status"`` serves no IR and no questions: use it to follow an
     extraction. ``view="questions"``: that and the open questions from
@@ -8257,8 +8259,7 @@ async def get_behavioural_model(
     large model cuts its answers first. A page may end early to stay within the size bound
     (``truncated``): read on from ``next_offset`` until it is null.
     ``wait_seconds`` (0 to 50) waits for the job's state, pass or calls
-    completed to change, sending progress ("call 3 of 5: actions")
-    meanwhile; at once when no job runs. Read again after
+    completed to change, sending progress meanwhile; at once when no job runs. Read again after
     ``poll_after_seconds``.
 
     Args:
@@ -8689,16 +8690,44 @@ async def confirm_behavioural_model(
     model_id: str,
     ir_hash: str,
     note: str = "",
+    confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
     evidence: str = "",
 ) -> dict:
     """Confirm a model's behavioural model as reviewed. Mutating; creates a
-    model version.
+    model version. A paid action where a regeneration is owed before
+    certification.
 
     Confirm only the model whose ``ir_hash`` was reviewed, which is the one
     ``get_behavioural_model`` returns. Refused with 409: ``review_stale``
-    (the model is not that hash now), ``stale`` (the description changed since
-    it was extracted) or ``needs_answers`` (an owner question is open). An
-    edit voids a confirmation.
+    (the model is not that hash now, or its version moved since the
+    estimate), ``stale`` (the description changed since it was extracted),
+    ``needs_answers`` (an owner question is open) or ``extraction_running``
+    (a job of the model is queued or running: poll it). An edit voids a
+    confirmation.
+
+    Where a regeneration is owed before certification, the confirmation is
+    also consent to that regeneration and the certifications after it, so it
+    is estimated first:
+
+    1. Call without ``confirm_estimate`` (the default): nothing is charged or
+       written. The answer carries an itemised ``estimate`` (the
+       regeneration, and the number of certifications with the ceiling they
+       are charged within) and the ``model_version`` it was given for. If
+       ``estimate.status`` is ``computing``, read again after
+       ``poll_after_seconds``; a confirmation sent meanwhile is refused 409
+       ``estimate_computing``.
+    2. Show the estimate to the person, or, for a program, check it against
+       the spending allowance the workspace grants programs. Confirm only
+       when they agree.
+    3. Call again with ``confirm_estimate=True`` and the ``model_version``
+       the estimate named. The confirmation is written and the work queued.
+
+    When no regeneration is owed the call confirms at once, as before.
+
+    A 402 (the balance cannot cover the estimate) and a 409 come back as
+    data, ``{confirmed: false, http_status, code, message}``. Never retry a
+    402 or a 403: report it.
 
     A program's confirmation is a judgment. Unless the workspace's delegation
     policy admits it, it is refused with 403 and an ``escalation_id`` and
@@ -8709,12 +8738,17 @@ async def confirm_behavioural_model(
         model_id: ID of the threat model.
         ir_hash: The ``ir_hash`` reviewed.
         note: Optional note recorded with the confirmation.
+        confirm_estimate: False (default) estimates where an estimate is
+            owed; True confirms and accepts it.
+        model_version: With ``confirm_estimate=True``: the version the
+            estimate named.
     """
     if not ir_hash.strip():
         raise ToolError("ir_hash is required.")
     try:
         return _dump(await _get_client().confirm_behavioural_model(
-            model_id, ir_hash.strip(), note=note))
+            model_id, ir_hash.strip(), note=note,
+            confirm_estimate=confirm_estimate, model_version=model_version))
     except Exception as exc:
         raise _api_error(exc) from exc
 
