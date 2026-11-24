@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.112.0] - 2026-11-24
+
+### Added
+
+- feat: new tool `regenerate_behavioural_model` (estimate, then confirm). (#408)
+- feat: `answer_behavioural_questions` documents and validates `premise`. (#408)
+
 ## [0.111.0] - 2026-11-24
 
 ### Added
