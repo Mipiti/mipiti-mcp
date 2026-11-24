@@ -9,6 +9,15 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.111.0] - 2026-11-24
+
+### Added
+
+- feat: `confirm_behavioural_model` takes `confirm_estimate` and `model_version` and returns the estimate before a confirmation that consents to an owed regeneration and the certifications after it. (#406)
+- feat: `answer_behavioural_questions` documents and validates `beyond_structure`; structured answers are required where a question offers a form. (#406)
+- feat: new tool `accept_behavioural_proposal`. (#406)
+- feat: `request_inventory_checks` takes `confirm_estimate` and estimates before it queues. (#406)
+
 ## [0.110.1] - 2026-11-23
 
 ### Changed
