@@ -522,6 +522,75 @@ async def test_answers_are_parsed_and_forwarded() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [
+    {"question_id": "q1", "text": "x", "beyond_structure": "yes"},
+    {"question_id": "q1", "text": "x", "beyond_structure": 1},
+    {"question_id": "q1", "text": "x", "beyond_structure": True,
+     "structured": {"classes": ["a"]}},
+    {"question_id": "q1", "text": "x", "beyond_structure": True,
+     "disposition": "not_needed"},
+    {"question_id": "q1", "text": "x", "beyond_structure": True,
+     "disposition": "as_stated"},
+    {"question_id": "q1", "text": " ", "beyond_structure": True},
+    {"question_id": "q1", "beyond_structure": True},
+])
+async def test_a_misused_beyond_structure_is_refused_before_the_call(
+        answer: dict) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.answer_behavioural_questions(
+                server_version="0", model_id="tm-1", answers=json.dumps([answer]))
+    client.answer_behavioural_questions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_beyond_structure_is_forwarded_when_valid() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "text": "Also on retry.", "beyond_structure": True},
+               {"question_id": "q2", "beyond_structure": False, "text": "y"},
+               {"question_id": "q3", "structured": {"classes": ["a"]},
+                "text": "a note", "beyond_structure": False}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_beyond_structure_reaches_the_route_in_the_body(mock_env: None) -> None:
+    route = respx.post(BASE + "/answers").mock(
+        return_value=httpx.Response(200, json={"changed": True}))
+    answer = {"question_id": "q1", "text": "Also on retry.", "beyond_structure": True}
+    await MipitiClient().answer_behavioural_questions("tm-1", [answer])
+    assert _body(route)["answers"] == [answer]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_structured_value_refusal_surfaces_with_its_detail(
+        mock_env: None) -> None:
+    respx.post(BASE + "/answers").mock(return_value=httpx.Response(
+        422, json={"detail": {"code": "structured_value_required",
+                              "questions": [{"question_id": "q1",
+                                             "forms_offered": ["as_stated"]}]}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().answer_behavioural_questions(
+            "tm-1", [{"question_id": "q1", "text": "x"}])
+    assert "structured_value_required" in err.value.response.text
+
+
+def test_answer_tool_text_states_the_structured_rule() -> None:
+    tools = _descriptions()
+    for word in ("``structured_forms``", "``structured_value_required``",
+                 "``forms_offered``", "``beyond_structure: true``", "``replaces``"):
+        assert word in tools["answer_behavioural_questions"], word
+    assert "``structured_forms``" in tools["get_behavioural_model"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("answers,extract_now", [
     ("not json", False),
     ('{"question_id": "q1"}', False),
