@@ -101,7 +101,7 @@ mipiti-mcp install-skill --dir path/to/skills
 
 It replaces only a copy it wrote, and refuses to overwrite any other file.
 
-## Tools (<!--MCP_TOOL_COUNT-->172<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->173<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -385,6 +385,7 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 git clone https://github.com/Mipiti/mipiti-mcp.git
 cd mipiti-mcp
 pip install -e ".[dev]"
+bash scripts/install-hooks.sh   # pre-commit keeps the documented counts current
 python -m pytest -v
 ```
 

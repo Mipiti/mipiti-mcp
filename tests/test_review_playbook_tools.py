@@ -29,6 +29,7 @@ JUDGMENT_TOOLS = {
     "create_risk_acceptance", "confirm_behavioural_model", "answer_entity_question",
     "edit_asset", "add_assumption", "edit_behavioural_element", "remove_behavioural_element",
     "release_behavioural_element", "release_behavioural_elements",
+    "accept_behavioural_proposal",
 }
 
 #: Tools whose description names a judgment without being one: they read, and

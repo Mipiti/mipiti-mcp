@@ -8236,15 +8236,16 @@ async def get_behavioural_model(
     description changed since) or ``extracting``. ``questions`` are the open
     ones, answered with ``answer_behavioural_questions``; one carrying
     ``structured`` takes a structured answer, one with ``awaiting_fix`` was
-    answered. ``pending_answers``: collected, not extracted. ``ir_hash`` is
+    answered. Each carries ``structured_forms``. ``pending_answers``: collected, not extracted. ``ir_hash`` is
     what ``confirm_behavioural_model`` names. ``waiting_on``:
     ``extraction``, ``acceptance``, ``answers``, ``generation`` or
     ``nothing``. ``extraction.job``: the extraction running in the
-    background (null when none), its ``progress`` (pass, calls done and
-    expected, estimated finish); ``extraction.dropped_elements``: what it
+    background (null when none), its ``progress``;``extraction.dropped_elements``: what it
     could not keep, each asked by a question of its own (closure
     ``dropped``), which takes no dismissal. ``generation_ready``: call
-    ``generate_from_behavioural_model``.
+    ``generate_from_behavioural_model``. ``regeneration_owed`` and
+    ``certifications_awaiting_consent`` show work owed: estimate
+    ``confirm_behavioural_model`` first.
 
     ``view="status"`` serves no IR and no questions: use it to follow an
     extraction. ``view="questions"``: that and the open questions from
@@ -8257,8 +8258,7 @@ async def get_behavioural_model(
     large model cuts its answers first. A page may end early to stay within the size bound
     (``truncated``): read on from ``next_offset`` until it is null.
     ``wait_seconds`` (0 to 50) waits for the job's state, pass or calls
-    completed to change, sending progress ("call 3 of 5: actions")
-    meanwhile; at once when no job runs. Read again after
+    completed to change, sending progress meanwhile; at once when no job runs. Read again after
     ``poll_after_seconds``.
 
     Args:
@@ -8355,49 +8355,48 @@ async def answer_behavioural_questions(
     """Answer open behavioural questions, many in one call. Mutating; creates
     a model version.
 
-    Answer only from what the code or the owner shows; say ``unknown``
-    rather than guess, in a sentence or two. An extraction runs once every
+    Answer only from what the code or the owner shows; else ``unknown``.
+    An extraction runs once every
     owner question that holds one has an answer, or on ``extract_now=True``
-    (with no answers, refused 409 ``questions_open`` while a holding one
-    is open unless ``extraction.superseded``, and 409
-    ``extraction_running`` while one is queued or running, or with no answer
-    since it started: poll it), billed as ``billed_to`` says (402 when short).
-    ``collect_only=True`` records them, extracting nothing.
-
-    A fact correcting earlier answers names their ids in ``replaces``; none
-    is read again.
-
-    ``dry_run=True`` records nothing and returns ``outcome``: whether they
-    extract (``extracts``, ``estimate``), the questions left or ``raised``.
+    (with no answers, 409 ``questions_open`` while a holding one is open
+    unless ``extraction.superseded``; 409 ``extraction_running`` while one
+    runs: poll it), billed as ``billed_to`` says (402 when short).
+    ``collect_only=True`` extracts nothing. ``dry_run=True`` records nothing,
+    returns ``outcome`` (``extracts``, ``estimate``, ``raised``). A fact correcting earlier answers names
+    their ids in ``replaces``; none is read again.
 
     An answer is a fact (``text``), or a ``disposition`` its question lists:
     ``not_needed``, ``not_behaviour``, ``unknown``, ``as_stated``; ``text``
     is then a note. A question about the model's own structure carries
     ``structured``: its ``answer`` is the shape to send (e.g.
-    ``{"describes": [...]}``, ``{"changes": {field: [actions]}}``), the
-    rest the ids it may name; a key the shape lacks is refused 422
-    ``structured_malformed``, naming the shape. A contents id not offered
-    is a new element there (``not_needed``: the zone holds nothing). An
-    offer with ``new_zones`` or ``new_actors`` takes a zone or receiver it
-    does not list, added (409 ``id_in_use`` when the id names something
-    else). It edits the model at once. Where the code does more or less than
-    the sentence, add ``contradicts: {"direction": "code_does_more" |
-    "code_does_less", "quote"?}`` (409 ``drift_is_defect`` over a defect's
-    sentence).
+    ``{"describes": [...]}``), the rest the ids it may name; a key the shape
+    lacks is refused 422 ``structured_malformed``, naming the shape.
+    A contents id not offered is a new element there. It edits the model at
+    once (``new_zones``, ``new_actors``: 409 ``id_in_use``). Where the code does more or less than the sentence, add
+    ``contradicts: {"direction": "code_does_more" | "code_does_less",
+    "quote"?}`` (409 ``drift_is_defect`` over a defect's sentence).
 
-    A program's answer is a judgment: refused with 403 and an
-    ``escalation_id`` unless delegated. Do not retry; poll
-    ``list_proposals``.
+    Where a question's ``structured_forms`` lists ``structured`` or
+    ``as_stated``, answer with that value; ``text`` is then a note never read
+    into the model. Words alone are refused 422 ``structured_value_required``
+    (naming ``forms_offered`` and a row's ``answer`` shape). Only words marked
+    ``beyond_structure: true`` are read: use it only when the answer says more
+    than the form holds. A correction (``replaces``) needs no mark.
 
-    With an extraction asked for, ``queued`` is true: follow it with
-    ``get_behavioural_model(view="status", wait_seconds=50)``.
+    A program's answer is a judgment: 403 with an ``escalation_id`` unless
+    delegated. Do not retry; poll ``list_proposals``.
+
+    Follow a queued extraction with ``get_behavioural_model(view="status")``.
 
     Args:
         model_id: ID of the threat model.
         answers: JSON array of ``{"question_id", "text"?, "disposition"?,
-            "structured"?, "contradicts"?, "replaces"?}``, e.g. '[{"question_id": "q1",
-            "text": "Only the owner deletes."}, {"question_id": "q3",
-            "structured": {"classes": ["org_admin"]}}]'.
+            "structured"?, "contradicts"?, "replaces"?, "beyond_structure"?}``,
+            e.g. '[{"question_id": "q1", "text": "Only the owner deletes.",
+            "beyond_structure": true}, {"question_id": "q3",
+            "structured": {"classes": ["org_admin"]}}]'. ``beyond_structure``
+            is a bool, only on a fact in words with a non-empty ``text``,
+            never beside ``structured``.
         extract_now: Extract now, with the answers collected.
         dry_run: Return what the answers would do (``outcome``) and record
             nothing. Default False.
@@ -8431,6 +8430,18 @@ async def answer_behavioural_questions(
         if replaces is not None and not (
                 isinstance(replaces, list) and all(isinstance(r, str) for r in replaces)):
             raise ToolError("replaces is a list of the clarification ids the fact replaces.")
+        beyond = a.get("beyond_structure")
+        if beyond is not None and not isinstance(beyond, bool):
+            raise ToolError("beyond_structure is true or false.")
+        if beyond:
+            if structured is not None:
+                raise ToolError("beyond_structure marks words that say more than a "
+                                "structured form holds; send it without structured.")
+            if disposition != "fact":
+                raise ToolError("beyond_structure applies only to a fact.")
+            if not str(a.get("text", "")).strip():
+                raise ToolError("beyond_structure needs a non-empty text: the words "
+                                "that say more than the form holds.")
     if not parsed and not extract_now:
         raise ToolError("Give at least one answer, or pass extract_now=True.")
     if collect_only and extract_now:
@@ -8689,16 +8700,44 @@ async def confirm_behavioural_model(
     model_id: str,
     ir_hash: str,
     note: str = "",
+    confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
     evidence: str = "",
 ) -> dict:
     """Confirm a model's behavioural model as reviewed. Mutating; creates a
-    model version.
+    model version. A paid action where a regeneration is owed before
+    certification.
 
     Confirm only the model whose ``ir_hash`` was reviewed, which is the one
     ``get_behavioural_model`` returns. Refused with 409: ``review_stale``
-    (the model is not that hash now), ``stale`` (the description changed since
-    it was extracted) or ``needs_answers`` (an owner question is open). An
-    edit voids a confirmation.
+    (the model is not that hash now, or its version moved since the
+    estimate), ``stale`` (the description changed since it was extracted),
+    ``needs_answers`` (an owner question is open) or ``extraction_running``
+    (a job of the model is queued or running: poll it). An edit voids a
+    confirmation.
+
+    Where a regeneration is owed before certification, the confirmation is
+    also consent to that regeneration and the certifications after it, so it
+    is estimated first:
+
+    1. Call without ``confirm_estimate`` (the default): nothing is charged or
+       written. The answer carries an itemised ``estimate`` (the
+       regeneration, and the number of certifications with the ceiling they
+       are charged within) and the ``model_version`` it was given for. If
+       ``estimate.status`` is ``computing``, read again after
+       ``poll_after_seconds``; a confirmation sent meanwhile is refused 409
+       ``estimate_computing``.
+    2. Show the estimate to the person, or, for a program, check it against
+       the spending allowance the workspace grants programs. Confirm only
+       when they agree.
+    3. Call again with ``confirm_estimate=True`` and the ``model_version``
+       the estimate named. The confirmation is written and the work queued.
+
+    When no regeneration is owed the call confirms at once, as before.
+
+    A 402 (the balance cannot cover the estimate) and a 409 come back as
+    data, ``{confirmed: false, http_status, code, message}``. Never retry a
+    402 or a 403: report it.
 
     A program's confirmation is a judgment. Unless the workspace's delegation
     policy admits it, it is refused with 403 and an ``escalation_id`` and
@@ -8709,12 +8748,67 @@ async def confirm_behavioural_model(
         model_id: ID of the threat model.
         ir_hash: The ``ir_hash`` reviewed.
         note: Optional note recorded with the confirmation.
+        confirm_estimate: False (default) estimates where an estimate is
+            owed; True confirms and accepts it.
+        model_version: With ``confirm_estimate=True``: the version the
+            estimate named.
     """
     if not ir_hash.strip():
         raise ToolError("ir_hash is required.")
     try:
         return _dump(await _get_client().confirm_behavioural_model(
-            model_id, ir_hash.strip(), note=note))
+            model_id, ir_hash.strip(), note=note,
+            confirm_estimate=confirm_estimate, model_version=model_version))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+@_judgment
+async def accept_behavioural_proposal(
+    server_version: str,
+    model_id: str,
+    proposal_id: str,
+    model_version: int,
+    accept_removals: str = "[]",
+    note: str = "",
+    evidence: str = "",
+) -> dict:
+    """Accept a proposal for a model's behavioural model. Mutating; creates a
+    model version.
+
+    Accepting lands only the proposal's part changes, over the version it was
+    made on (``model_version``), never whole elements. List in
+    ``accept_removals`` every removal or supersede the proposal lists: one
+    left out is refused 409 ``removal_not_accepted``, naming it. 409
+    ``review_stale`` means the version moved: read the model again with
+    ``get_behavioural_model`` and accept the fresh proposal. 404
+    ``proposal_not_found``; 422 for a malformed request. The 409 and 404 come
+    back as data, ``{accepted: false, http_status, code, message}``.
+
+    A program's acceptance is a judgment: refused with 403 and an
+    ``escalation_id`` unless the workspace delegates it. Do not retry:
+    report the ``escalation_id`` and poll ``list_proposals``.
+
+    Returns ``{model_id, model_version, accepted, parts_landed}``.
+
+    Args:
+        model_id: ID of the threat model.
+        proposal_id: ID of the proposal.
+        model_version: The version the proposal was made on.
+        accept_removals: JSON array of the element ids whose removal or
+            supersede is accepted, e.g. '["copies"]'; '[]' when it lists none.
+        note: Optional note recorded with the acceptance.
+    """
+    if not proposal_id.strip():
+        raise ToolError("proposal_id is required.")
+    removals = _json_value(accept_removals, "accept_removals", list, '["copies"]')
+    if not all(isinstance(r, str) and r.strip() for r in removals):
+        raise ToolError("accept_removals is a list of element ids.")
+    try:
+        return _dump(await _get_client().accept_behavioural_proposal(
+            model_id, proposal_id.strip(), model_version,
+            accept_removals=[r.strip() for r in removals], note=note))
     except Exception as exc:
         raise _api_error(exc) from exc
 
@@ -9199,21 +9293,36 @@ async def get_inventory_judgements(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
-async def request_inventory_checks(server_version: str, model_id: str) -> dict:
+async def request_inventory_checks(
+    server_version: str, model_id: str, confirm_estimate: bool = False,
+) -> dict:
     """Queue the checks a model's inventory lacks: the tag check of every
     entity whose tags are not current, and the duplicate check of every entry
-    on a pair no current check covers. Mutating: queues background work.
+    on a pair no current check covers. Mutating only with
+    ``confirm_estimate=True``: queues paid background work then.
+
+    1. Call without ``confirm_estimate`` (the default): nothing is queued.
+       The answer carries the ``estimate`` (``credits``, ``platform_credits``,
+       ``by_kind``), ``billing`` and ``confirmed: false``. RELAY THE ESTIMATE
+       TO THE PERSON; a program confirms only within its spending allowance.
+    2. Once they agree, call with ``confirm_estimate=True``: the checks the
+       estimate described are queued.
 
     Those the platform made stale are recorded as its own request, the rest
-    under the caller. Returns ``{model_id, queued, platform}``: the checks
-    queued by kind, and the platform's share. Read the results with
-    ``get_inventory_judgements`` once they land.
+    under the caller. The answer holds ``queued`` by kind and the platform's
+    share (``platform``). Read the results with ``get_inventory_judgements``
+    once they land. A 402 comes back as data, ``{confirmed: false,
+    http_status, code, message}``. A 403 ``allowance_exceeded`` with an
+    ``escalation_id`` means a program's act over its allowance is parked for a
+    person: do not retry, poll ``list_proposals``.
 
     Args:
         model_id: ID of the threat model.
+        confirm_estimate: False (default) estimates; True queues the checks.
     """
     try:
-        return _dump(await _get_client().request_inventory_checks(model_id))
+        return _dump(await _get_client().request_inventory_checks(
+            model_id, confirm_estimate=confirm_estimate))
     except Exception as exc:
         raise _api_error(exc) from exc
 

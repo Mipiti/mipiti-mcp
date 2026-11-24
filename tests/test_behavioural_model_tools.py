@@ -414,6 +414,77 @@ async def test_a_refused_judgment_raises_with_its_escalation(mock_env: None) -> 
     assert "E-1" in err.value.response.text
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_estimate_sends_only_what_is_set(mock_env: None) -> None:
+    route = respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
+        200, json={"confirmed": False, "model_version": 7,
+                   "estimate": {"regeneration": 3.0, "certifications": 2,
+                                "ceiling": 9.0}}))
+    out = await MipitiClient().confirm_behavioural_model("tm-1", "abc")
+    assert out["estimate"]["ceiling"] == 9.0
+    assert _body(route) == {"ir_hash": "abc", "note": ""}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_computing_estimate_is_passed_through(mock_env: None) -> None:
+    respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
+        200, json={"estimate": {"status": "computing"}, "poll_after_seconds": 5}))
+    out = await MipitiClient().confirm_behavioural_model("tm-1", "abc")
+    assert out["estimate"]["status"] == "computing"
+    assert out["poll_after_seconds"] == 5
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_confirm_with_estimate_names_the_version(mock_env: None) -> None:
+    route = respx.post(BASE + "/confirm").mock(
+        return_value=httpx.Response(200, json={"status": "confirmed"}))
+    await MipitiClient().confirm_behavioural_model(
+        "tm-1", "abc", confirm_estimate=True, model_version=7)
+    assert _body(route) == {"ir_hash": "abc", "note": "", "confirm_estimate": True,
+                            "model_version": 7}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "review_stale"),
+                                         (409, "estimate_computing"),
+                                         (409, "extraction_running"),
+                                         (402, "insufficient_credits")])
+async def test_confirm_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(BASE + "/confirm").mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().confirm_behavioural_model(
+        "tm-1", "abc", confirm_estimate=True, model_version=7)
+    assert out["confirmed"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_confirm_tool_forwards_the_estimate_flow() -> None:
+    client = _client(confirm_behavioural_model={"confirmed": False})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.confirm_behavioural_model(
+            server_version="0", model_id="tm-1", ir_hash=" abc ",
+            confirm_estimate=True, model_version=7)
+    client.confirm_behavioural_model.assert_awaited_once_with(
+        "tm-1", "abc", note="", confirm_estimate=True, model_version=7)
+
+
+def test_confirm_tool_text_tells_the_flow() -> None:
+    import asyncio
+    tools = {t.name: " ".join((t.description or "").split())
+             for t in asyncio.run(server.mcp.list_tools())}
+    for word in ("``confirm_estimate``", "``model_version``", "``estimate_computing``",
+                 "``poll_after_seconds``", "spending allowance",
+                 "Never retry a 402 or a 403"):
+        assert word in tools["confirm_behavioural_model"], word
+    assert "``regeneration_owed``" in tools["get_behavioural_model"]
+
+
 # ------------------------------------------------------------------
 # Tools
 # ------------------------------------------------------------------
@@ -448,6 +519,75 @@ async def test_answers_are_parsed_and_forwarded() -> None:
     client.answer_behavioural_questions.assert_awaited_once_with(
         "tm-1", [{"question_id": "q1", "text": "Only the owner."}],
         extract_now=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [
+    {"question_id": "q1", "text": "x", "beyond_structure": "yes"},
+    {"question_id": "q1", "text": "x", "beyond_structure": 1},
+    {"question_id": "q1", "text": "x", "beyond_structure": True,
+     "structured": {"classes": ["a"]}},
+    {"question_id": "q1", "text": "x", "beyond_structure": True,
+     "disposition": "not_needed"},
+    {"question_id": "q1", "text": "x", "beyond_structure": True,
+     "disposition": "as_stated"},
+    {"question_id": "q1", "text": " ", "beyond_structure": True},
+    {"question_id": "q1", "beyond_structure": True},
+])
+async def test_a_misused_beyond_structure_is_refused_before_the_call(
+        answer: dict) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.answer_behavioural_questions(
+                server_version="0", model_id="tm-1", answers=json.dumps([answer]))
+    client.answer_behavioural_questions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_beyond_structure_is_forwarded_when_valid() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "text": "Also on retry.", "beyond_structure": True},
+               {"question_id": "q2", "beyond_structure": False, "text": "y"},
+               {"question_id": "q3", "structured": {"classes": ["a"]},
+                "text": "a note", "beyond_structure": False}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_beyond_structure_reaches_the_route_in_the_body(mock_env: None) -> None:
+    route = respx.post(BASE + "/answers").mock(
+        return_value=httpx.Response(200, json={"changed": True}))
+    answer = {"question_id": "q1", "text": "Also on retry.", "beyond_structure": True}
+    await MipitiClient().answer_behavioural_questions("tm-1", [answer])
+    assert _body(route)["answers"] == [answer]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_structured_value_refusal_surfaces_with_its_detail(
+        mock_env: None) -> None:
+    respx.post(BASE + "/answers").mock(return_value=httpx.Response(
+        422, json={"detail": {"code": "structured_value_required",
+                              "questions": [{"question_id": "q1",
+                                             "forms_offered": ["as_stated"]}]}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().answer_behavioural_questions(
+            "tm-1", [{"question_id": "q1", "text": "x"}])
+    assert "structured_value_required" in err.value.response.text
+
+
+def test_answer_tool_text_states_the_structured_rule() -> None:
+    tools = _descriptions()
+    for word in ("``structured_forms``", "``structured_value_required``",
+                 "``forms_offered``", "``beyond_structure: true``", "``replaces``"):
+        assert word in tools["answer_behavioural_questions"], word
+    assert "``structured_forms``" in tools["get_behavioural_model"]
 
 
 @pytest.mark.asyncio
@@ -1143,6 +1283,132 @@ async def test_a_model_id_alone_generates_from_the_behavioural_model() -> None:
     assert out == {"generated": False, "message": "c"}
 
 
+PROPOSAL = BASE + "/proposals/P-1/accept"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_accepting_a_proposal_sends_the_version_and_removals(mock_env: None) -> None:
+    route = respx.post(PROPOSAL).mock(return_value=httpx.Response(
+        200, json={"model_id": "tm-1", "model_version": 8, "accepted": True,
+                   "parts_landed": ["a1"]}))
+    out = await MipitiClient().accept_behavioural_proposal(
+        "tm-1", "P-1", 7, accept_removals=["copies"], note="ok")
+    assert out["accepted"] is True and out["parts_landed"] == ["a1"]
+    assert _body(route) == {"model_version": 7, "accept_removals": ["copies"],
+                            "note": "ok"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_accepting_sends_an_empty_removal_list_by_default(mock_env: None) -> None:
+    route = respx.post(PROPOSAL).mock(
+        return_value=httpx.Response(200, json={"accepted": True}))
+    await MipitiClient().accept_behavioural_proposal("tm-1", "P-1", 7)
+    assert _body(route) == {"model_version": 7, "accept_removals": []}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "review_stale"),
+                                         (409, "removal_not_accepted"),
+                                         (404, "proposal_not_found")])
+async def test_proposal_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(PROPOSAL).mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().accept_behavioural_proposal("tm-1", "P-1", 7)
+    assert out["accepted"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refused_proposal_acceptance_raises_with_its_escalation(
+        mock_env: None) -> None:
+    respx.post(PROPOSAL).mock(return_value=httpx.Response(
+        403, json={"detail": {"code": "delegation_required", "escalation_id": "E-2"}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().accept_behavioural_proposal("tm-1", "P-1", 7)
+    assert "E-2" in err.value.response.text
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_tool_parses_removals_and_forwards() -> None:
+    client = _client(accept_behavioural_proposal={"accepted": True})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.accept_behavioural_proposal(
+            server_version="0", model_id="tm-1", proposal_id=" P-1 ",
+            model_version=7, accept_removals='[" copies "]')
+    client.accept_behavioural_proposal.assert_awaited_once_with(
+        "tm-1", "P-1", 7, accept_removals=["copies"], note="")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proposal_id,removals", [
+    (" ", "[]"), ("P-1", "not json"), ("P-1", '{"a": 1}'), ("P-1", "[1]"),
+    ("P-1", '[""]')])
+async def test_the_proposal_tool_refuses_bad_input_before_the_call(
+        proposal_id: str, removals: str) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.accept_behavioural_proposal(
+                server_version="0", model_id="tm-1", proposal_id=proposal_id,
+                model_version=7, accept_removals=removals)
+    client.accept_behavioural_proposal.assert_not_awaited()
+
+
+def test_the_proposal_tool_text_tells_the_flow() -> None:
+    text = " ".join(_descriptions()["accept_behavioural_proposal"].split())
+    for word in ("part changes", "never whole elements", "``accept_removals``",
+                 "``removal_not_accepted``", "``review_stale``",
+                 "accept the fresh proposal", "``escalation_id``", "Do not retry"):
+        assert word in text, word
+
+
+CHECKS = "https://test.api.mipiti.io/api/models/tm-1/inventory/judgements/request"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_inventory_checks_estimate_first_then_confirm(mock_env: None) -> None:
+    route = respx.post(CHECKS).mock(return_value=httpx.Response(
+        200, json={"estimate": {"credits": 4.0, "platform_credits": 1.0,
+                                "by_kind": {"entity_duplicates": 2, "entity_tags": 3}},
+                   "confirmed": False, "queued": {}, "platform": {}}))
+    out = await MipitiClient().request_inventory_checks("tm-1")
+    assert out["estimate"]["by_kind"]["entity_tags"] == 3 and out["confirmed"] is False
+    assert _body(route) == {"confirm_estimate": False}
+    route = respx.post(CHECKS).mock(return_value=httpx.Response(
+        200, json={"confirmed": True, "queued": {"entity_tags": 3}, "platform": {}}))
+    out = await MipitiClient().request_inventory_checks("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is True
+    assert _body(route) == {"confirm_estimate": True}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_inventory_checks_402_is_data_and_403_raises(mock_env: None) -> None:
+    respx.post(CHECKS).mock(return_value=httpx.Response(
+        402, json={"detail": {"code": "insufficient_credits", "message": "m"}}))
+    out = await MipitiClient().request_inventory_checks("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is False and out["http_status"] == 402
+    assert out["code"] == "insufficient_credits"
+    respx.post(CHECKS).mock(return_value=httpx.Response(
+        403, json={"detail": {"code": "allowance_exceeded", "escalation_id": "E-3"}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().request_inventory_checks("tm-1", confirm_estimate=True)
+    assert "E-3" in err.value.response.text
+
+
+def test_inventory_checks_text_tells_the_flow() -> None:
+    text = " ".join(_descriptions()["request_inventory_checks"].split())
+    for word in ("``confirm_estimate``", "RELAY THE ESTIMATE TO THE PERSON",
+                 "spending allowance", "``escalation_id``", "do not retry"):
+        assert word in text, word
+
+
 # ------------------------------------------------------------------
 # Published text
 # ------------------------------------------------------------------
@@ -1152,6 +1418,7 @@ _TOOLS = (
     "generate_from_behavioural_model",
     "answer_behavioural_questions", "edit_behavioural_element",
     "confirm_behavioural_model", "get_behavioural_links",
+    "accept_behavioural_proposal",
     "declare_behavioural_link", "accept_behavioural_link_proposals",
     "get_control_delta", "submit_control_delta", "request_delta_second_reading",
     "declare_control_delta", "get_behavioural_threats",
