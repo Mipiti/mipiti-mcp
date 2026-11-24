@@ -8338,6 +8338,59 @@ async def extract_behavioural_model(
         raise _api_error(exc) from exc
 
 
+@mcp.tool()
+async def regenerate_behavioural_model(
+    server_version: str,
+    model_id: str,
+    confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
+) -> dict:
+    """Check a model's behavioural model against its description with an
+    independent reading. Mutating only with ``confirm_estimate=True``; a paid
+    action then.
+
+    A regeneration reads the description and every answer that stands afresh,
+    shown nothing of the model, and compares that reading with the model part
+    by part. It writes nothing to the model: each difference is listed against
+    the answer that settled the part, or asked as a question (answer those
+    with ``answer_behavioural_questions``). It is paid for by whoever requests
+    it (or by Mipiti, where it says so): the estimate is RELAYED TO THE PERSON
+    before it is confirmed. Never confirm on your own.
+
+    Ask for one after a substantial amendment of the description (a new
+    capability, a changed flow, a paragraph of new text), once for the
+    amendments together, and before generating controls or certifying when
+    ``get_behavioural_model`` reports ``regeneration_owed`` with several
+    amendments or much changed text. Small wording fixes wait.
+
+    1. Call with ``confirm_estimate=False`` (the default): nothing is charged
+       or written. The answer carries the ``estimate`` (credits), who it is
+       billed to, the ``model_version`` it is for and the last regeneration
+       (``last``). Show it to the person.
+    2. Once they agree, call with ``confirm_estimate=True`` and that
+       ``model_version``. It is queued: follow it with
+       ``get_behavioural_model(view="status")`` until ``extraction.job`` is
+       null.
+
+    Refusals come back as data, ``{confirmed: false, http_status, code,
+    message}``: 409 ``review_stale`` (the model changed: estimate again), 409
+    ``extraction_running`` (poll it), 409 ``no_behavioural_model``, 402 (the
+    balance cannot cover it). A 404: the caller may not start paid actions
+    here. A program's regeneration over its spending allowance is refused 403
+    with an ``escalation_id``: do not retry, poll ``list_proposals``.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: False (default) estimates; True queues it.
+        model_version: With ``confirm_estimate=True``: the estimate's value.
+    """
+    try:
+        return _dump(await _get_client().regenerate_behavioural_model(
+            model_id, confirm_estimate=confirm_estimate, model_version=model_version))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
 _ANSWER_DISPOSITIONS = ("fact", "not_needed", "not_behaviour", "unknown", "as_stated")
 
 
@@ -8356,14 +8409,16 @@ async def answer_behavioural_questions(
     a model version.
 
     Answer only from what the code or the owner shows; else ``unknown``.
-    An extraction runs once every
-    owner question that holds one has an answer, or on ``extract_now=True``
-    (with no answers, 409 ``questions_open`` while a holding one is open
-    unless ``extraction.superseded``; 409 ``extraction_running`` while one
-    runs: poll it), billed as ``billed_to`` says (402 when short).
-    ``collect_only=True`` extracts nothing. ``dry_run=True`` records nothing,
-    returns ``outcome`` (``extracts``, ``estimate``, ``raised``). A fact correcting earlier answers names
-    their ids in ``replaces``; none is read again.
+    An extraction runs once every owner question that holds one has an
+    answer, or on ``extract_now=True`` (409 ``questions_open`` while a
+    holding one is open; 409 ``extraction_running``: poll it), billed as
+    ``billed_to`` says (402 when short).
+    ``collect_only=True`` extracts nothing; ``dry_run=True`` records nothing.
+    A fact correcting earlier answers names their ids in
+    ``replaces``; none is read again. ``premise: true`` records a fact as a
+    premise, taken on the owner's behalf where no authoritative source states
+    it: read as a fact, shown apart for a person to confirm, never narrowing
+    (a narrowing one is proposed, not applied).
 
     An answer is a fact (``text``), or a ``disposition`` its question lists:
     ``not_needed``, ``not_behaviour``, ``unknown``, ``as_stated``; ``text``
@@ -8372,26 +8427,25 @@ async def answer_behavioural_questions(
     ``{"describes": [...]}``), the rest the ids it may name; a key the shape
     lacks is refused 422 ``structured_malformed``, naming the shape.
     A contents id not offered is a new element there. It edits the model at
-    once (``new_zones``, ``new_actors``: 409 ``id_in_use``). Where the code does more or less than the sentence, add
-    ``contradicts: {"direction": "code_does_more" | "code_does_less",
+    once (``new_zones``, ``new_actors``: 409 ``id_in_use``). Where the code
+    does more or less than the sentence, add ``contradicts: {"direction": "code_does_more" | "code_does_less",
     "quote"?}`` (409 ``drift_is_defect`` over a defect's sentence).
 
     Where a question's ``structured_forms`` lists ``structured`` or
     ``as_stated``, answer with that value; ``text`` is then a note never read
     into the model. Words alone are refused 422 ``structured_value_required``
     (naming ``forms_offered`` and a row's ``answer`` shape). Only words marked
-    ``beyond_structure: true`` are read: use it only when the answer says more
-    than the form holds. A correction (``replaces``) needs no mark.
+    ``beyond_structure: true`` are read, when the answer says more than the
+    form holds. A correction (``replaces``) needs no mark.
 
     A program's answer is a judgment: 403 with an ``escalation_id`` unless
     delegated. Do not retry; poll ``list_proposals``.
 
-    Follow a queued extraction with ``get_behavioural_model(view="status")``.
-
     Args:
         model_id: ID of the threat model.
         answers: JSON array of ``{"question_id", "text"?, "disposition"?,
-            "structured"?, "contradicts"?, "replaces"?, "beyond_structure"?}``,
+            "structured"?, "contradicts"?, "replaces"?, "beyond_structure"?,
+            "premise"?}``,
             e.g. '[{"question_id": "q1", "text": "Only the owner deletes.",
             "beyond_structure": true}, {"question_id": "q3",
             "structured": {"classes": ["org_admin"]}}]'. ``beyond_structure``
@@ -8430,6 +8484,11 @@ async def answer_behavioural_questions(
         if replaces is not None and not (
                 isinstance(replaces, list) and all(isinstance(r, str) for r in replaces)):
             raise ToolError("replaces is a list of the clarification ids the fact replaces.")
+        premise = a.get("premise")
+        if premise is not None and not isinstance(premise, bool):
+            raise ToolError("premise is true or false.")
+        if premise and disposition != "fact":
+            raise ToolError("premise applies only to a fact.")
         beyond = a.get("beyond_structure")
         if beyond is not None and not isinstance(beyond, bool):
             raise ToolError("beyond_structure is true or false.")

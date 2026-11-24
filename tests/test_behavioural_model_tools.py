@@ -85,6 +85,49 @@ async def test_extract_refusals_come_back_as_data(
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_regenerate_estimate_sends_only_the_flag(mock_env: None) -> None:
+    route = respx.post(BASE + "/regenerate").mock(return_value=httpx.Response(
+        200, json={"confirmed": False, "model_version": 4, "estimate": {"credits": 12.0}}))
+    out = await MipitiClient().regenerate_behavioural_model("tm-1")
+    assert out["estimate"]["credits"] == 12.0
+    assert _body(route) == {"confirm_estimate": False}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_regenerate_confirmation_names_the_estimated_version(mock_env: None) -> None:
+    route = respx.post(BASE + "/regenerate").mock(return_value=httpx.Response(
+        200, json={"confirmed": True, "queued": True}))
+    await MipitiClient().regenerate_behavioural_model(
+        "tm-1", confirm_estimate=True, model_version=4)
+    assert _body(route) == {"confirm_estimate": True, "model_version": 4}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "review_stale"),
+                                         (409, "extraction_running"),
+                                         (402, "insufficient_credits")])
+async def test_regenerate_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(BASE + "/regenerate").mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().regenerate_behavioural_model("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_regenerate_other_failures_raise(mock_env: None) -> None:
+    respx.post(BASE + "/regenerate").mock(
+        return_value=httpx.Response(404, json={"detail": "Not found."}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await MipitiClient().regenerate_behavioural_model("tm-1")
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_extract_other_failures_raise(mock_env: None) -> None:
     respx.post(BASE + "/extract").mock(
         return_value=httpx.Response(404, json={"detail": "Threat model not found."}))
@@ -510,6 +553,17 @@ async def test_extract_tool_forwards_the_pin_and_returns_the_answer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_regenerate_tool_forwards_the_pin_and_returns_the_answer() -> None:
+    client = _client(regenerate_behavioural_model={"confirmed": False, "estimate": {}})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        out = await server.regenerate_behavioural_model(
+            server_version="0", model_id="tm-1", confirm_estimate=True, model_version=4)
+    client.regenerate_behavioural_model.assert_awaited_once_with(
+        "tm-1", confirm_estimate=True, model_version=4)
+    assert out["confirmed"] is False
+
+
+@pytest.mark.asyncio
 async def test_answers_are_parsed_and_forwarded() -> None:
     client = _client(answer_behavioural_questions={"extracted": False})
     answers = json.dumps([{"question_id": "q1", "text": "Only the owner."}])
@@ -542,6 +596,37 @@ async def test_a_misused_beyond_structure_is_refused_before_the_call(
             await server.answer_behavioural_questions(
                 server_version="0", model_id="tm-1", answers=json.dumps([answer]))
     client.answer_behavioural_questions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [
+    {"question_id": "q1", "text": "x", "premise": "yes"},
+    {"question_id": "q1", "text": "x", "premise": True, "disposition": "unknown"},
+])
+async def test_a_misused_premise_is_refused_before_the_call(answer: dict) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.answer_behavioural_questions(
+                server_version="0", model_id="tm-1", answers=json.dumps([answer]))
+    client.answer_behavioural_questions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_premise_is_forwarded() -> None:
+    client = _client(answer_behavioural_questions={"extracted": False})
+    answers = [{"question_id": "q1", "text": "Retries are capped.", "premise": True}]
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.answer_behavioural_questions(
+            server_version="0", model_id="tm-1", answers=json.dumps(answers))
+    client.answer_behavioural_questions.assert_awaited_once_with(
+        "tm-1", answers, extract_now=False)
+
+
+def test_the_premise_is_documented() -> None:
+    text = " ".join(_descriptions()["answer_behavioural_questions"].split())
+    for word in ("``premise: true``", "owner's behalf", "never narrowing"):
+        assert word in text, word
 
 
 @pytest.mark.asyncio
@@ -1414,7 +1499,7 @@ def test_inventory_checks_text_tells_the_flow() -> None:
 # ------------------------------------------------------------------
 
 _TOOLS = (
-    "get_behavioural_model", "extract_behavioural_model",
+    "get_behavioural_model", "extract_behavioural_model", "regenerate_behavioural_model",
     "generate_from_behavioural_model",
     "answer_behavioural_questions", "edit_behavioural_element",
     "confirm_behavioural_model", "get_behavioural_links",
@@ -1454,6 +1539,14 @@ def test_the_extraction_is_estimated_and_relayed_first() -> None:
     text = _descriptions()["extract_behavioural_model"]
     assert "confirm_estimate" in text and "RELAYED TO THE PERSON" in text
     assert "Never confirm on your own" in text
+
+
+def test_the_regeneration_is_estimated_and_relayed_first_and_asked_for_in_batches() -> None:
+    text = _descriptions()["regenerate_behavioural_model"]
+    assert "confirm_estimate" in text and "RELAYED TO THE PERSON" in text
+    assert "Never confirm on your own" in text
+    # Once for the amendments together; small wording fixes wait.
+    assert "regeneration_owed" in text and "together" in text and "Small wording" in text
 
 
 def test_the_check_is_estimated_and_relayed_first() -> None:
