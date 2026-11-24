@@ -3604,6 +3604,34 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def accept_behavioural_proposal(
+        self, model_id: str, proposal_id: str, model_version: int,
+        accept_removals: list[str] | None = None, note: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/proposals/{proposal_id}/accept.
+
+        Accepts a proposal made on ``model_version``, naming every removal or
+        supersede it lists in ``accept_removals``. Creates a model version.
+
+        A 409 (the version moved, a listed removal is not accepted) and a 404
+        (no such proposal) are answers, not errors: they come back as
+        ``{"accepted": False, "http_status": ..., **detail}`` so a caller can
+        relay them. Any other failure, a 403 refusal included, raises.
+        """
+        body: dict[str, Any] = {"model_version": int(model_version),
+                                "accept_removals": list(accept_removals or [])}
+        if note:
+            body["note"] = note
+        resp = await self._request_with_idempotency(
+            "POST",
+            self._behavioural(model_id, f"/proposals/{_seg(proposal_id)}/accept"),
+            json=body)
+        if resp.status_code in (404, 409):
+            return {"accepted": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_behavioural_links(self, model_id: str) -> dict:
         """GET /api/models/{model_id}/behavioural-model/links.
 
@@ -3753,13 +3781,29 @@ class MipitiClient:
         """
         return await self._get(self._inventory(model_id, "/judgements"))
 
-    async def request_inventory_checks(self, model_id: str) -> dict:
+    async def request_inventory_checks(
+        self, model_id: str, confirm_estimate: bool = False,
+    ) -> dict:
         """POST /api/models/{model_id}/inventory/judgements/request.
 
-        Queues the checks the inventory lacks. Returns ``{model_id, queued,
-        platform}``.
+        Estimates, and with ``confirm_estimate`` queues, the checks the
+        inventory lacks. Without it nothing is queued and the answer carries
+        the ``estimate`` (credits, the platform's share, by kind) and
+        ``confirmed`` false; with it the checks the estimate described are
+        queued (``queued``, ``platform``) and ``confirmed`` is true.
+
+        A 402 (the balance cannot cover the estimate) is an answer, not an
+        error: it comes back as ``{"confirmed": False, "http_status": 402,
+        **detail}`` so a caller can relay it. Any other failure, a 403
+        refusal included, raises.
         """
-        return await self._post(self._inventory(model_id, "/judgements/request"), {})
+        resp = await self._request_with_idempotency(
+            "POST", self._inventory(model_id, "/judgements/request"),
+            json={"confirm_estimate": bool(confirm_estimate)})
+        if resp.status_code == 402:
+            return {"confirmed": False, "http_status": 402, **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
 
     async def decide_inventory_pair(
         self, model_id: str, entity_kind: str, a: str, b: str, verdict: str,

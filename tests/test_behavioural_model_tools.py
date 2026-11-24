@@ -1283,6 +1283,132 @@ async def test_a_model_id_alone_generates_from_the_behavioural_model() -> None:
     assert out == {"generated": False, "message": "c"}
 
 
+PROPOSAL = BASE + "/proposals/P-1/accept"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_accepting_a_proposal_sends_the_version_and_removals(mock_env: None) -> None:
+    route = respx.post(PROPOSAL).mock(return_value=httpx.Response(
+        200, json={"model_id": "tm-1", "model_version": 8, "accepted": True,
+                   "parts_landed": ["a1"]}))
+    out = await MipitiClient().accept_behavioural_proposal(
+        "tm-1", "P-1", 7, accept_removals=["copies"], note="ok")
+    assert out["accepted"] is True and out["parts_landed"] == ["a1"]
+    assert _body(route) == {"model_version": 7, "accept_removals": ["copies"],
+                            "note": "ok"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_accepting_sends_an_empty_removal_list_by_default(mock_env: None) -> None:
+    route = respx.post(PROPOSAL).mock(
+        return_value=httpx.Response(200, json={"accepted": True}))
+    await MipitiClient().accept_behavioural_proposal("tm-1", "P-1", 7)
+    assert _body(route) == {"model_version": 7, "accept_removals": []}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "review_stale"),
+                                         (409, "removal_not_accepted"),
+                                         (404, "proposal_not_found")])
+async def test_proposal_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(PROPOSAL).mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().accept_behavioural_proposal("tm-1", "P-1", 7)
+    assert out["accepted"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refused_proposal_acceptance_raises_with_its_escalation(
+        mock_env: None) -> None:
+    respx.post(PROPOSAL).mock(return_value=httpx.Response(
+        403, json={"detail": {"code": "delegation_required", "escalation_id": "E-2"}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().accept_behavioural_proposal("tm-1", "P-1", 7)
+    assert "E-2" in err.value.response.text
+
+
+@pytest.mark.asyncio
+async def test_the_proposal_tool_parses_removals_and_forwards() -> None:
+    client = _client(accept_behavioural_proposal={"accepted": True})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.accept_behavioural_proposal(
+            server_version="0", model_id="tm-1", proposal_id=" P-1 ",
+            model_version=7, accept_removals='[" copies "]')
+    client.accept_behavioural_proposal.assert_awaited_once_with(
+        "tm-1", "P-1", 7, accept_removals=["copies"], note="")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proposal_id,removals", [
+    (" ", "[]"), ("P-1", "not json"), ("P-1", '{"a": 1}'), ("P-1", "[1]"),
+    ("P-1", '[""]')])
+async def test_the_proposal_tool_refuses_bad_input_before_the_call(
+        proposal_id: str, removals: str) -> None:
+    client = _client()
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        with pytest.raises(ToolError):
+            await server.accept_behavioural_proposal(
+                server_version="0", model_id="tm-1", proposal_id=proposal_id,
+                model_version=7, accept_removals=removals)
+    client.accept_behavioural_proposal.assert_not_awaited()
+
+
+def test_the_proposal_tool_text_tells_the_flow() -> None:
+    text = " ".join(_descriptions()["accept_behavioural_proposal"].split())
+    for word in ("part changes", "never whole elements", "``accept_removals``",
+                 "``removal_not_accepted``", "``review_stale``",
+                 "accept the fresh proposal", "``escalation_id``", "Do not retry"):
+        assert word in text, word
+
+
+CHECKS = "https://test.api.mipiti.io/api/models/tm-1/inventory/judgements/request"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_inventory_checks_estimate_first_then_confirm(mock_env: None) -> None:
+    route = respx.post(CHECKS).mock(return_value=httpx.Response(
+        200, json={"estimate": {"credits": 4.0, "platform_credits": 1.0,
+                                "by_kind": {"entity_duplicates": 2, "entity_tags": 3}},
+                   "confirmed": False, "queued": {}, "platform": {}}))
+    out = await MipitiClient().request_inventory_checks("tm-1")
+    assert out["estimate"]["by_kind"]["entity_tags"] == 3 and out["confirmed"] is False
+    assert _body(route) == {"confirm_estimate": False}
+    route = respx.post(CHECKS).mock(return_value=httpx.Response(
+        200, json={"confirmed": True, "queued": {"entity_tags": 3}, "platform": {}}))
+    out = await MipitiClient().request_inventory_checks("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is True
+    assert _body(route) == {"confirm_estimate": True}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_inventory_checks_402_is_data_and_403_raises(mock_env: None) -> None:
+    respx.post(CHECKS).mock(return_value=httpx.Response(
+        402, json={"detail": {"code": "insufficient_credits", "message": "m"}}))
+    out = await MipitiClient().request_inventory_checks("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is False and out["http_status"] == 402
+    assert out["code"] == "insufficient_credits"
+    respx.post(CHECKS).mock(return_value=httpx.Response(
+        403, json={"detail": {"code": "allowance_exceeded", "escalation_id": "E-3"}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().request_inventory_checks("tm-1", confirm_estimate=True)
+    assert "E-3" in err.value.response.text
+
+
+def test_inventory_checks_text_tells_the_flow() -> None:
+    text = " ".join(_descriptions()["request_inventory_checks"].split())
+    for word in ("``confirm_estimate``", "RELAY THE ESTIMATE TO THE PERSON",
+                 "spending allowance", "``escalation_id``", "do not retry"):
+        assert word in text, word
+
+
 # ------------------------------------------------------------------
 # Published text
 # ------------------------------------------------------------------
@@ -1292,6 +1418,7 @@ _TOOLS = (
     "generate_from_behavioural_model",
     "answer_behavioural_questions", "edit_behavioural_element",
     "confirm_behavioural_model", "get_behavioural_links",
+    "accept_behavioural_proposal",
     "declare_behavioural_link", "accept_behavioural_link_proposals",
     "get_control_delta", "submit_control_delta", "request_delta_second_reading",
     "declare_control_delta", "get_behavioural_threats",

@@ -347,7 +347,8 @@ async def test_the_inventory_tools_forward_what_they_were_given() -> None:
             server_version="0", model_id="tm-1", entity_kind="asset", entity_id=" A-1 ",
             tags='[{"primitive": "p", "implied_type": "t"}]')
     client.get_inventory_judgements.assert_awaited_once_with("tm-1")
-    client.request_inventory_checks.assert_awaited_once_with("tm-1")
+    client.request_inventory_checks.assert_awaited_once_with(
+        "tm-1", confirm_estimate=False)
     client.decide_inventory_pair.assert_awaited_once_with(
         "tm-1", "asset", "A-1", "A-2", "different", rationale="Two stores.")
     client.declare_inventory_tags.assert_awaited_once_with(

@@ -8764,6 +8764,56 @@ async def confirm_behavioural_model(
 
 
 @mcp.tool()
+@_judgment
+async def accept_behavioural_proposal(
+    server_version: str,
+    model_id: str,
+    proposal_id: str,
+    model_version: int,
+    accept_removals: str = "[]",
+    note: str = "",
+    evidence: str = "",
+) -> dict:
+    """Accept a proposal for a model's behavioural model. Mutating; creates a
+    model version.
+
+    Accepting lands only the proposal's part changes, over the version it was
+    made on (``model_version``), never whole elements. List in
+    ``accept_removals`` every removal or supersede the proposal lists: one
+    left out is refused 409 ``removal_not_accepted``, naming it. 409
+    ``review_stale`` means the version moved: read the model again with
+    ``get_behavioural_model`` and accept the fresh proposal. 404
+    ``proposal_not_found``; 422 for a malformed request. The 409 and 404 come
+    back as data, ``{accepted: false, http_status, code, message}``.
+
+    A program's acceptance is a judgment: refused with 403 and an
+    ``escalation_id`` unless the workspace delegates it. Do not retry:
+    report the ``escalation_id`` and poll ``list_proposals``.
+
+    Returns ``{model_id, model_version, accepted, parts_landed}``.
+
+    Args:
+        model_id: ID of the threat model.
+        proposal_id: ID of the proposal.
+        model_version: The version the proposal was made on.
+        accept_removals: JSON array of the element ids whose removal or
+            supersede is accepted, e.g. '["copies"]'; '[]' when it lists none.
+        note: Optional note recorded with the acceptance.
+    """
+    if not proposal_id.strip():
+        raise ToolError("proposal_id is required.")
+    removals = _json_value(accept_removals, "accept_removals", list, '["copies"]')
+    if not all(isinstance(r, str) and r.strip() for r in removals):
+        raise ToolError("accept_removals is a list of element ids.")
+    try:
+        return _dump(await _get_client().accept_behavioural_proposal(
+            model_id, proposal_id.strip(), model_version,
+            accept_removals=[r.strip() for r in removals], note=note))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_behavioural_links(server_version: str, model_id: str) -> dict:
     """Read the links from a behavioural model's elements and zones to the
     model's assets and trust boundaries. Read-only; no side effects.
@@ -9243,21 +9293,36 @@ async def get_inventory_judgements(server_version: str, model_id: str) -> dict:
 
 
 @mcp.tool()
-async def request_inventory_checks(server_version: str, model_id: str) -> dict:
+async def request_inventory_checks(
+    server_version: str, model_id: str, confirm_estimate: bool = False,
+) -> dict:
     """Queue the checks a model's inventory lacks: the tag check of every
     entity whose tags are not current, and the duplicate check of every entry
-    on a pair no current check covers. Mutating: queues background work.
+    on a pair no current check covers. Mutating only with
+    ``confirm_estimate=True``: queues paid background work then.
+
+    1. Call without ``confirm_estimate`` (the default): nothing is queued.
+       The answer carries the ``estimate`` (``credits``, ``platform_credits``,
+       ``by_kind``), ``billing`` and ``confirmed: false``. RELAY THE ESTIMATE
+       TO THE PERSON; a program confirms only within its spending allowance.
+    2. Once they agree, call with ``confirm_estimate=True``: the checks the
+       estimate described are queued.
 
     Those the platform made stale are recorded as its own request, the rest
-    under the caller. Returns ``{model_id, queued, platform}``: the checks
-    queued by kind, and the platform's share. Read the results with
-    ``get_inventory_judgements`` once they land.
+    under the caller. The answer holds ``queued`` by kind and the platform's
+    share (``platform``). Read the results with ``get_inventory_judgements``
+    once they land. A 402 comes back as data, ``{confirmed: false,
+    http_status, code, message}``. A 403 ``allowance_exceeded`` with an
+    ``escalation_id`` means a program's act over its allowance is parked for a
+    person: do not retry, poll ``list_proposals``.
 
     Args:
         model_id: ID of the threat model.
+        confirm_estimate: False (default) estimates; True queues the checks.
     """
     try:
-        return _dump(await _get_client().request_inventory_checks(model_id))
+        return _dump(await _get_client().request_inventory_checks(
+            model_id, confirm_estimate=confirm_estimate))
     except Exception as exc:
         raise _api_error(exc) from exc
 
