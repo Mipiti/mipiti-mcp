@@ -385,6 +385,7 @@ Overlapping, semantics-free grouping of models (the Affiliation primitive) — f
 git clone https://github.com/Mipiti/mipiti-mcp.git
 cd mipiti-mcp
 pip install -e ".[dev]"
+bash scripts/install-hooks.sh   # pre-commit keeps the documented counts current
 python -m pytest -v
 ```
 

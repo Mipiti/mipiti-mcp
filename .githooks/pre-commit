@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Keep the documented counts (tools, assertion types, version) equal to the
+# code in the commit that changes them: fix the markers and stage the files
+# the fixer changed. Installed by scripts/install-hooks.sh.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+before=$(git diff --name-only)
+bash scripts/check-doc-counts.sh --fix >/dev/null
+after=$(git diff --name-only)
+changed=$(comm -13 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort) | grep -v '^$' || true)
+if [ -n "$changed" ]; then
+  printf '%s\n' "$changed" | xargs git add --
+  echo "pre-commit: doc count markers updated and staged: $(printf '%s ' $changed)"
+fi

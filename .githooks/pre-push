@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Refuse a push whose documented counts disagree with the code (the CI
+# doc-counts gate, run before the push). The pre-commit hook fixes them as
+# you commit; this catches a commit made without it. Fix with
+# `bash scripts/check-doc-counts.sh --fix` and commit the result.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/check-doc-counts.sh
