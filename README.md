@@ -101,7 +101,7 @@ mipiti-mcp install-skill --dir path/to/skills
 
 It replaces only a copy it wrote, and refuses to overwrite any other file.
 
-## Tools (<!--MCP_TOOL_COUNT-->173<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->174<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 

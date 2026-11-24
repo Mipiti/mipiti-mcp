@@ -3486,6 +3486,36 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def regenerate_behavioural_model(
+        self,
+        model_id: str,
+        confirm_estimate: bool = False,
+        model_version: int | None = None,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/regenerate.
+
+        Estimate, and with ``confirm_estimate`` queue, a regeneration: an
+        independent reading of the model's text and the answers that stand,
+        compared with the behavioural model, writing nothing to it. A
+        confirmation names the ``model_version`` the estimate reported.
+
+        A refusal is an answer, not an error: 402 (the balance cannot cover
+        the estimate) and 409 (the model changed since the estimate, or a
+        job of the model is queued or running) come back as ``{"confirmed":
+        False, "http_status": ..., **detail}`` so a caller can relay them.
+        Any other failure raises.
+        """
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        resp = await self._request_with_idempotency(
+            "POST", self._behavioural(model_id, "/regenerate"), json=body)
+        if resp.status_code in (402, 409):
+            return {"confirmed": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
     async def answer_behavioural_questions(
         self,
         model_id: str,

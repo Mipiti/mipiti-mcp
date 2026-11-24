@@ -22,8 +22,8 @@ there every time.
    evidence, decide nothing.
 4. A refused judgment is parked for a person: report it and never retry it.
    A call that ended without its result is read back before it is repeated.
-5. A paid act (an extraction, a check, a build, a judgement of objectives)
-   runs only with the person's agreement to its estimate, or within the
+5. A paid act (an extraction, a regeneration, a check, a build, a judgement
+   of objectives) runs only with the person's agreement to its estimate, or within the
    workspace's spending allowance.
 6. Call `get_review_playbook` again after a round of work.
 7. Close the run with `close_review_run`, with your notes, and give the
