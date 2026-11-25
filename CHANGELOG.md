@@ -9,6 +9,15 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.113.0] - 2026-11-25
+
+### Added
+
+- Added `reread_behavioural_description`, for a description change whose re-reading did not run. (#410)
+- Added `include_need` to `get_controls`: what each control is needed for, and its role. (#410)
+- `list_decisions` accepts any decision kind the platform records. (#410)
+- Tool text for behavioural models that change only by edits: what a model waits on and what settles it, `collect_only`, `accept_removals` and the revert refusal. (#410)
+
 ## [0.112.0] - 2026-11-24
 
 ### Added
