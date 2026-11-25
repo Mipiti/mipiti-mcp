@@ -6333,9 +6333,6 @@ class TestAssumptionProposals:
         assert mock.create_proposal.await_args.args[1] == "assumption"
         assert mock.create_proposal.await_args.args[2] == payload
 
-    def test_decisions_filter_names_assumption_acceptance(self) -> None:
-        assert "assumption_accepted" in server._DECISION_KINDS
-
 
 class TestListProposals:
     @pytest.mark.asyncio
@@ -6491,13 +6488,16 @@ class TestListDecisions:
             decision="proposal_rejected", limit=10)
 
     @pytest.mark.asyncio
-    async def test_unknown_decision_raises(self) -> None:
+    async def test_any_kind_the_platform_records_is_passed_through(self) -> None:
+        # The platform names the kinds: a kind added there filters here with
+        # no release of this package.
         mock = _mock_client()
         with _patch_client(mock):
-            with pytest.raises(ToolError, match="decision must be one of"):
-                await list_decisions(
-                    server_version="0", model_id="tm-001", decision="finding_ignored")
-        mock.list_decisions.assert_not_awaited()
+            await list_decisions(
+                server_version="0", model_id="tm-001", decision="coherence_overridden")
+        mock.list_decisions.assert_awaited_once_with(
+            "tm-001", agent_only=False, outside_policy_only=False,
+            decision="coherence_overridden", limit=0)
 
     @pytest.mark.asyncio
     async def test_defaults_not_sent(self) -> None:

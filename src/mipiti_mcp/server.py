@@ -2277,7 +2277,10 @@ async def undo_model_change(
     message}``: ``generation_active`` (a build holds the model), and for
     controls ``nothing_to_undo`` or ``set_diverged`` (a control the change
     touched has changed since; undo the later change first), for a version
-    ``no_earlier_version``.
+    ``no_earlier_version``, and ``migration_revert`` where the version it
+    would copy holds the behavioural model as it stood before the model
+    moved to edits, a move made once (``migrated_at`` names the version from
+    which a revert is possible; edit the model instead).
     """
     if target not in ("controls", "version"):
         raise ToolError('target must be "controls" or "version".')
@@ -8019,32 +8022,6 @@ async def get_design_leverage(
         raise _api_error(exc) from exc
 
 
-_DECISION_KINDS = (
-    "finding_dismissed",
-    "finding_remediated",
-    "risk_accepted",
-    "not_applicable_declared",
-    "proposal_accepted",
-    "proposal_rejected",
-    "proposal_reverted",
-    "assumption_accepted",
-    "behavioural_model_answered",
-    "behavioural_model_confirmed",
-    "behavioural_delta_declared",
-    "behavioural_cross_check_dismissed",
-    "behavioural_confirmation_withdrawn",
-    "seal_attested",
-    "position_attested",
-    "privileges_attested",
-    "extent_attested",
-    "escalation_resolved",
-    "drift_intent_decided",
-    "description_revised",
-    "inventory_pair_decided",
-    "inventory_tag_declared",
-)
-
-
 @mcp.tool()
 async def list_decisions(
     server_version: str,
@@ -8081,25 +8058,13 @@ async def list_decisions(
         outside_policy_only: Only decisions made outside the delegation
             policy in force at the time (``within_policy`` false).
             Default False.
-        decision: Optional kind filter, one of ``finding_dismissed``,
-            ``finding_remediated``, ``risk_accepted``,
-            ``not_applicable_declared``, ``proposal_accepted``,
-            ``proposal_rejected``, ``proposal_reverted``,
-            ``assumption_accepted``, ``behavioural_model_answered``
-            (an answer, an element edit or a link declared),
-            ``behavioural_model_confirmed``, ``behavioural_delta_declared``,
-            ``behavioural_cross_check_dismissed`` (a person set aside a
-            finding of a declaration's cross-check),
-            ``behavioural_confirmation_withdrawn`` (a confirmation withdrawn
-            by a report that the code does more than the description),
-            ``seal_attested``, ``position_attested``, ``privileges_attested``,
-            ``extent_attested``, ``escalation_resolved``,
-            ``drift_intent_decided`` (whether a description-drift finding was
-            intended or a defect of the code), ``description_revised`` (a
-            revised description accepted), ``inventory_pair_decided`` (two
-            inventory entries decided one entity or not),
-            ``inventory_tag_declared`` (an entity's taxonomy tags declared).
-            Empty (default) returns every kind.
+        decision: Optional kind filter: a kind as the ledger records it, the
+            ``decision`` of a returned item (for example
+            ``finding_dismissed``, ``risk_accepted``,
+            ``behavioural_model_answered``, ``behavioural_model_confirmed``,
+            ``escalation_resolved``). The platform names the kinds; a kind
+            it does not record returns no rows. Empty (default) returns
+            every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,
@@ -8107,8 +8072,6 @@ async def list_decisions(
     name}, policy_version, within_policy, rationale, created_at}], count,
     total}``.
     """
-    if decision and decision not in _DECISION_KINDS:
-        raise ToolError(f"decision must be one of {', '.join(_DECISION_KINDS)}.")
     try:
         return await _get_client().list_decisions(
             model_id,
@@ -8413,7 +8376,9 @@ async def answer_behavioural_questions(
     question is answered, or on ``extract_now``, billed as ``billed_to``
     says (409 ``extraction_running``: poll). With one, ``extract_now``
     alone is a regeneration estimate.
-    ``collect_only=True`` extracts nothing; ``dry_run=True`` records nothing.
+    ``collect_only=True`` starts no extraction (with a behavioural model,
+    answers in words are still read when recorded); ``dry_run=True``
+    records nothing.
     A fact correcting earlier answers names their ids in
     ``replaces``; none is read again. ``premise: true`` records a fact as a
     premise, taken on the owner's behalf where no authoritative source states
@@ -8454,7 +8419,8 @@ async def answer_behavioural_questions(
         extract_now: Extract now, with the answers collected.
         dry_run: Return what the answers would do (``outcome``) and record
             nothing. Default False.
-        collect_only: Record without an extraction; not with extract_now.
+        collect_only: Start no extraction; not with extract_now. With a
+            behavioural model it defers nothing.
     """
     parsed = _json_value(
         answers, "answers", list,
@@ -8837,9 +8803,11 @@ async def accept_behavioural_proposal(
     model version.
 
     Accepting lands only the proposal's part changes, over the version it was
-    made on (``model_version``), never whole elements. List in
-    ``accept_removals`` every removal or supersede the proposal lists: one
-    left out is refused 409 ``removal_not_accepted``, naming it. 409
+    made on (``model_version``), never whole elements. The proposal's
+    accept step leaves ``accept_removals`` empty: add each element its
+    ``must_accept`` lists only once the person agrees to give it up; one left
+    out is refused 409 ``removal_not_accepted``, naming it, and nothing is
+    given up. 409
     ``review_stale`` means the version moved: read the model again with
     ``get_behavioural_model`` and accept the fresh proposal. 404
     ``proposal_not_found``; 422 for a malformed request. The 409 and 404 come

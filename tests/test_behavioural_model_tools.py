@@ -1637,16 +1637,6 @@ def test_review_queue_names_the_new_item_types() -> None:
         assert item in text, item
 
 
-def test_decision_filter_accepts_the_behavioural_kinds() -> None:
-    assert "behavioural_model_answered" in server._DECISION_KINDS
-    assert "behavioural_model_confirmed" in server._DECISION_KINDS
-    assert "behavioural_delta_declared" in server._DECISION_KINDS
-    assert "behavioural_cross_check_dismissed" in server._DECISION_KINDS
-    assert "behavioural_confirmation_withdrawn" in server._DECISION_KINDS
-    assert "inventory_pair_decided" in server._DECISION_KINDS
-    assert "inventory_tag_declared" in server._DECISION_KINDS
-
-
 def test_a_cross_check_finding_is_relayed_and_dismissed_by_a_person() -> None:
     """A declared control's cross-check findings are relayed to the person,
     and no tool dismisses one: dismissing is a person's act."""
