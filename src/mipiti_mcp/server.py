@@ -6992,6 +6992,7 @@ async def get_controls(
     include_deleted: bool = False,
     include_orphaned: bool = False,
     summary_only: bool = False,
+    include_need: bool = False,
 ) -> dict:
     """A model's controls, or one control. Read-only.
 
@@ -7025,6 +7026,10 @@ async def get_controls(
     each clause needs. ``status="implemented"`` finds what still needs
     evidence. Only this model's own controls are listed; inherited ones are
     counted by ``assess_model``.
+
+    ``include_need=True``: each control's ``need``, its ``role``
+    (``required``; ``not_required`` or ``defence_in_depth`` where nothing
+    needs it) and why. Work on ``required``; relay the rest.
     """
     try:
         if control_id:
@@ -7044,6 +7049,7 @@ async def get_controls(
             offset=offset,
             limit=limit,
             summary_only=summary_only,
+            include_need=include_need,
         )
         result = _dump(data)
         if not result.get("total"):
@@ -8200,9 +8206,9 @@ async def get_behavioural_model(
     ones, answered with ``answer_behavioural_questions``; one carrying
     ``structured`` takes a structured answer, one with ``awaiting_fix`` was
     answered. Each carries ``structured_forms``. ``pending_answers``: collected, not extracted. ``ir_hash`` is
-    what ``confirm_behavioural_model`` names. ``waiting_on``:
-    ``extraction``, ``acceptance``, ``answers``, ``generation`` or
-    ``nothing``. ``extraction.job``: the extraction running in the
+    what ``confirm_behavioural_model`` names. ``waiting_on`` names what
+    settles it, ``waiting_hint`` says how (``reread``:
+    ``reread_behavioural_description``). ``extraction.job``: the extraction running in the
     background (null when none), its ``progress``;``extraction.dropped_elements``: what it
     could not keep, each asked by a question of its own (closure
     ``dropped``), which takes no dismissal. ``generation_ready``: call
@@ -8349,6 +8355,52 @@ async def regenerate_behavioural_model(
     """
     try:
         return _dump(await _get_client().regenerate_behavioural_model(
+            model_id, confirm_estimate=confirm_estimate, model_version=model_version))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
+async def reread_behavioural_description(
+    server_version: str,
+    model_id: str,
+    confirm_estimate: bool = False,
+    model_version: Optional[int] = None,
+) -> dict:
+    """Re-read the description changes nothing has read into a model's
+    behavioural model yet. Mutating only with ``confirm_estimate=True``; a
+    paid action then.
+
+    For when ``get_behavioural_model`` reports ``waiting_on: "reread"``: a
+    description change was saved, but its re-reading did not run (the
+    balance or the workspace's allowance did not cover it at the change, or
+    it stopped part-way past its automatic retries). ``description_reread``
+    on the read says why, how many changes are owed and the estimate.
+
+    1. Call with ``confirm_estimate=False`` (the default): nothing is charged
+       or written. The answer carries the estimate (the calls not yet made;
+       a re-reading that stopped part-way is priced at what it still owes),
+       who it is billed to, why it does not run now and the
+       ``model_version`` it is for. RELAY IT TO THE PERSON.
+    2. Once they agree, call with ``confirm_estimate=True`` and that
+       ``model_version``. It is queued: follow it with
+       ``get_behavioural_model(view="status")`` until ``extraction.job`` is
+       null.
+
+    Refusals come back as data, ``{confirmed: false, http_status, code,
+    message}``: 409 ``review_stale`` (estimate again), ``extraction_running``
+    (poll it), ``parked_work`` (another reading resumes on its own),
+    ``nothing_to_reread``, ``no_behavioural_model``; 402 (the balance cannot
+    cover it). A program over the workspace's allowance is refused 403 with
+    an ``escalation_id``: do not retry, poll ``list_proposals``.
+
+    Args:
+        model_id: ID of the threat model.
+        confirm_estimate: False (default) estimates; True queues it.
+        model_version: With ``confirm_estimate=True``: the estimate's value.
+    """
+    try:
+        return _dump(await _get_client().reread_behavioural_description(
             model_id, confirm_estimate=confirm_estimate, model_version=model_version))
     except Exception as exc:
         raise _api_error(exc) from exc

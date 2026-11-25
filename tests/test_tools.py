@@ -1952,6 +1952,18 @@ class TestGetControls:
         call_kwargs = mock.get_controls.call_args[1]
         assert call_kwargs["limit"] == 1
 
+    @pytest.mark.asyncio
+    async def test_include_need_is_passed_and_off_by_default(self) -> None:
+        """Each control's need is asked for only when asked."""
+        mock = _mock_client()
+        ctx = _mock_ctx()
+        with _patch_client(mock):
+            await get_controls(server_version="0", model_id="tm-001", ctx=ctx)
+            await get_controls(server_version="0", model_id="tm-001", ctx=ctx,
+                               include_need=True)
+        assert mock.get_controls.call_args_list[0][1]["include_need"] is False
+        assert mock.get_controls.call_args_list[1][1]["include_need"] is True
+
 
 class TestRegenerateControls:
     @pytest.mark.asyncio

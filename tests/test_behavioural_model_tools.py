@@ -119,6 +119,33 @@ async def test_regenerate_refusals_come_back_as_data(
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_reread_estimates_then_confirms_naming_the_version(mock_env: None) -> None:
+    route = respx.post(BASE + "/reread").mock(return_value=httpx.Response(
+        200, json={"confirmed": False, "model_version": 7, "estimate": {"credits": 3.0}}))
+    out = await MipitiClient().reread_behavioural_description("tm-1")
+    assert out["estimate"]["credits"] == 3.0
+    assert _body(route) == {"confirm_estimate": False}
+    await MipitiClient().reread_behavioural_description(
+        "tm-1", confirm_estimate=True, model_version=7)
+    assert _body(route) == {"confirm_estimate": True, "model_version": 7}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "nothing_to_reread"),
+                                         (409, "parked_work"),
+                                         (402, "insufficient_credits")])
+async def test_reread_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(BASE + "/reread").mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().reread_behavioural_description("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_regenerate_other_failures_raise(mock_env: None) -> None:
     respx.post(BASE + "/regenerate").mock(
         return_value=httpx.Response(404, json={"detail": "Not found."}))
