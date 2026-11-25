@@ -8376,9 +8376,7 @@ async def answer_behavioural_questions(
     question is answered, or on ``extract_now``, billed as ``billed_to``
     says (409 ``extraction_running``: poll). With one, ``extract_now``
     alone is a regeneration estimate.
-    ``collect_only=True`` starts no extraction (with a behavioural model,
-    answers in words are still read when recorded); ``dry_run=True``
-    records nothing.
+    ``collect_only`` starts no extraction; ``dry_run=True`` records nothing.
     A fact correcting earlier answers names their ids in
     ``replaces``; none is read again. ``premise: true`` records a fact as a
     premise, taken on the owner's behalf where no authoritative source states
@@ -8419,8 +8417,8 @@ async def answer_behavioural_questions(
         extract_now: Extract now, with the answers collected.
         dry_run: Return what the answers would do (``outcome``) and record
             nothing. Default False.
-        collect_only: Start no extraction; not with extract_now. With a
-            behavioural model it defers nothing.
+        collect_only: Start no extraction (words are read anyway over a
+            model with one); not with extract_now.
     """
     parsed = _json_value(
         answers, "answers", list,
