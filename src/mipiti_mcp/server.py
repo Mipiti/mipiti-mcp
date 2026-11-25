@@ -8068,9 +8068,9 @@ async def list_decisions(
             ``decision`` of a returned item (for example
             ``finding_dismissed``, ``risk_accepted``,
             ``behavioural_model_answered``, ``behavioural_model_confirmed``,
-            ``escalation_resolved``). The platform names the kinds; a kind
-            it does not record returns no rows. Empty (default) returns
-            every kind.
+            ``escalation_resolved``). The platform names the kinds: a kind
+            it records nowhere is refused, listing them. Empty (default)
+            returns every kind.
         limit: Maximum rows to return. 0 (default) uses the server default.
 
     Returns ``{model_id, model_version, items[{id, decision, subject_kind,
