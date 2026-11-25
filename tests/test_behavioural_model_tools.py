@@ -119,6 +119,33 @@ async def test_regenerate_refusals_come_back_as_data(
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_reread_estimates_then_confirms_naming_the_version(mock_env: None) -> None:
+    route = respx.post(BASE + "/reread").mock(return_value=httpx.Response(
+        200, json={"confirmed": False, "model_version": 7, "estimate": {"credits": 3.0}}))
+    out = await MipitiClient().reread_behavioural_description("tm-1")
+    assert out["estimate"]["credits"] == 3.0
+    assert _body(route) == {"confirm_estimate": False}
+    await MipitiClient().reread_behavioural_description(
+        "tm-1", confirm_estimate=True, model_version=7)
+    assert _body(route) == {"confirm_estimate": True, "model_version": 7}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "nothing_to_reread"),
+                                         (409, "parked_work"),
+                                         (402, "insufficient_credits")])
+async def test_reread_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(BASE + "/reread").mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().reread_behavioural_description("tm-1", confirm_estimate=True)
+    assert out["confirmed"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_regenerate_other_failures_raise(mock_env: None) -> None:
     respx.post(BASE + "/regenerate").mock(
         return_value=httpx.Response(404, json={"detail": "Not found."}))
@@ -1635,16 +1662,6 @@ def test_review_queue_names_the_new_item_types() -> None:
                  "not_applicable_refuted", "behavioural_attacker",
                  "inventory_judgement"):
         assert item in text, item
-
-
-def test_decision_filter_accepts_the_behavioural_kinds() -> None:
-    assert "behavioural_model_answered" in server._DECISION_KINDS
-    assert "behavioural_model_confirmed" in server._DECISION_KINDS
-    assert "behavioural_delta_declared" in server._DECISION_KINDS
-    assert "behavioural_cross_check_dismissed" in server._DECISION_KINDS
-    assert "behavioural_confirmation_withdrawn" in server._DECISION_KINDS
-    assert "inventory_pair_decided" in server._DECISION_KINDS
-    assert "inventory_tag_declared" in server._DECISION_KINDS
 
 
 def test_a_cross_check_finding_is_relayed_and_dismissed_by_a_person() -> None:

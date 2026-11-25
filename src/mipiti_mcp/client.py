@@ -885,8 +885,11 @@ class MipitiClient:
         control_id: str = "", status: str = "", co_id: str = "",
         component_id: str = "",
         offset: int = 0, limit: int = 0, summary_only: bool = False,
+        include_need: bool = False,
     ) -> ControlsResponse | ControlSummariesResponse:
         params: dict[str, Any] = {}
+        if include_need:
+            params["include_need"] = "true"
         if include_deleted:
             params["include_deleted"] = "true"
         if include_orphaned:
@@ -3510,6 +3513,31 @@ class MipitiClient:
             body["model_version"] = int(model_version)
         resp = await self._request_with_idempotency(
             "POST", self._behavioural(model_id, "/regenerate"), json=body)
+        if resp.status_code in (402, 409):
+            return {"confirmed": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
+    async def reread_behavioural_description(
+        self,
+        model_id: str,
+        confirm_estimate: bool = False,
+        model_version: int | None = None,
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/reread.
+
+        Estimate, and with ``confirm_estimate`` queue, the re-reading of the
+        description changes nothing has read into the behavioural model yet.
+        A confirmation names the ``model_version`` the estimate reported.
+        402 and 409 come back as ``{"confirmed": False, "http_status": ...,
+        **detail}``; any other failure raises.
+        """
+        body: dict[str, Any] = {"confirm_estimate": bool(confirm_estimate)}
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        resp = await self._request_with_idempotency(
+            "POST", self._behavioural(model_id, "/reread"), json=body)
         if resp.status_code in (402, 409):
             return {"confirmed": False, "http_status": resp.status_code,
                     **self._refusal(resp)}
