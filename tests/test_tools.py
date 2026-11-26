@@ -6275,6 +6275,25 @@ class TestReconcileModel:
         mock.reconcile_model.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_a_discrepancy_with_a_sentence_or_a_claim_is_sent(self) -> None:
+        mock = _mock_client()
+        obs = [{"kind": "description_drift", "direction": "code_does_more",
+                "quote": "Operators may reset the counter"},
+               {"kind": "description_drift", "direction": "code_does_less",
+                "claim": {"path": "README.md", "line": 12,
+                          "quote": "always builds the latest tag"}}]
+        with _patch_client(mock):
+            await reconcile_model(server_version="0", model_id="tm-001",
+                                  observations=json.dumps(obs))
+        assert mock.reconcile_model.await_args.kwargs["observations"] == obs
+        with _patch_client(mock):
+            with pytest.raises(ToolError):
+                await reconcile_model(
+                    server_version="0", model_id="tm-001",
+                    observations=json.dumps([{"kind": "description_drift",
+                                              "claim": "README.md"}]))
+
+    @pytest.mark.asyncio
     async def test_nothing_to_reconcile_raises(self) -> None:
         with _patch_client(_mock_client()):
             with pytest.raises(ToolError):

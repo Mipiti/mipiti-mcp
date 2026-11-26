@@ -7459,6 +7459,7 @@ def _parse_path_list(raw: Optional[str]) -> List[str]:
 
 _RECONCILE_OBSERVATION_KINDS = (
     "mechanism_named", "component_present", "component_absent", "forbidden_behavior",
+    "description_drift",
 )
 
 
@@ -7485,7 +7486,7 @@ async def reconcile_model(
       reports which components changed, which paths no component claims,
       and whether a refresh is recommended.
     - ``observations``: what you saw in the code that the model does not
-      say. Each observation lands in one of four buckets by ``kind``:
+      say. Each observation lands in one of five buckets by ``kind``:
 
       * ``mechanism_named`` - the control's mechanism exists under another
         name (``subject_id`` = control id). Follow up with ``refine_control``
@@ -7497,6 +7498,8 @@ async def reconcile_model(
         (``subject_id`` = component id).
       * ``forbidden_behavior`` - the code does something the model rules
         out (``subject_id`` = control id, or empty).
+      * ``description_drift`` - the code does more or less than a sentence
+        of the description or a claim of the project's text; a person decides.
 
     The platform decides the consequence. Proposals are never applied on
     the agent's word, with one exception: a component change on a
@@ -7516,9 +7519,15 @@ async def reconcile_model(
         observations: JSON string of an **array** of observation objects,
             each ``{kind, subject_id?, evidence?: {paths?: [], symbols?: [],
             note?: ""}, proposal?: {name, repo_url?, path?,
-            trust_boundary_ids?}}`` with ``kind`` one of ``mechanism_named``,
-            ``component_present``, ``component_absent``,
-            ``forbidden_behavior``. Empty/None sends no observations.
+            trust_boundary_ids?}, quote?, claim?, direction?, head_commit?}``
+            with ``kind`` one of ``mechanism_named``, ``component_present``,
+            ``component_absent``, ``forbidden_behavior``,
+            ``description_drift``. Empty/None sends no observations. A
+            ``description_drift`` carries ``direction`` (``code_does_more`` or
+            ``code_does_less``) and either ``quote`` (a sentence of the
+            description, verbatim) or ``claim`` (``{path, line?, quote}``: a
+            claim of README, docs, help text or package metadata); file one
+            only for such a statement, quoting it and citing the code.
 
     Returns ``{model_id, model_version, provenance{kind, authoritative,
     code_derived, ...}, changed_paths: null | {components_changed[{
@@ -7552,6 +7561,9 @@ async def reconcile_model(
                 raise ToolError(f"observations[{i}].evidence must be an object.")
             if "proposal" in obs and obs["proposal"] is not None and not isinstance(obs["proposal"], dict):
                 raise ToolError(f"observations[{i}].proposal must be an object.")
+            if "claim" in obs and obs["claim"] is not None and not isinstance(obs["claim"], dict):
+                raise ToolError(f"observations[{i}].claim must be an object "
+                                "({path, line?, quote}).")
     if not paths and not parsed_obs:
         raise ToolError("Provide changed_paths, observations, or both.")
     try:
@@ -8465,7 +8477,13 @@ async def answer_behavioural_questions(
             "beyond_structure": true}, {"question_id": "q3",
             "structured": {"classes": ["org_admin"]}}]'. ``beyond_structure``
             is a bool, only on a fact in words with a non-empty ``text``,
-            never beside ``structured``.
+            never beside ``structured``. ``contradicts`` names one subject
+            (422 ``contradicts_one_subject``): ``quote`` (a sentence of the
+            description); ``element`` (``"<id>"``: the code does otherwise
+            than the behavioural model states; the answer is recorded and its
+            reading held as a proposal until a person decides); or ``claim``
+            (``{"path", "line"?, "quote"}``: README, docs, help text or
+            package metadata; a finding that changes nothing in the model).
         extract_now: Extract now, with the answers collected.
         dry_run: Return what the answers would do (``outcome``) and record
             nothing. Default False.
@@ -8495,7 +8513,8 @@ async def answer_behavioural_questions(
                 isinstance(contradicts, dict)
                 and contradicts.get("direction") in ("code_does_more", "code_does_less")):
             raise ToolError("contradicts is {\"direction\": \"code_does_more\" | "
-                            "\"code_does_less\", \"quote\"?: \"...\"}.")
+                            "\"code_does_less\"} with one of \"quote\", \"element\" or "
+                            "\"claim\": {\"path\", \"line\"?, \"quote\"}.")
         replaces = a.get("replaces")
         if replaces is not None and not (
                 isinstance(replaces, list) and all(isinstance(r, str) for r in replaces)):
