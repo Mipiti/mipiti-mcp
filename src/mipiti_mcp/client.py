@@ -3578,16 +3578,34 @@ class MipitiClient:
 
     async def edit_behavioural_element(
         self, model_id: str, collection: str, element: dict,
+        model_version: int | None = None, dry_run: bool = False,
     ) -> dict:
         """PUT /api/models/{model_id}/behavioural-model/elements.
 
         Replaces (or adds) one element in ``collection`` as a person wrote
         it. Creates a model version, and voids a confirmation.
+
+        ``model_version`` is the version the element was read at; the API
+        refuses the edit with 409 ``element_changed`` when that element
+        changed since, and the refusal comes back as ``{"changed": False,
+        "http_status": 409, **detail}`` (the element as it stands now and
+        the current ``model_version``); any other failure raises.
+        ``dry_run`` writes nothing and returns ``{dry_run: true, changed,
+        closes, raises, kind, ...}``. Each is sent only when given.
         """
-        return await self._put(
-            self._behavioural(model_id, "/elements"),
-            {"collection": collection, "element": element},
-        )
+        body: dict[str, Any] = {"collection": collection, "element": element}
+        if model_version is not None:
+            body["model_version"] = int(model_version)
+        if dry_run:
+            body["dry_run"] = True
+        resp = await self._request_with_idempotency(
+            "PUT", self._behavioural(model_id, "/elements"), json=body)
+        if resp.status_code == 409:
+            detail = self._refusal(resp)
+            if detail.get("code") == "element_changed":
+                return {"changed": False, "http_status": 409, **detail}
+        resp.raise_for_status()
+        return resp.json()
 
     async def remove_behavioural_element(
         self, model_id: str, collection: str, element_id: str,

@@ -8539,6 +8539,8 @@ async def edit_behavioural_element(
     collection: str,
     element: str,
     evidence: str = "",
+    model_version: int | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Replace, or add, one element of a model's behavioural model. Mutating;
     creates a model version (none when the edit changes nothing).
@@ -8554,6 +8556,19 @@ async def edit_behavioural_element(
     a person. Do not retry: report the ``escalation_id`` and poll
     ``list_proposals``.
 
+    Pass the ``model_version`` you read the element at. If that element
+    changed since, the edit is refused with 409 ``element_changed`` and
+    comes back as data (``changed`` false, ``http_status`` 409): it carries
+    the element as it stands now and the current ``model_version``. Read it,
+    and edit again from it.
+
+    With ``dry_run=true`` nothing is written. The result says whether the
+    edit would change anything (``changed``), the questions it ``closes``
+    and ``raises``, and its ``kind``: ``override_person`` when it would
+    override a person's word, ``answer`` otherwise. A ``refused`` entry
+    gives the code and detail of a refusal the edit would meet. Dry-run
+    before editing, so you handle the questions it raises in the same pass.
+
     Returns what the edit did, not the whole model: ``changed``, the model's
     status, version and ``ir_hash``, the element as it now stands, the open
     questions about it and how many are open in all. Read
@@ -8565,15 +8580,27 @@ async def edit_behavioural_element(
             element belongs to.
         element: JSON object, the whole element including its ``id``; it
             replaces the element of that id, or adds one.
+        model_version: The model version the element was read at. Optional;
+            when given, the edit is refused if the element changed since.
+        dry_run: Write nothing and return what the edit would close and
+            raise. Default False.
     """
     parsed = _json_value(element, "element", dict, '{"id": "e1", ...}')
     if not str(parsed.get("id", "")).strip():
         raise ToolError("element needs an id.")
     if not collection.strip():
         raise ToolError("collection is required.")
+    extra: dict[str, Any] = {}
+    if model_version is not None:
+        extra["model_version"] = model_version
+    if dry_run:
+        extra["dry_run"] = True
     try:
-        return _element_write(await _get_client().edit_behavioural_element(
-            model_id, collection.strip(), parsed), collection.strip(), str(parsed["id"]))
+        result = await _get_client().edit_behavioural_element(
+            model_id, collection.strip(), parsed, **extra)
+        if dry_run or (isinstance(result, dict) and result.get("http_status") == 409):
+            return _dump(result) if not isinstance(result, dict) else result
+        return _element_write(result, collection.strip(), str(parsed["id"]))
     except Exception as exc:
         raise _api_error(exc) from exc
 
