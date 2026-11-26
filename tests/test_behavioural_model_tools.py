@@ -1898,3 +1898,76 @@ def test_the_answer_shape_an_offer_names_is_published() -> None:
     instructions = build_instructions("pro", "user")
     assert "its `answer` is the shape to send" in instructions
     assert '`{"describes": [...]}`' in instructions
+
+
+# ------------------------------------------------------------------
+# edit_behavioural_element: model_version guard and dry_run
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_element_edit_sends_model_version_only_when_given(mock_env: None) -> None:
+    route = respx.put(BASE + "/elements").mock(
+        return_value=httpx.Response(200, json={"changed": True}))
+    client = MipitiClient()
+    await client.edit_behavioural_element("tm-1", "actions", {"id": "a1"}, model_version=7)
+    assert _body(route) == {
+        "collection": "actions", "element": {"id": "a1"}, "model_version": 7}
+    await client.edit_behavioural_element("tm-1", "actions", {"id": "a1"})
+    assert _body(route) == {"collection": "actions", "element": {"id": "a1"}}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_element_edit_dry_run_is_sent_and_its_answer_returned(mock_env: None) -> None:
+    answer = {"dry_run": True, "changed": True, "closes": [{"question_id": "q1"}],
+              "raises": [], "kind": "override_person", "model_id": "tm-1",
+              "model_version": 7, "collection": "actions", "element_id": "a1"}
+    route = respx.put(BASE + "/elements").mock(
+        return_value=httpx.Response(200, json=answer))
+    out = await MipitiClient().edit_behavioural_element(
+        "tm-1", "actions", {"id": "a1"}, dry_run=True)
+    assert _body(route)["dry_run"] is True
+    assert out == answer
+    await MipitiClient().edit_behavioural_element(
+        "tm-1", "actions", {"id": "a1"}, dry_run=False)
+    assert "dry_run" not in _body(route)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_element_changed_comes_back_as_data(mock_env: None) -> None:
+    detail = {"code": "element_changed", "element": {"id": "a1", "name": "now"},
+              "model_version": 9}
+    respx.put(BASE + "/elements").mock(
+        return_value=httpx.Response(409, json={"detail": detail}))
+    out = await MipitiClient().edit_behavioural_element(
+        "tm-1", "actions", {"id": "a1"}, model_version=7)
+    assert out == {"changed": False, "http_status": 409, **detail}
+    # Another 409 is still an error.
+    respx.put(BASE + "/elements").mock(
+        return_value=httpx.Response(409, json={"detail": {"code": "generation_active"}}))
+    with pytest.raises(httpx.HTTPStatusError):
+        await MipitiClient().edit_behavioural_element("tm-1", "actions", {"id": "a1"})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_element_edit_tool_returns_dry_run_and_conflict_unreshaped(
+        mock_env: None) -> None:
+    dry = {"dry_run": True, "changed": False, "closes": [], "raises": [],
+           "kind": "answer", "model_version": 7}
+    route = respx.put(BASE + "/elements").mock(return_value=httpx.Response(200, json=dry))
+    out = await server.edit_behavioural_element(
+        server_version="x", model_id="tm-1", collection="actions",
+        element='{"id": "a1"}', model_version=7, dry_run=True)
+    assert out == dry
+    assert _body(route)["model_version"] == 7 and _body(route)["dry_run"] is True
+    detail = {"code": "element_changed", "element": {"id": "a1"}, "model_version": 9}
+    respx.put(BASE + "/elements").mock(
+        return_value=httpx.Response(409, json={"detail": detail}))
+    out = await server.edit_behavioural_element(
+        server_version="x", model_id="tm-1", collection="actions",
+        element='{"id": "a1"}', model_version=7)
+    assert out == {"changed": False, "http_status": 409, **detail}
