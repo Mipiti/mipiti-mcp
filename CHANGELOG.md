@@ -9,6 +9,16 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.114.0] - 2026-11-26
+
+### Added
+
+- `edit_behavioural_element` takes `model_version`, refusing an edit built from an older read of the element, and `dry_run`, which shows the questions an edit would close or raise without writing anything. (#413)
+
+### Changed
+
+- Bump actions/create-github-app-token from 3.3.0 to 3.4.0 in the github-actions group (#412)
+
 ## [0.113.0] - 2026-11-25
 
 ### Added
