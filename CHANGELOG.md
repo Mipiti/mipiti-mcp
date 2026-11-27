@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.115.0] - 2026-11-27
+
+### Added
+
+- `reconcile_model` accepts `description_drift` observations, about a sentence of the description or a claim of the project's own text. (#415)
+- `answer_behavioural_questions`: a `contradicts` may name an element of the behavioural model or a claim of the project's text instead of a quote. (#415)
+
 ## [0.114.0] - 2026-11-26
 
 ### Added
