@@ -1471,6 +1471,56 @@ async def test_the_proposal_tool_refuses_bad_input_before_the_call(
     client.accept_behavioural_proposal.assert_not_awaited()
 
 
+DECLINE = BASE + "/proposals/P-1/decline"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_declining_a_proposal_sends_the_version_and_note(mock_env: None) -> None:
+    route = respx.post(DECLINE).mock(return_value=httpx.Response(
+        200, json={"model_id": "tm-1", "model_version": 7, "declined": True,
+                   "proposal_id": "P-1"}))
+    out = await MipitiClient().decline_behavioural_proposal("tm-1", "P-1", 7, note="no")
+    assert out["declined"] is True
+    assert _body(route) == {"model_version": 7, "note": "no"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status,code", [(409, "review_stale"), (404, "proposal_not_found")])
+async def test_decline_refusals_come_back_as_data(
+        mock_env: None, status: int, code: str) -> None:
+    respx.post(DECLINE).mock(return_value=httpx.Response(
+        status, json={"detail": {"code": code, "message": "m"}}))
+    out = await MipitiClient().decline_behavioural_proposal("tm-1", "P-1", 7)
+    assert out["declined"] is False and out["http_status"] == status
+    assert out["code"] == code
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_refused_decline_raises_with_its_escalation(mock_env: None) -> None:
+    respx.post(DECLINE).mock(return_value=httpx.Response(
+        403, json={"detail": {"code": "delegation_required", "escalation_id": "E-3"}}))
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await MipitiClient().decline_behavioural_proposal("tm-1", "P-1", 7)
+    assert "E-3" in err.value.response.text
+
+
+@pytest.mark.asyncio
+async def test_the_decline_tool_forwards_and_refuses_an_empty_id() -> None:
+    client = _client(decline_behavioural_proposal={"declined": True})
+    with patch("mipiti_mcp.server._get_client", return_value=client):
+        await server.decline_behavioural_proposal(
+            server_version="0", model_id="tm-1", proposal_id=" P-1 ", model_version=7,
+            note="wrong")
+        with pytest.raises(ToolError):
+            await server.decline_behavioural_proposal(
+                server_version="0", model_id="tm-1", proposal_id=" ", model_version=7)
+    client.decline_behavioural_proposal.assert_awaited_once_with(
+        "tm-1", "P-1", 7, note="wrong")
+
+
 def test_the_proposal_tool_text_tells_the_flow() -> None:
     text = " ".join(_descriptions()["accept_behavioural_proposal"].split())
     for word in ("part changes", "never whole elements", "``accept_removals``",

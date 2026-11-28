@@ -101,7 +101,7 @@ mipiti-mcp install-skill --dir path/to/skills
 
 It replaces only a copy it wrote, and refuses to overwrite any other file.
 
-## Tools (<!--MCP_TOOL_COUNT-->175<!--/MCP_TOOL_COUNT-->)
+## Tools (<!--MCP_TOOL_COUNT-->176<!--/MCP_TOOL_COUNT-->)
 
 ### Threat Modeling
 
@@ -248,6 +248,8 @@ A behavioural model states what a system does: its elements, the actions on them
 | `get_behavioural_links` | The links from elements and zones to assets and trust boundaries, the proposals with the `proposals_hash` a bulk acceptance names, and the open link questions. Read-only. |
 | `declare_behavioural_link` | Declare the asset or trust boundary an element or zone is. Creates no model version. |
 | `accept_behavioural_link_proposals` | Declare every proposal as shown, naming the `proposals_hash` reviewed. |
+| `accept_behavioural_proposal` | Accept a proposal's part changes over the version it was made on, naming in `accept_removals` every element whose removal or supersede it lists. Creates a model version. A program's acceptance is a judgment the workspace may delegate. |
+| `decline_behavioural_proposal` | Decline a proposal: nothing is written to the model, the proposal is not offered again while it is unchanged, and its question stays open. Only a person can offer it again. A program's decline is a judgment the workspace may delegate. |
 | `get_behavioural_attackers` | The attacker closure of a generated model: the attackers the behavioural model's credential classes say the inventory lacks (each with its `kind`, `own` or `grouped` (a part of the zones nobody stands at: the zones of one capability, a row per zone), its `credential_classes`, the `privileges_required` they give, its `capability`, `zones` and the `objectives` it adds), the attackers standing for zones of several capabilities offered split into their parts (`splits`), those dismissed, the zones dismissed and the splits declined, with why, the narrower holders reported beside an attacker, and the questions asking what an attacker holds. `applies` is false where the closure is not offered. Read-only. |
 | `answer_attacker_credentials` | Say which credential classes an attacker holds (none: it holds no credential). Its privileges follow by rule (`None`, `High` or `Low`), and `edit_attacker` then refuses a privileges change (409 `privileges_from_holdings`); a holder of a per-tenant class is placed at every tenant-isolation boundary, suggested. Refused 422 `unknown_class`, 409 `closure_not_offered`, 404 `no_attacker`. Creates a model version. Answers with the closure's `counts` and the `attacker` as it now stands. |
 | `add_proposed_attacker` | Add the attacker the closure proposes for a credential set, holding it, its rating factors left unrated; `zone` names a part where two proposals hold the same set. Refused 409 `not_proposed` or `ambiguous_proposal`. Creates a model version. Answers with the closure's `counts` and the new attacker's id. |
