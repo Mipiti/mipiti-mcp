@@ -9,6 +9,13 @@ Every merged change is released: a version's section is written by its
 release, from the changelog entry in the description of each pull request it
 ships.
 
+## [0.116.0] - 2026-11-28
+
+### Added
+
+- feat: new tool `decline_behavioural_proposal`. (#417)
+- docs: the README lists `accept_behavioural_proposal` and `decline_behavioural_proposal`. (#417)
+
 ## [0.115.0] - 2026-11-27
 
 ### Added
