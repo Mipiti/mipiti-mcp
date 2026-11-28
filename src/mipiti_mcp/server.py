@@ -8937,6 +8937,51 @@ async def accept_behavioural_proposal(
 
 
 @mcp.tool()
+@_judgment
+async def decline_behavioural_proposal(
+    server_version: str,
+    model_id: str,
+    proposal_id: str,
+    model_version: int,
+    note: str = "",
+    evidence: str = "",
+) -> dict:
+    """Decline a proposal for a model's behavioural model. Mutating; writes
+    nothing to the model.
+
+    Declining says the proposal is not what the system does, without saying
+    what is: the proposal is not offered again while it is unchanged, and
+    its question stays open, to be kept, answered or edited. Decline only
+    where the source shows the proposal wrong; where it shows the model
+    right, keep it (answer ``as_stated``) instead. Only a person can offer a
+    declined proposal again.
+
+    409 ``review_stale`` means the version moved: read the model again with
+    ``get_behavioural_model``. 404 ``proposal_not_found``. The 409 and 404
+    come back as data, ``{declined: false, http_status, code, message}``.
+
+    A program's decline is a judgment: refused with 403 and an
+    ``escalation_id`` unless the workspace delegates it. Do not retry:
+    report the ``escalation_id`` and poll ``list_proposals``.
+
+    Returns ``{model_id, model_version, declined, proposal_id}``.
+
+    Args:
+        model_id: ID of the threat model.
+        proposal_id: ID of the proposal.
+        model_version: The version the proposal was made on.
+        note: Why it is declined, recorded with the decline.
+    """
+    if not proposal_id.strip():
+        raise ToolError("proposal_id is required.")
+    try:
+        return _dump(await _get_client().decline_behavioural_proposal(
+            model_id, proposal_id.strip(), model_version, note=note))
+    except Exception as exc:
+        raise _api_error(exc) from exc
+
+
+@mcp.tool()
 async def get_behavioural_links(server_version: str, model_id: str) -> dict:
     """Read the links from a behavioural model's elements and zones to the
     model's assets and trust boundaries. Read-only; no side effects.

@@ -3708,6 +3708,32 @@ class MipitiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def decline_behavioural_proposal(
+        self, model_id: str, proposal_id: str, model_version: int, note: str = "",
+    ) -> dict:
+        """POST /api/models/{model_id}/behavioural-model/proposals/{proposal_id}/decline.
+
+        Declines a proposal read on ``model_version``: nothing is written to
+        the model, the proposal is not offered again while it is unchanged,
+        and its question stays open.
+
+        A 409 (the version moved) and a 404 (no such proposal) are answers,
+        not errors: they come back as ``{"declined": False, "http_status":
+        ..., **detail}``. Any other failure, a 403 refusal included, raises.
+        """
+        body: dict[str, Any] = {"model_version": int(model_version)}
+        if note:
+            body["note"] = note
+        resp = await self._request_with_idempotency(
+            "POST",
+            self._behavioural(model_id, f"/proposals/{_seg(proposal_id)}/decline"),
+            json=body)
+        if resp.status_code in (404, 409):
+            return {"declined": False, "http_status": resp.status_code,
+                    **self._refusal(resp)}
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_behavioural_links(self, model_id: str) -> dict:
         """GET /api/models/{model_id}/behavioural-model/links.
 
